@@ -1,1 +1,14 @@
-ARCHITECTURE.md
+# Project-level .gitignore for Scrinium Mobile
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.kotlin/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Release signing (never commit)
+keystore.properties
+scrinium-release.jks
