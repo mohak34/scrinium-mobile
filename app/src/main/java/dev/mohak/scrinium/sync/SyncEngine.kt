@@ -10,6 +10,7 @@ data class SyncReport(
     val removed: Int,
     val conflicts: Int,
     val errors: Int,
+    val failures: List<String> = emptyList(),
     val completedAt: Long
 )
 
@@ -29,6 +30,7 @@ class SyncEngine(
         var conflicts = 0
         var errors = 0
         val rehash = mutableListOf<String>()
+        val failures = mutableListOf<String>()
 
         for (note in local) {
             try {
@@ -57,7 +59,7 @@ class SyncEngine(
                             note.copy(
                                 content = content,
                                 contentHash = meta.contentHash,
-                                remoteUpdatedAt = meta.updatedAt
+                                remoteUpdatedAt = meta.updatedAt.toLong()
                             )
                         )
                         pulled++
@@ -77,7 +79,7 @@ class SyncEngine(
                                 note.copy(
                                     content = serverContent,
                                     contentHash = meta.contentHash,
-                                    remoteUpdatedAt = meta.updatedAt,
+                                    remoteUpdatedAt = meta.updatedAt.toLong(),
                                     localModifiedAt = null
                                 )
                             )
@@ -88,6 +90,7 @@ class SyncEngine(
                 }
             } catch (e: Exception) {
                 errors++
+                if (failures.size < 5) failures += "${note.path}: ${e.message}"
             }
         }
 
@@ -99,7 +102,7 @@ class SyncEngine(
                     NoteEntity(
                         path = path,
                         content = content,
-                        remoteUpdatedAt = meta.updatedAt,
+                        remoteUpdatedAt = meta.updatedAt.toLong(),
                         localModifiedAt = null,
                         contentHash = meta.contentHash
                     )
@@ -107,6 +110,7 @@ class SyncEngine(
                 pulled++
             } catch (e: Exception) {
                 errors++
+                if (failures.size < 5) failures += "${path}: ${e.message}"
             }
         }
 
@@ -116,17 +120,17 @@ class SyncEngine(
                 for (path in rehash) {
                     val meta = fresh[path] ?: continue
                     val current = dao.get(path) ?: continue
-                    dao.upsert(current.copy(contentHash = meta.contentHash, remoteUpdatedAt = meta.updatedAt))
+                    dao.upsert(current.copy(contentHash = meta.contentHash, remoteUpdatedAt = meta.updatedAt.toLong()))
                 }
             } catch (e: Exception) {
                 // stale hashes self-correct on the next sync
             }
         }
 
-        return SyncReport(pulled, pushed, removed, conflicts, errors, System.currentTimeMillis())
+        return SyncReport(pulled, pushed, removed, conflicts, errors, failures, System.currentTimeMillis())
     }
 
-    private fun emptyReport() = SyncReport(0, 0, 0, 0, 0, System.currentTimeMillis())
+    private fun emptyReport() = SyncReport(0, 0, 0, 0, 0, emptyList(), System.currentTimeMillis())
 
     private fun conflictName(path: String): String {
         val dot = path.lastIndexOf('.')

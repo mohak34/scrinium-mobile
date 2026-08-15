@@ -142,7 +142,15 @@ class MainViewModel(
     }
 
     fun closeEditor() {
-        flushEditor()
+        val current = _editor.value
+        if (current != null) {
+            viewModelScope.launch {
+                val stored = notes.get(current.path)
+                if (stored != null && !stored.isDeleted && stored.content != current.text) {
+                    notes.saveLocally(current.path, current.text)
+                }
+            }
+        }
         editorEdits.value = null
         _editor.value = null
         _screen.value = Screen.Notes
@@ -220,11 +228,6 @@ class MainViewModel(
 
     fun dismissSyncError() {
         _sync.update { it.copy(error = null) }
-    }
-
-    private fun flushEditor() {
-        val current = _editor.value ?: return
-        viewModelScope.launch { notes.saveLocally(current.path, current.text) }
     }
 
     companion object {

@@ -21,7 +21,7 @@ import retrofit2.http.Path
 import retrofit2.http.Query
 
 @Serializable
-data class ManifestEntry(val path: String, val updatedAt: Long, val contentHash: String)
+data class ManifestEntry(val path: String, val updatedAt: Double, val contentHash: String)
 
 @Serializable
 data class MobileAuthRequest(val googleIdToken: String)
@@ -49,16 +49,16 @@ private interface ScriniumService {
     suspend fun putNote(
         @Path("path", encoded = true) path: String,
         @Body body: RequestBody
-    ): Response<Unit>
+    ): Response<ResponseBody>
 
     @PATCH("api/notes/{path}")
     suspend fun rename(
         @Path("path", encoded = true) path: String,
         @Body body: RenameRequest
-    ): Response<Unit>
+    ): Response<ResponseBody>
 
     @DELETE("api/notes/{path}")
-    suspend fun delete(@Path("path", encoded = true) path: String): Response<Unit>
+    suspend fun delete(@Path("path", encoded = true) path: String): Response<ResponseBody>
 
     @GET("api/search")
     suspend fun search(@Query("q") q: String): List<SearchResult>
@@ -105,7 +105,6 @@ class ScriniumApi(
         val res = service.delete(encPath(path))
         if (!res.isSuccessful) throw ApiException(res.code())
     }
-
     suspend fun search(q: String): List<SearchResult> = service.search(q)
 
     companion object {

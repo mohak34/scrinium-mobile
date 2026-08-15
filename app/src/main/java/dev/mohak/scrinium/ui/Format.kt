@@ -2,8 +2,8 @@ package dev.mohak.scrinium.ui
 
 import java.util.concurrent.TimeUnit
 
-fun relativeTime(epoch: Long): String {
-    val diff = System.currentTimeMillis() - epoch
+fun relativeTime(epoch: Long, now: Long = System.currentTimeMillis()): String {
+    val diff = now - epoch
     return when {
         diff < TimeUnit.MINUTES.toMillis(1) -> "just now"
         diff < TimeUnit.HOURS.toMillis(1) -> "${diff / TimeUnit.MINUTES.toMillis(1)}m ago"

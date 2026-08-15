@@ -1,9 +1,17 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
+}
+
+val localPropsFile = rootProject.file("keystore.properties")
+val localProps = Properties().apply {
+    if (localPropsFile.exists()) load(FileInputStream(localPropsFile))
 }
 
 android {
@@ -15,7 +23,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = 1
-        versionName = "0.1.0"
+        versionName = "0.1.0-beta"
 
         buildConfigField(
             "String",
@@ -25,8 +33,19 @@ android {
         buildConfigField(
             "String",
             "SCRINIUM_GOOGLE_CLIENT_ID",
-            "\"${project.findProperty("scriniumGoogleClientId") ?: ""}\""
+            "\"${project.findProperty("scriniumGoogleClientId") ?: localProps.getProperty("scriniumGoogleClientId", "")}\""
         )
+    }
+
+    signingConfigs {
+        if (localPropsFile.exists()) {
+            create("release") {
+                storeFile = rootProject.file(localProps.getProperty("storeFile"))
+                storePassword = localProps.getProperty("storePassword")
+                keyAlias = localProps.getProperty("keyAlias")
+                keyPassword = localProps.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
@@ -40,6 +59,9 @@ android {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (localPropsFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 

@@ -30,7 +30,11 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -40,6 +44,7 @@ import dev.mohak.scrinium.data.local.NoteEntity
 import dev.mohak.scrinium.ui.MainViewModel
 import dev.mohak.scrinium.ui.noteTitle
 import dev.mohak.scrinium.ui.relativeTime
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -47,6 +52,13 @@ fun NotesScreen(vm: MainViewModel) {
     val notes by vm.notesFlow.collectAsStateWithLifecycle()
     val sync by vm.sync.collectAsStateWithLifecycle()
     val unsynced by vm.unsyncedCount.collectAsStateWithLifecycle()
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(30_000)
+            now = System.currentTimeMillis()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -86,10 +98,10 @@ fun NotesScreen(vm: MainViewModel) {
                     contentPadding = PaddingValues(bottom = 88.dp)
                 ) {
                     items(notes, key = { it.path }) { note ->
-                        NoteRow(note = note, onClick = { vm.openNote(note.path) })
+                        NoteRow(note = note, now = now, onClick = { vm.openNote(note.path) })
                     }
                     item {
-                        SyncFooter(sync.syncing, unsynced)
+                        SyncFooter(sync.syncing, unsynced, sync.report?.errors ?: 0, sync.report?.failures.orEmpty())
                     }
                 }
             }
@@ -104,7 +116,7 @@ fun NotesScreen(vm: MainViewModel) {
 }
 
 @Composable
-private fun NoteRow(note: NoteEntity, onClick: () -> Unit) {
+private fun NoteRow(note: NoteEntity, now: Long, onClick: () -> Unit) {
     val updatedAt = note.localModifiedAt ?: note.remoteUpdatedAt
     Row(
         modifier = Modifier
@@ -122,7 +134,7 @@ private fun NoteRow(note: NoteEntity, onClick: () -> Unit) {
             val subtitle = buildString {
                 val dir = note.path.substringBeforeLast('/', "")
                 if (dir.isNotBlank()) append(dir).append("  \u00B7  ")
-                append(relativeTime(updatedAt))
+                append(relativeTime(updatedAt, now))
             }
             Text(
                 text = subtitle,
@@ -153,9 +165,13 @@ private fun EmptyState() {
 }
 
 @Composable
-private fun SyncFooter(syncing: Boolean, unsynced: Int) {
+private fun SyncFooter(syncing: Boolean, unsynced: Int, errors: Int, failures: List<String>) {
     val status = when {
         syncing -> "Syncing\u2026"
+        errors > 0 -> {
+            val reason = failures.firstOrNull() ?: "pull to retry"
+            "$errors change${if (errors == 1) "" else "s"} failed: ${reason.take(60)}"
+        }
         unsynced > 0 -> "$unsynced unsynced change${if (unsynced == 1) "" else "s"} - will push on next sync"
         else -> ""
     }
