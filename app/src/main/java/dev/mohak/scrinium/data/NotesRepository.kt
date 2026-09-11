@@ -97,16 +97,18 @@ class NotesRepository(
      * Local-only move. Same tombstone + PUT mechanism as [renameNote], so the
      * next sync deletes the old path and pushes the new one — the server
      * creates intermediate directories on PUT. Never touches the network.
+     * A colliding destination gets a "name N" suffix instead of failing:
+     * a drag never typed a name, so there is nothing to correct.
      * Returns the new path, or null when there is nothing to do.
      */
     suspend fun moveNote(path: String, newParentRaw: String): String? {
         val existing = noteDao.get(path) ?: return null
         val newParent = normalizeFolder(newParentRaw)
         val base = path.substringAfterLast('/')
-        val newPath = if (newParent.isBlank()) base else "$newParent/$base"
+        var newPath = if (newParent.isBlank()) base else "$newParent/$base"
         if (newPath == path) return null
         if (noteDao.get(newPath) != null) {
-            throw IllegalArgumentException("A note already exists at $newPath")
+            newPath = uniqueNotePath(newParent, base)
         }
         val now = System.currentTimeMillis()
         noteDao.upsert(existing.copy(isDeleted = true, localModifiedAt = now))
@@ -143,12 +145,12 @@ class NotesRepository(
     suspend fun moveFolder(folder: String, newParentRaw: String): String? {
         val newParent = normalizeFolder(newParentRaw)
         val base = folder.substringAfterLast('/')
-        val newPrefix = if (newParent.isBlank()) base else "$newParent/$base"
+        var newPrefix = if (newParent.isBlank()) base else "$newParent/$base"
         if (newPrefix == folder) return null
         if (newPrefix.startsWith("$folder/")) {
             throw IllegalArgumentException("Can't move a folder into itself")
         }
-        return rewritePrefix(folder, newPrefix)
+        return rewritePrefix(folder, uniqueFolderPrefix(newPrefix))
     }
 
     private suspend fun rewritePrefix(folder: String, newPrefix: String): String? {
@@ -194,6 +196,34 @@ class NotesRepository(
         val parts = raw.split('/').mapNotNull { sanitizePathSegment(it) }
         if (parts.isEmpty()) throw IllegalArgumentException("Invalid folder name")
         return parts.joinToString("/")
+    }
+
+    // First free "stem N.ext" for a colliding note destination.
+    private suspend fun uniqueNotePath(dir: String, base: String): String {
+        val dot = base.lastIndexOf('.')
+        val stem = if (dot > 0) base.substring(0, dot) else base
+        val ext = if (dot > 0) base.substring(dot) else ""
+        val prefix = if (dir.isBlank()) "" else "$dir/"
+        var i = 1
+        while (true) {
+            val candidate = "$prefix$stem $i$ext"
+            if (noteDao.get(candidate) == null) return candidate
+            i++
+        }
+    }
+
+    // First free "base N" for a colliding folder destination. Only live
+    // notes count — tombstones are already on their way out.
+    private suspend fun uniqueFolderPrefix(want: String): String {
+        val live = noteDao.getAll().filter { !it.isDeleted }
+        fun taken(prefix: String) = live.any { it.path == prefix || it.path.startsWith("$prefix/") }
+        if (!taken(want)) return want
+        var i = 1
+        while (true) {
+            val candidate = "$want $i"
+            if (!taken(candidate)) return candidate
+            i++
+        }
     }
 
     private fun generateName(existing: List<String>, dir: String): String {
