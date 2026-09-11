@@ -83,14 +83,14 @@ class MainViewModel(
 
     private var signInAction: (suspend () -> Boolean)? = null
 
-    // Push side of auto-sync: one quiet sync ~10s after the last local
+    // Push side of auto-sync: one quiet sync shortly after the last local
     // mutation settles. Replaces "edit, then wonder why it says unsynced".
     private var autoSyncJob: Job? = null
 
     private fun scheduleAutoSync() {
         autoSyncJob?.cancel()
         autoSyncJob = viewModelScope.launch {
-            delay(10_000)
+            delay(AUTO_PUSH_DELAY_MS)
             if (!session.isSignedIn()) return@launch
             syncNow(force = true, quiet = true)
         }
@@ -132,7 +132,7 @@ class MainViewModel(
         // ever runs while backgrounded.
         viewModelScope.launch {
             while (true) {
-                delay(60_000)
+                delay(FOREGROUND_PULL_MS)
                 if (ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(
                         androidx.lifecycle.Lifecycle.State.STARTED
                     )
@@ -303,7 +303,7 @@ class MainViewModel(
         if (_sync.value.syncing) return
         val last = _sync.value.lastSyncAt
             ?: session.lastSyncAt.value.let { if (it == 0L) null else it }
-        if (last != null && System.currentTimeMillis() - last < 60_000) return
+        if (last != null && System.currentTimeMillis() - last < FOREGROUND_PULL_MS) return
         syncNow(quiet = true)
     }
 
@@ -324,6 +324,9 @@ class MainViewModel(
     }
 
     companion object {
+        private const val AUTO_PUSH_DELAY_MS = 5_000L
+        private const val FOREGROUND_PULL_MS = 60_000L
+
         fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 MainViewModel(
