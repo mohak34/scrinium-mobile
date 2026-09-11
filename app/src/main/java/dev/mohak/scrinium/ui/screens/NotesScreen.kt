@@ -237,6 +237,9 @@ fun NotesScreen(vm: MainViewModel) {
                     IconButton(onClick = { vm.openSearch() }) {
                         Icon(Icons.Default.Search, contentDescription = "Search")
                     }
+                    TextButton(onClick = { vm.openTags() }) {
+                        Text("#")
+                    }
                     IconButton(onClick = { vm.openSettings() }) {
                         Icon(Icons.Default.Settings, contentDescription = "Settings")
                     }

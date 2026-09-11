@@ -93,6 +93,10 @@ class NotesRepository(
 
     suspend fun networkSearch(q: String) = api.search(q)
 
+    suspend fun fetchTags() = api.fetchTags()
+
+    suspend fun fetchTagged(tag: String) = api.fetchTagged(tag)
+
     /**
      * Pulls a server-side note into Room with its manifest hash, so the next
      * sync treats it as up to date instead of re-pulling or — worse —

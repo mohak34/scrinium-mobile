@@ -20,6 +20,7 @@ import dev.mohak.scrinium.ui.screens.LoginScreen
 import dev.mohak.scrinium.ui.screens.NotesScreen
 import dev.mohak.scrinium.ui.screens.SearchScreen
 import dev.mohak.scrinium.ui.screens.SettingsScreen
+import dev.mohak.scrinium.ui.screens.TagsScreen
 
 class MainActivity : ComponentActivity() {
     private val container by lazy { (application as ScriniumApplication).container }
@@ -55,6 +56,7 @@ private fun AppContent(vm: MainViewModel) {
             is Screen.Editor -> vm.closeEditor()
             Screen.Search -> vm.closeSearch()
             Screen.Settings -> vm.closeSettings()
+            Screen.Tags -> vm.closeTags()
             else -> Unit
         }
     }
@@ -63,5 +65,6 @@ private fun AppContent(vm: MainViewModel) {
         is Screen.Editor -> EditorScreen(vm)
         Screen.Search -> SearchScreen(vm)
         Screen.Settings -> SettingsScreen(vm)
+        Screen.Tags -> TagsScreen(vm)
     }
 }
