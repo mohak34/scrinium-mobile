@@ -10,7 +10,10 @@ sealed interface TreeItem {
         val path: String,
         val depth: Int,
         val noteCount: Int,
-        val hasUnsynced: Boolean
+        val hasUnsynced: Boolean,
+        // Set when another folder shares this leaf name — the UI shows it so
+        // same-named folders in different parents stay distinguishable.
+        val pathHint: String? = null
     ) : TreeItem
 
     data class Note(val note: NoteEntity, val depth: Int) : TreeItem
@@ -36,8 +39,10 @@ fun folderPaths(notes: List<NoteEntity>): List<String> {
 // the web client's tree. Collapsed subtrees emit only their folder row.
 fun buildTree(notes: List<NoteEntity>, collapsed: Set<String>): List<TreeItem> {
     val byParent = notes.groupBy { it.path.substringBeforeLast('/', "") }
+    val allFolders = folderPaths(notes)
     val childDirs: Map<String, List<String>> =
-        folderPaths(notes).groupBy { it.substringBeforeLast('/', "") }
+        allFolders.groupBy { it.substringBeforeLast('/', "") }
+    val leafCounts = allFolders.groupingBy { it.substringAfterLast('/') }.eachCount()
 
     fun countNotes(dir: String): Int {
         var c = byParent[dir]?.size ?: 0
@@ -53,7 +58,10 @@ fun buildTree(notes: List<NoteEntity>, collapsed: Set<String>): List<TreeItem> {
     val out = mutableListOf<TreeItem>()
     fun emit(dir: String, depth: Int) {
         for (child in childDirs[dir].orEmpty().sortedBy { it.lowercase() }) {
-            out += TreeItem.Folder(child, depth, countNotes(child), hasUnsynced(child))
+            val hint = if ((leafCounts[child.substringAfterLast('/')] ?: 0) > 1) {
+                child.substringBeforeLast('/', "").ifBlank { "All notes" }
+            } else null
+            out += TreeItem.Folder(child, depth, countNotes(child), hasUnsynced(child), hint)
             if (child !in collapsed) emit(child, depth + 1)
         }
         for (note in byParent[dir].orEmpty().sortedBy { it.path.substringAfterLast('/').lowercase() }) {
