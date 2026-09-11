@@ -667,15 +667,25 @@ private fun FolderRow(
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.alpha(if (dimmed) 0.35f else 1f)
         )
-        Text(
-            text = folder.name,
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface,
+        Column(
             modifier = Modifier
                 .weight(1f)
                 .padding(start = 8.dp)
                 .alpha(if (dimmed) 0.35f else 1f)
-        )
+        ) {
+            Text(
+                text = folder.name,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            folder.pathHint?.let { hint ->
+                Text(
+                    text = hint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
         Text(
             text = folder.noteCount.toString(),
             style = MaterialTheme.typography.bodySmall,
