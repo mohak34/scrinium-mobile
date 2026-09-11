@@ -137,11 +137,11 @@ fun NotesScreen(vm: MainViewModel) {
 
     fun resolveTarget(key: Any?, relY: Float): String? {
         val item = dragItem ?: return null
-        // Empty list space inside the viewport = vault root. Past the edges
-        // (mid auto-scroll overshoot) resolves to nothing.
-        if (key == null) {
-            return if (relY >= 0 && relY <= drag.viewportH) "" else null
-        }
+        // Past the edges (mid auto-scroll overshoot) resolves to nothing.
+        if (relY < 0 || relY > drag.viewportH) return null
+        // Empty list space and the sync-status footer row count as the vault
+        // root — the footer must not be a dead zone that swallows drops.
+        if (key == null) return ""
         return when {
             key is String && key.startsWith("d:") -> {
                 val path = key.removePrefix("d:")
@@ -154,7 +154,7 @@ fun NotesScreen(vm: MainViewModel) {
                     null
                 } else parent
             }
-            else -> null
+            else -> ""
         }
     }
 
