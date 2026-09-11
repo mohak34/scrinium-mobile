@@ -50,7 +50,8 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
     override suspend fun doWork(): Result {
         val container = (applicationContext as ScriniumApplication).container
         return try {
-            container.syncEngine.syncOnce()
+            val report = container.syncEngine.syncOnce()
+            container.sessionRepository.updateLastSyncAt(report.completedAt)
             Result.success()
         } catch (e: Exception) {
             if (runAttemptCount < 3) Result.retry() else Result.failure()
