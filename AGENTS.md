@@ -95,7 +95,8 @@ On trigger (app foreground, pull-to-refresh, periodic WorkManager):
 - **Emulator ↔ dev server**: host `localhost:5173` appears as
   `10.0.2.2:5173` inside the emulator. For WebView-free flows this only
   affects the API base URL, which is already covered by BuildConfig.
-- **Room + KSP**: KSP version must match the Kotlin version exactly — bump
-  them together in `gradle/libs.versions.toml`.
+- **Room + KSP**: KSP only publishes some Kotlin patches — match the minor
+  version and use the latest KSP patch (e.g. Kotlin `2.3.21` + KSP `2.3.12`).
+  Check Maven Central for the newest `2.x` KSP before bumping Kotlin.
 - **`isDeleted` notes** must still push their delete on the next sync —
   don't drop them from Room until the server confirmed the delete.
