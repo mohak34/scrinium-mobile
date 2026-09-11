@@ -6,9 +6,11 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import dev.mohak.scrinium.BuildConfig
 import dev.mohak.scrinium.data.NotesRepository
 import dev.mohak.scrinium.data.SessionRepository
 import dev.mohak.scrinium.data.local.NoteEntity
+import dev.mohak.scrinium.data.remote.PublicShare
 import dev.mohak.scrinium.data.remote.SearchResult
 import dev.mohak.scrinium.di.AppContainer
 import dev.mohak.scrinium.sync.SyncEngine
@@ -276,6 +278,56 @@ class MainViewModel(
 
     fun setSearchQuery(q: String) {
         searchQuery.value = q
+    }
+
+    // Public share links for the open note. Server holds the links; the
+    // public URL is base + /s/<id>, same as the web client builds.
+    private val _shares = MutableStateFlow<List<PublicShare>>(emptyList())
+    val shares: StateFlow<List<PublicShare>> = _shares.asStateFlow()
+    private val _sharesLoading = MutableStateFlow(false)
+    val sharesLoading: StateFlow<Boolean> = _sharesLoading.asStateFlow()
+
+    fun shareUrl(id: String): String =
+        "${BuildConfig.SCRINIUM_API_URL.trimEnd('/')}/s/$id"
+
+    fun loadShares(path: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _sharesLoading.value = true
+            try {
+                _shares.value = notes.fetchShares(path)
+            } catch (e: Exception) {
+                _sync.update { it.copy(error = "Couldn't load links: ${e.message}") }
+            } finally {
+                _sharesLoading.value = false
+            }
+        }
+    }
+
+    fun createShareLink(password: String?) {
+        val path = _editor.value?.path ?: return
+        if (password != null && password.isNotBlank() && password.length < 4) {
+            _sync.update { it.copy(error = "Password needs at least 4 characters") }
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val share = notes.createShare(path, password)
+                _shares.update { listOf(share) + it }
+            } catch (e: Exception) {
+                _sync.update { it.copy(error = "Share failed: ${e.message}") }
+            }
+        }
+    }
+
+    fun deleteShareLink(id: String) {
+        viewModelScope.launch {
+            try {
+                notes.deleteShare(id)
+                _shares.update { it.filterNot { s -> s.id == id } }
+            } catch (e: Exception) {
+                _sync.update { it.copy(error = "Unshare failed: ${e.message}") }
+            }
+        }
     }
 
     fun deleteCurrentNote() {

@@ -35,6 +35,17 @@ data class RenameRequest(val newPath: String)
 @Serializable
 data class SearchResult(val path: String, val title: String, val snippet: String)
 
+@Serializable
+data class PublicShare(
+    val id: String,
+    val notePath: String,
+    val createdAt: Long = 0L,
+    val hasPassword: Boolean = false
+)
+
+@Serializable
+data class CreateShareRequest(val path: String, val password: String? = null)
+
 private interface ScriniumService {
     @POST("api/auth/mobile")
     suspend fun mobileAuth(@Body body: MobileAuthRequest): MobileAuthResponse
@@ -62,6 +73,15 @@ private interface ScriniumService {
 
     @GET("api/search")
     suspend fun search(@Query("q") q: String): List<SearchResult>
+
+    @GET("api/shares")
+    suspend fun shares(@Query("path") path: String): List<PublicShare>
+
+    @POST("api/shares")
+    suspend fun createShare(@Body body: CreateShareRequest): PublicShare
+
+    @DELETE("api/shares/{id}")
+    suspend fun deleteShare(@Path("id") id: String): Response<ResponseBody>
 }
 
 class ApiException(val status: Int) : Exception("API error $status")
@@ -106,6 +126,16 @@ class ScriniumApi(
         if (!res.isSuccessful) throw ApiException(res.code())
     }
     suspend fun search(q: String): List<SearchResult> = service.search(q)
+
+    suspend fun fetchShares(path: String): List<PublicShare> = service.shares(path)
+
+    suspend fun createShare(path: String, password: String?): PublicShare =
+        service.createShare(CreateShareRequest(path, password?.takeIf { it.isNotBlank() }))
+
+    suspend fun deleteShare(id: String) {
+        val res = service.deleteShare(id)
+        if (!res.isSuccessful) throw ApiException(res.code())
+    }
 
     companion object {
         fun encPath(path: String): String =

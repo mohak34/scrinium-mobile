@@ -93,6 +93,12 @@ class NotesRepository(
 
     suspend fun networkSearch(q: String) = api.search(q)
 
+    suspend fun fetchShares(path: String) = api.fetchShares(path)
+
+    suspend fun createShare(path: String, password: String?) = api.createShare(path, password)
+
+    suspend fun deleteShare(id: String) = api.deleteShare(id)
+
     /**
      * Pulls a server-side note into Room with its manifest hash, so the next
      * sync treats it as up to date instead of re-pulling or — worse —
