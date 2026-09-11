@@ -69,6 +69,13 @@ class MainViewModel(
     private val _editor = MutableStateFlow<EditorState?>(null)
     val editor: StateFlow<EditorState?> = _editor.asStateFlow()
 
+    private val _collapsedFolders = MutableStateFlow<Set<String>>(emptySet())
+    val collapsedFolders: StateFlow<Set<String>> = _collapsedFolders.asStateFlow()
+
+    fun toggleFolder(path: String) {
+        _collapsedFolders.update { if (path in it) it - path else it + path }
+    }
+
     private val editorEdits = MutableStateFlow<Pair<String, String>?>(null)
 
     private var signInAction: (suspend () -> Boolean)? = null
@@ -125,13 +132,19 @@ class MainViewModel(
         }
     }
 
-    fun createNote() {
+    fun createNote() = createNoteIn("")
+
+    fun createNoteIn(folder: String) {
         viewModelScope.launch {
             val existing = notes.observeAll().first().map { it.path }
-            val path = notes.createNote(existing)
-            _editor.value = EditorState(path, "# ${path.removeSuffix(".md")}\n\n")
-            editorEdits.value = null
-            _screen.value = Screen.Editor(path)
+            try {
+                val path = notes.createNote(existing, folder)
+                _editor.value = EditorState(path, "# ${path.substringAfterLast('/').removeSuffix(".md")}\n\n")
+                editorEdits.value = null
+                _screen.value = Screen.Editor(path)
+            } catch (e: Exception) {
+                _sync.update { it.copy(error = "Create failed: ${e.message}") }
+            }
         }
     }
 
@@ -190,6 +203,34 @@ class MainViewModel(
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Rename failed: ${e.message}") }
             }
+        }
+    }
+
+    fun moveNote(path: String, newParent: String) {
+        viewModelScope.launch {
+            try {
+                notes.moveNote(path, newParent)
+            } catch (e: Exception) {
+                _sync.update { it.copy(error = "Move failed: ${e.message}") }
+            }
+        }
+    }
+
+    fun renameFolder(folder: String, newName: String) {
+        viewModelScope.launch {
+            try {
+                val newPrefix = notes.renameFolder(folder, newName) ?: return@launch
+                _collapsedFolders.update { if (folder in it) (it - folder) + newPrefix else it }
+            } catch (e: Exception) {
+                _sync.update { it.copy(error = "Rename failed: ${e.message}") }
+            }
+        }
+    }
+
+    fun deleteFolder(folder: String) {
+        viewModelScope.launch {
+            notes.deleteFolder(folder)
+            _collapsedFolders.update { it - folder }
         }
     }
 
