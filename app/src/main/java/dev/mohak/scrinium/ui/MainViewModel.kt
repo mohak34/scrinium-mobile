@@ -10,6 +10,7 @@ import dev.mohak.scrinium.data.NotesRepository
 import dev.mohak.scrinium.data.SessionRepository
 import dev.mohak.scrinium.data.local.NoteEntity
 import dev.mohak.scrinium.data.remote.SearchResult
+import dev.mohak.scrinium.data.remote.TrashEntry
 import dev.mohak.scrinium.di.AppContainer
 import dev.mohak.scrinium.sync.SyncEngine
 import dev.mohak.scrinium.sync.SyncReport
@@ -41,6 +42,7 @@ sealed interface Screen {
     data class Editor(val path: String) : Screen
     data object Search : Screen
     data object Settings : Screen
+    data object Trash : Screen
 }
 
 data class SyncUiState(
@@ -266,6 +268,67 @@ class MainViewModel(
 
     fun openSearch() = _screen.update { Screen.Search }
     fun openSettings() = _screen.update { Screen.Settings }
+
+    // Trash is server-side (deletes move there on sync). Read-only list +
+    // restore/purge calls, then a quiet sync to converge Room.
+    private val _trash = MutableStateFlow<List<TrashEntry>>(emptyList())
+    val trash: StateFlow<List<TrashEntry>> = _trash.asStateFlow()
+    private val _trashLoading = MutableStateFlow(false)
+    val trashLoading: StateFlow<Boolean> = _trashLoading.asStateFlow()
+
+    fun openTrash() {
+        _screen.update { Screen.Trash }
+        refreshTrash()
+    }
+
+    fun closeTrash() = _screen.update { Screen.Notes }
+
+    fun refreshTrash() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _trashLoading.value = true
+            try {
+                _trash.value = notes.fetchTrash()
+            } catch (e: Exception) {
+                _sync.update { it.copy(error = "Couldn't load trash: ${e.message}") }
+            } finally {
+                _trashLoading.value = false
+            }
+        }
+    }
+
+    fun restoreTrashEntry(entry: TrashEntry) {
+        viewModelScope.launch {
+            try {
+                notes.restoreTrash(entry.trashName)
+                refreshTrash()
+                syncNow(force = true, quiet = true)
+            } catch (e: Exception) {
+                _sync.update { it.copy(error = "Restore failed: ${e.message}") }
+            }
+        }
+    }
+
+    fun purgeTrashEntry(entry: TrashEntry) {
+        viewModelScope.launch {
+            try {
+                notes.purgeTrash(entry.trashName)
+                _trash.update { it.filterNot { e -> e.trashName == entry.trashName } }
+            } catch (e: Exception) {
+                _sync.update { it.copy(error = "Delete failed: ${e.message}") }
+            }
+        }
+    }
+
+    fun emptyTrash() {
+        viewModelScope.launch {
+            try {
+                notes.emptyTrash()
+                _trash.value = emptyList()
+            } catch (e: Exception) {
+                _sync.update { it.copy(error = "Empty trash failed: ${e.message}") }
+            }
+        }
+    }
 
     fun closeSearch() {
         searchQuery.value = ""

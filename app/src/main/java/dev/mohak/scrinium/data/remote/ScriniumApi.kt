@@ -35,6 +35,21 @@ data class RenameRequest(val newPath: String)
 @Serializable
 data class SearchResult(val path: String, val title: String, val snippet: String)
 
+@Serializable
+data class TrashEntry(
+    val trashName: String,
+    val originalPath: String,
+    val deletedAt: Long = 0L,
+    val isDir: Boolean = false,
+    val size: Long? = null
+)
+
+@Serializable
+data class RestoreRequest(val trashName: String)
+
+@Serializable
+data class RestoreResponse(val ok: Boolean = true, val path: String = "")
+
 private interface ScriniumService {
     @POST("api/auth/mobile")
     suspend fun mobileAuth(@Body body: MobileAuthRequest): MobileAuthResponse
@@ -62,6 +77,18 @@ private interface ScriniumService {
 
     @GET("api/search")
     suspend fun search(@Query("q") q: String): List<SearchResult>
+
+    @GET("api/trash")
+    suspend fun trash(): List<TrashEntry>
+
+    @POST("api/trash/restore")
+    suspend fun restoreTrash(@Body body: RestoreRequest): RestoreResponse
+
+    @DELETE("api/trash")
+    suspend fun purgeTrash(@Query("trashName") trashName: String): Response<ResponseBody>
+
+    @DELETE("api/trash")
+    suspend fun emptyTrash(@Query("all") all: Int): Response<ResponseBody>
 }
 
 class ApiException(val status: Int) : Exception("API error $status")
@@ -106,6 +133,21 @@ class ScriniumApi(
         if (!res.isSuccessful) throw ApiException(res.code())
     }
     suspend fun search(q: String): List<SearchResult> = service.search(q)
+
+    suspend fun fetchTrash(): List<TrashEntry> = service.trash()
+
+    suspend fun restoreTrash(trashName: String): String =
+        service.restoreTrash(RestoreRequest(trashName)).path
+
+    suspend fun purgeTrash(trashName: String) {
+        val res = service.purgeTrash(trashName)
+        if (!res.isSuccessful) throw ApiException(res.code())
+    }
+
+    suspend fun emptyTrash() {
+        val res = service.emptyTrash(1)
+        if (!res.isSuccessful) throw ApiException(res.code())
+    }
 
     companion object {
         fun encPath(path: String): String =
