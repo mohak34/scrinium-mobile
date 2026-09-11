@@ -79,7 +79,6 @@ import dev.mohak.scrinium.ui.relativeTime
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
-private const val ROOT_DROP_KEY = "root-drop"
 private const val HOVER_EXPAND_MS = 700L
 
 // Non-composing drag scratch state. Finger position updates every frame while
@@ -172,10 +171,15 @@ fun NotesScreen(vm: MainViewModel) {
         folders.filterTo(mutableSetOf()) { it == path || it.startsWith("$path/") }
     }
 
-    fun resolveTarget(key: Any?): String? {
+    fun resolveTarget(key: Any?, relY: Float): String? {
         val item = dragItem ?: return null
+        // Empty list space (padding below/around rows, but still inside the
+        // viewport) means the vault root. Outside the viewport resolves to
+        // nothing so edge auto-scroll releases can't misfire to root.
+        if (key == null) {
+            return if (relY >= 0 && relY <= drag.viewportHeight) "" else null
+        }
         return when {
-            key == ROOT_DROP_KEY -> ""
             key is String && key.startsWith("d:") -> {
                 val path = key.removePrefix("d:")
                 if (path in dragBlocked) null else path
@@ -209,7 +213,7 @@ fun NotesScreen(vm: MainViewModel) {
         val relY = winY - drag.viewportTop
         val key = listState.layoutInfo.visibleItemsInfo
             .firstOrNull { relY >= it.offset && relY < it.offset + it.size }?.key
-        val target = resolveTarget(key)
+        val target = resolveTarget(key, relY)
         if (target != dropTarget) dropTarget = target
         val nowMs = System.currentTimeMillis()
         if (target != null && target.isNotEmpty() && target in collapsed) {
@@ -311,27 +315,6 @@ fun NotesScreen(vm: MainViewModel) {
                             },
                         contentPadding = PaddingValues(bottom = 88.dp)
                     ) {
-                        stickyHeader(key = ROOT_DROP_KEY) {
-                            if (dragItem != null) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .background(
-                                            if (dropTarget == "") MaterialTheme.colorScheme.primaryContainer
-                                            else MaterialTheme.colorScheme.surfaceVariant
-                                        )
-                                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = "Move to All notes",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = if (dropTarget == "") MaterialTheme.colorScheme.onPrimaryContainer
-                                        else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        }
                         items(
                             items,
                             key = {
@@ -382,9 +365,14 @@ fun NotesScreen(vm: MainViewModel) {
                             SyncFooter(sync.syncing, unsynced, sync.report?.errors ?: 0, sync.report?.failures.orEmpty())
                         }
                     }
-                    // Floating drag shadow. No pointer handlers, so touches pass
-                    // straight through to the list underneath.
+                    // Floating drag shadow, with the live destination. No pointer
+                    // handlers, so touches pass straight through to the list.
                     if (dragItem != null) {
+                        val destLabel = when (dropTarget) {
+                            null -> null
+                            "" -> "All notes"
+                            else -> dropTarget
+                        }
                         Surface(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -399,7 +387,7 @@ fun NotesScreen(vm: MainViewModel) {
                             shape = MaterialTheme.shapes.medium
                         ) {
                             Text(
-                                text = dragLabel,
+                                text = if (destLabel == null) dragLabel else "$dragLabel → $destLabel",
                                 style = MaterialTheme.typography.bodyMedium,
                                 maxLines = 1,
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
@@ -677,7 +665,7 @@ private fun FolderRow(
             .fillMaxWidth()
             .alpha(if (dimmed) 0.35f else 1f)
             .background(
-                if (highlighted) MaterialTheme.colorScheme.primaryContainer
+                if (highlighted) MaterialTheme.colorScheme.surfaceContainerHigh
                 else Color.Transparent
             )
             .then(dragModifier)
@@ -729,7 +717,7 @@ private fun NoteRow(
             .fillMaxWidth()
             .alpha(if (dimmed) 0.35f else 1f)
             .background(
-                if (highlighted) MaterialTheme.colorScheme.primaryContainer
+                if (highlighted) MaterialTheme.colorScheme.surfaceContainerHigh
                 else Color.Transparent
             )
             .then(dragModifier)
