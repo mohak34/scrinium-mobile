@@ -1,8 +1,8 @@
 package dev.mohak.scrinium
 
 import android.app.Application
+import androidx.work.WorkManager
 import dev.mohak.scrinium.di.AppContainer
-import dev.mohak.scrinium.sync.SyncScheduler
 
 class ScriniumApplication : Application() {
     lateinit var container: AppContainer
@@ -11,6 +11,8 @@ class ScriniumApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
-        SyncScheduler.schedulePeriodic(this)
+        // Foreground-only sync: cancel the periodic worker older installs
+        // enqueued so nothing ever runs while the app is closed.
+        WorkManager.getInstance(this).cancelUniqueWork("scrinium-sync-periodic")
     }
 }
