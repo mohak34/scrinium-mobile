@@ -88,6 +88,10 @@ class MainViewModel(
 
     private val editorEdits = MutableStateFlow<Pair<String, String>?>(null)
 
+    // H1 -> filename runs on a longer debounce than the save itself, so an
+    // in-progress heading doesn't rename the file on every keystroke.
+    private val titleSyncEdits = MutableStateFlow<Pair<String, String>?>(null)
+
     private var signInAction: (suspend () -> Boolean)? = null
 
     // Push side of auto-sync: one quiet sync shortly after the last local
@@ -159,6 +163,15 @@ class MainViewModel(
                 }
         }
         viewModelScope.launch {
+            titleSyncEdits
+                .filterNotNull()
+                .debounce(1500)
+                .distinctUntilChanged()
+                .collect { (path, text) ->
+                    maybeSyncTitleToFilename(path, text)
+                }
+        }
+        viewModelScope.launch {
             session.signedIn.collect { signedIn ->
                 if (signedIn) syncNow()
             }
@@ -197,6 +210,7 @@ class MainViewModel(
             val note = notes.get(path) ?: return@launch
             _editor.value = EditorState(note.path, note.content)
             editorEdits.value = null
+            titleSyncEdits.value = null
             _screen.value = Screen.Editor(note.path)
         }
     }
@@ -218,6 +232,7 @@ class MainViewModel(
                 }
                 _editor.value = EditorState(pulled.path, pulled.content)
                 editorEdits.value = null
+                titleSyncEdits.value = null
                 _screen.value = Screen.Editor(pulled.path)
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Couldn't open note: ${e.message}") }
@@ -234,6 +249,7 @@ class MainViewModel(
                 val path = notes.createNote(existing, folder)
                 _editor.value = EditorState(path, "# ${path.substringAfterLast('/').removeSuffix(".md")}\n\n")
                 editorEdits.value = null
+                titleSyncEdits.value = null
                 _screen.value = Screen.Editor(path)
                 scheduleAutoSync()
             } catch (e: Exception) {
@@ -246,6 +262,31 @@ class MainViewModel(
         val current = _editor.value ?: return
         _editor.value = current.copy(text = text)
         editorEdits.value = current.path to text
+        titleSyncEdits.value = current.path to text
+    }
+
+    // Web parity: editing the H1 renames the file. Local-only tombstone +
+    // PUT like a manual rename. Skips quietly on collision — the file keeps
+    // its name instead of gaining a surprise suffix.
+    private suspend fun maybeSyncTitleToFilename(path: String, text: String) {
+        val h1 = firstH1(text) ?: return
+        val safe = sanitizeTitleForFilename(h1) ?: return
+        val dir = path.substringBeforeLast('/', "")
+        val stem = path.substringAfterLast('/').removeSuffix(".md")
+        if (safe == stem) return
+        val target = if (dir.isBlank()) "$safe.md" else "$dir/$safe.md"
+        if (notes.get(target) != null) return
+        try {
+            val newPath = notes.renameNote(path, safe) ?: return
+            if (_editor.value?.path == path) {
+                _editor.value = _editor.value?.copy(path = newPath)
+                val updatedText = _editor.value?.text ?: text
+                editorEdits.value = newPath to updatedText
+                _screen.value = Screen.Editor(newPath)
+            }
+            scheduleAutoSync()
+        } catch (_: Exception) {
+        }
     }
 
     fun closeEditor() {
@@ -255,11 +296,13 @@ class MainViewModel(
                 val stored = notes.get(current.path)
                 if (stored != null && !stored.isDeleted && stored.content != current.text) {
                     notes.saveLocally(current.path, current.text)
+                    maybeSyncTitleToFilename(current.path, current.text)
                     scheduleAutoSync()
                 }
             }
         }
         editorEdits.value = null
+        titleSyncEdits.value = null
         _editor.value = null
         _screen.value = Screen.Notes
     }
@@ -293,8 +336,20 @@ class MainViewModel(
             val current = _editor.value ?: return@launch
             try {
                 val newPath = notes.renameNote(current.path, newName) ?: return@launch
-                _editor.value = current.copy(path = newPath)
-                editorEdits.value = newPath to current.text
+                // Filename -> title: keep the H1/frontmatter in step with the
+                // new name, same as the web client. Never injects when the
+                // note has no title source.
+                var text = current.text
+                val stem = newPath.substringAfterLast('/').removeSuffix(".md")
+                if (effectiveTitle(text, "") != stem) {
+                    setEffectiveTitle(text, stem)?.let { updated ->
+                        text = updated
+                        notes.saveLocally(newPath, updated)
+                    }
+                }
+                _editor.value = EditorState(newPath, text)
+                editorEdits.value = null
+                titleSyncEdits.value = null
                 _screen.value = Screen.Editor(newPath)
                 scheduleAutoSync()
             } catch (e: Exception) {
