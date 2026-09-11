@@ -2,9 +2,9 @@ package dev.mohak.scrinium.ui.screens
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -46,7 +46,6 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -60,11 +59,10 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -76,60 +74,22 @@ import dev.mohak.scrinium.ui.folderPaths
 import dev.mohak.scrinium.ui.name
 import dev.mohak.scrinium.ui.noteTitle
 import dev.mohak.scrinium.ui.relativeTime
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 private const val HOVER_EXPAND_MS = 700L
 
-// Non-composing drag scratch state. Finger position updates every frame while
-// dragging, so it stays out of Compose state — only dropTarget (highlight)
-// and dragItem (overlay) are observable.
+// Non-composing drag scratch. The finger position updates every frame, so it
+// stays out of Compose state — only dropTarget (highlight) and dragItem
+// (overlay + refresh guard) are observable.
 private class DragHolder {
-    var moved = false
-    var containerTop = 0f
-    var viewportTop = 0f
-    var viewportHeight = 0f
-    var fingerWindowY = 0f
+    var fingerY = 0f
+    var viewportH = 0f
     var hoverFolder: String? = null
     var hoverSince = 0L
-}
-
-// Gesture callbacks handed to rows. Each wraps a rememberUpdatedState so the
-// pointerInput blocks (keyed on stable item keys) never see stale closures.
-private class RowDrag(
-    val onStart: State<(TreeItem, String, Float) -> Unit>,
-    val onMove: State<(Float) -> Unit>,
-    val onEnd: State<(() -> Unit) -> Unit>
-)
-
-@Composable
-private fun Modifier.treeDraggable(
-    dragKey: String,
-    item: TreeItem,
-    label: String,
-    rowDrag: RowDrag,
-    onTap: () -> Unit,
-    onMenu: () -> Unit
-): Modifier {
-    var coords by remember(dragKey) { mutableStateOf<LayoutCoordinates?>(null) }
-    return this
-        .onGloballyPositioned { coords = it }
-        .clickable(onClick = onTap)
-        .pointerInput(dragKey) {
-            detectDragGesturesAfterLongPress(
-                onDragStart = { offset ->
-                    val c = coords ?: return@detectDragGesturesAfterLongPress
-                    rowDrag.onStart.value(item, label, c.localToWindow(offset).y)
-                },
-                onDrag = { change, _ ->
-                    change.consume()
-                    val c = coords ?: return@detectDragGesturesAfterLongPress
-                    rowDrag.onMove.value(c.localToWindow(change.position).y)
-                },
-                onDragEnd = { rowDrag.onEnd.value(onMenu) },
-                onDragCancel = { rowDrag.onEnd.value(onMenu) }
-            )
-        }
+    var openMenu: (() -> Unit)? = null
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -150,6 +110,7 @@ fun NotesScreen(vm: MainViewModel) {
     val listState = rememberLazyListState()
     val haptics = LocalHapticFeedback.current
     val density = LocalDensity.current
+    val touchSlop = LocalViewConfiguration.current.touchSlop
     val edgePx = with(density) { 96.dp.toPx() }
     val drag = remember { DragHolder() }
     var dragItem by remember { mutableStateOf<TreeItem?>(null) }
@@ -165,24 +126,26 @@ fun NotesScreen(vm: MainViewModel) {
     var renameFolderTarget by remember { mutableStateOf<String?>(null) }
     var deleteFolderTarget by remember { mutableStateOf<String?>(null) }
 
+    val latestItems = rememberUpdatedState(items)
+    val latestCollapsed = rememberUpdatedState(collapsed)
+
     // Folders a dragged folder may not be dropped into: itself + descendants.
-    val dragBlocked = remember(dragItem, notes) {
-        val path = (dragItem as? TreeItem.Folder)?.path ?: return@remember emptySet()
-        folders.filterTo(mutableSetOf()) { it == path || it.startsWith("$path/") }
+    fun blockedPrefixes(dragged: TreeItem): Set<String> {
+        val path = (dragged as? TreeItem.Folder)?.path ?: return emptySet()
+        return folders.filterTo(mutableSetOf()) { it == path || it.startsWith("$path/") }
     }
 
     fun resolveTarget(key: Any?, relY: Float): String? {
         val item = dragItem ?: return null
-        // Empty list space (padding below/around rows, but still inside the
-        // viewport) means the vault root. Outside the viewport resolves to
-        // nothing so edge auto-scroll releases can't misfire to root.
+        // Empty list space inside the viewport = vault root. Past the edges
+        // (mid auto-scroll overshoot) resolves to nothing.
         if (key == null) {
-            return if (relY >= 0 && relY <= drag.viewportHeight) "" else null
+            return if (relY >= 0 && relY <= drag.viewportH) "" else null
         }
         return when {
             key is String && key.startsWith("d:") -> {
                 val path = key.removePrefix("d:")
-                if (path in dragBlocked) null else path
+                if (path in blockedPrefixes(item)) null else path
             }
             key is String && key.startsWith("f:") -> {
                 val parent = key.removePrefix("f:").substringBeforeLast('/', "")
@@ -195,28 +158,15 @@ fun NotesScreen(vm: MainViewModel) {
         }
     }
 
-    fun onDragStart(item: TreeItem, label: String, winY: Float) {
-        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-        drag.moved = false
-        drag.hoverFolder = null
-        dragLabel = label
-        drag.fingerWindowY = winY
-        dragFingerY = winY - drag.containerTop
-        dragItem = item
-        dropTarget = null
-    }
-
-    fun onDragMove(winY: Float) {
-        drag.moved = true
-        drag.fingerWindowY = winY
-        dragFingerY = winY - drag.containerTop
-        val relY = winY - drag.viewportTop
+    fun onDragMove(y: Float) {
+        drag.fingerY = y
+        dragFingerY = y
         val key = listState.layoutInfo.visibleItemsInfo
-            .firstOrNull { relY >= it.offset && relY < it.offset + it.size }?.key
-        val target = resolveTarget(key, relY)
+            .firstOrNull { y >= it.offset && y < it.offset + it.size }?.key
+        val target = resolveTarget(key, y)
         if (target != dropTarget) dropTarget = target
         val nowMs = System.currentTimeMillis()
-        if (target != null && target.isNotEmpty() && target in collapsed) {
+        if (target != null && target.isNotEmpty() && target in latestCollapsed.value) {
             if (drag.hoverFolder != target) {
                 drag.hoverFolder = target
                 drag.hoverSince = nowMs
@@ -229,15 +179,16 @@ fun NotesScreen(vm: MainViewModel) {
         }
     }
 
-    fun onDragEnd(openMenu: () -> Unit) {
-        val wasMoved = drag.moved
+    fun onDragEnd(moved: Boolean) {
         val item = dragItem
         val target = dropTarget
+        val menu = drag.openMenu
         dragItem = null
         dropTarget = null
         drag.hoverFolder = null
-        if (!wasMoved) {
-            openMenu()
+        drag.openMenu = null
+        if (!moved) {
+            menu?.invoke()
             return
         }
         if (item == null || target == null) return
@@ -247,11 +198,19 @@ fun NotesScreen(vm: MainViewModel) {
         }
     }
 
-    val rowDrag = RowDrag(
-        onStart = rememberUpdatedState(::onDragStart),
-        onMove = rememberUpdatedState(::onDragMove),
-        onEnd = rememberUpdatedState(::onDragEnd)
-    )
+    fun onDragStart(item: TreeItem, label: String, y: Float, openMenu: () -> Unit) {
+        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+        drag.openMenu = openMenu
+        dragLabel = label
+        drag.fingerY = y
+        dragFingerY = y
+        drag.hoverFolder = null
+        dragItem = item
+        dropTarget = null
+    }
+
+    val moveRef = rememberUpdatedState(::onDragMove)
+    val endRef = rememberUpdatedState(::onDragEnd)
 
     // Edge auto-scroll while dragging. Reads the holder directly so the
     // per-frame loop never recomposes.
@@ -259,10 +218,10 @@ fun NotesScreen(vm: MainViewModel) {
         if (dragItem == null) return@LaunchedEffect
         while (true) {
             delay(16)
-            val y = drag.fingerWindowY
+            val y = drag.fingerY
             when {
-                y < drag.viewportTop + edgePx -> listState.scrollBy(-14f)
-                y > drag.viewportTop + drag.viewportHeight - edgePx -> listState.scrollBy(14f)
+                y < edgePx -> listState.scrollBy(-14f)
+                y > drag.viewportH - edgePx -> listState.scrollBy(14f)
             }
         }
     }
@@ -300,18 +259,46 @@ fun NotesScreen(vm: MainViewModel) {
             if (items.isEmpty() && !sync.syncing) {
                 EmptyState()
             } else {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .onGloballyPositioned { drag.containerTop = it.positionInWindow().y }
-                ) {
+                Box(modifier = Modifier.fillMaxSize()) {
                     LazyColumn(
                         state = listState,
                         modifier = Modifier
                             .fillMaxSize()
-                            .onGloballyPositioned {
-                                drag.viewportTop = it.positionInWindow().y
-                                drag.viewportHeight = it.size.height.toFloat()
+                            .onGloballyPositioned { drag.viewportH = it.size.height.toFloat() }
+                            .pointerInput(Unit) {
+                                // Passive gesture tracker on the list itself (never
+                                // recycled, unlike rows). Observes without consuming
+                                // until a row long-press promotes it to a drag.
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(requireUnconsumed = false)
+                                    val id = down.id
+                                    var moved = false
+                                    var tracking = false
+                                    try {
+                                        do {
+                                            val event = awaitPointerEvent()
+                                            val change = event.changes.firstOrNull { it.id == id }
+                                                ?: continue
+                                            if (!change.pressed) break
+                                            if (dragItem != null) {
+                                                tracking = true
+                                                change.consume()
+                                                val y = change.position.y
+                                                if (!moved && abs(y - down.position.y) > touchSlop) {
+                                                    moved = true
+                                                }
+                                                moveRef.value(y)
+                                            }
+                                        } while (true)
+                                    } catch (e: CancellationException) {
+                                        dragItem = null
+                                        dropTarget = null
+                                        drag.hoverFolder = null
+                                        drag.openMenu = null
+                                        throw e
+                                    }
+                                    if (tracking) endRef.value(moved)
+                                }
                             },
                         contentPadding = PaddingValues(bottom = 88.dp)
                     ) {
@@ -328,17 +315,18 @@ fun NotesScreen(vm: MainViewModel) {
                                 is TreeItem.Folder -> FolderRow(
                                     folder = item,
                                     expanded = item.path !in collapsed,
-                                    dimmed = (dragItem as? TreeItem.Folder)?.path == item.path,
                                     highlighted = dropTarget == item.path,
-                                    dragModifier = Modifier.treeDraggable(
-                                        dragKey = "d:${item.path}",
-                                        item = item,
-                                        label = "${item.name} (${item.noteCount})",
-                                        rowDrag = rowDrag,
-                                        onTap = { vm.toggleFolder(item.path) },
-                                        onMenu = { folderMenu = item.path }
-                                    ),
-                                    onToggle = { vm.toggleFolder(item.path) }
+                                    dimmed = (dragItem as? TreeItem.Folder)?.path == item.path,
+                                    onTap = { vm.toggleFolder(item.path) },
+                                    onLongPress = {
+                                        onDragStart(
+                                            item,
+                                            "${item.name} (${item.noteCount})",
+                                            listState.layoutInfo.visibleItemsInfo
+                                                .firstOrNull { it.key == "d:${item.path}" }
+                                                ?.let { it.offset + it.size / 2f } ?: 0f
+                                        ) { folderMenu = item.path }
+                                    }
                                 )
                                 is TreeItem.Note -> {
                                     val parent = item.note.path.substringBeforeLast('/', "")
@@ -346,17 +334,18 @@ fun NotesScreen(vm: MainViewModel) {
                                         note = item.note,
                                         now = now,
                                         depth = item.depth,
-                                        dimmed = (dragItem as? TreeItem.Note)?.note?.path == item.note.path,
                                         highlighted = dropTarget != null && dropTarget == parent,
-                                        dragModifier = Modifier.treeDraggable(
-                                            dragKey = "f:${item.note.path}",
-                                            item = item,
-                                            label = noteTitle(item.note.path, item.note.content),
-                                            rowDrag = rowDrag,
-                                            onTap = { vm.openNote(item.note.path) },
-                                            onMenu = { moveTarget = item.note }
-                                        ),
-                                        onClick = { vm.openNote(item.note.path) }
+                                        dimmed = (dragItem as? TreeItem.Note)?.note?.path == item.note.path,
+                                        onTap = { vm.openNote(item.note.path) },
+                                        onLongPress = {
+                                            onDragStart(
+                                                item,
+                                                noteTitle(item.note.path, item.note.content),
+                                                listState.layoutInfo.visibleItemsInfo
+                                                    .firstOrNull { it.key == "f:${item.note.path}" }
+                                                    ?.let { it.offset + it.size / 2f } ?: 0f
+                                            ) { moveTarget = item.note }
+                                        }
                                     )
                                 }
                             }
@@ -365,7 +354,7 @@ fun NotesScreen(vm: MainViewModel) {
                             SyncFooter(sync.syncing, unsynced, sync.report?.errors ?: 0, sync.report?.failures.orEmpty())
                         }
                     }
-                    // Floating drag shadow, with the live destination. No pointer
+                    // Floating drag shadow with the live destination. No pointer
                     // handlers, so touches pass straight through to the list.
                     if (dragItem != null) {
                         val destLabel = when (dropTarget) {
@@ -651,31 +640,32 @@ private fun FolderOption(label: String, sublabel: String?, selected: Boolean, on
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun FolderRow(
     folder: TreeItem.Folder,
     expanded: Boolean,
-    dimmed: Boolean,
     highlighted: Boolean,
-    dragModifier: Modifier,
-    onToggle: () -> Unit
+    dimmed: Boolean,
+    onTap: () -> Unit,
+    onLongPress: () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .alpha(if (dimmed) 0.35f else 1f)
             .background(
                 if (highlighted) MaterialTheme.colorScheme.surfaceContainerHigh
                 else Color.Transparent
             )
-            .then(dragModifier)
+            .combinedClickable(onClick = onTap, onLongClick = onLongPress)
             .padding(start = (8 + folder.depth * 20).dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
             if (expanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowRight,
             contentDescription = if (expanded) "Collapse" else "Expand",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.alpha(if (dimmed) 0.35f else 1f)
         )
         Text(
             text = folder.name,
@@ -684,11 +674,13 @@ private fun FolderRow(
             modifier = Modifier
                 .weight(1f)
                 .padding(start = 8.dp)
+                .alpha(if (dimmed) 0.35f else 1f)
         )
         Text(
             text = folder.noteCount.toString(),
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.alpha(if (dimmed) 0.35f else 1f)
         )
         if (folder.hasUnsynced) {
             Box(
@@ -701,27 +693,28 @@ private fun FolderRow(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun NoteRow(
     note: NoteEntity,
     now: Long,
     depth: Int,
-    dimmed: Boolean,
     highlighted: Boolean,
-    dragModifier: Modifier,
-    onClick: () -> Unit
+    dimmed: Boolean,
+    onTap: () -> Unit,
+    onLongPress: () -> Unit
 ) {
     val updatedAt = note.localModifiedAt ?: note.remoteUpdatedAt
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .alpha(if (dimmed) 0.35f else 1f)
             .background(
                 if (highlighted) MaterialTheme.colorScheme.surfaceContainerHigh
                 else Color.Transparent
             )
-            .then(dragModifier)
-            .padding(start = (36 + depth * 20).dp, end = 16.dp, top = 10.dp, bottom = 10.dp),
+            .combinedClickable(onClick = onTap, onLongClick = onLongPress)
+            .padding(start = (36 + depth * 20).dp, end = 16.dp, top = 10.dp, bottom = 10.dp)
+            .alpha(if (dimmed) 0.35f else 1f),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f)) {
