@@ -182,11 +182,8 @@ class MainViewModel(
     fun renameCurrentNote(newName: String) {
         viewModelScope.launch {
             val current = _editor.value ?: return@launch
-            val safe = newName.trim().replace("/", "")
-            if (safe.isBlank()) return@launch
             try {
-                notes.renameNote(current.path, safe)
-                val newPath = current.path.substringBeforeLast('/', "") + if (current.path.contains("/")) "/$safe" else safe
+                val newPath = notes.renameNote(current.path, newName) ?: return@launch
                 _editor.value = current.copy(path = newPath)
                 editorEdits.value = newPath to current.text
                 _screen.value = Screen.Editor(newPath)

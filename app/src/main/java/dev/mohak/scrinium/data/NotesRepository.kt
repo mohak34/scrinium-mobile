@@ -49,13 +49,36 @@ class NotesRepository(
         noteDao.upsert(existing.copy(isDeleted = true, localModifiedAt = System.currentTimeMillis()))
     }
 
-    suspend fun renameNote(path: String, newName: String) {
-        val existing = noteDao.get(path) ?: return
+    /**
+     * Local-only rename. The old path is tombstoned ([isDeleted]) so the next
+     * sync pushes DELETE, and the new path carries [localModifiedAt] so the
+     * same sync pushes PUT. Never touches the network — safe offline.
+     * Returns the new path, or null when there is nothing to do.
+     * Throws [IllegalArgumentException] when the target path already exists.
+     */
+    suspend fun renameNote(path: String, newName: String): String? {
+        val existing = noteDao.get(path) ?: return null
+        val safe = newName.trim().replace("/", "")
+        if (safe.isBlank()) return null
+        val base = if (safe.endsWith(".md", ignoreCase = true)) safe else "$safe.md"
         val parent = path.substringBeforeLast('/', "")
-        val newPath = if (parent.isBlank()) newName else "$parent/$newName"
-        api.renameNote(path, newPath)
-        noteDao.delete(path)
-        noteDao.upsert(existing.copy(path = newPath))
+        val newPath = if (parent.isBlank()) base else "$parent/$base"
+        if (newPath == path) return null
+        if (noteDao.get(newPath) != null) {
+            throw IllegalArgumentException("A note already exists at $newPath")
+        }
+        val now = System.currentTimeMillis()
+        noteDao.upsert(existing.copy(isDeleted = true, localModifiedAt = now))
+        noteDao.upsert(
+            NoteEntity(
+                path = newPath,
+                content = existing.content,
+                remoteUpdatedAt = existing.remoteUpdatedAt,
+                localModifiedAt = now,
+                contentHash = existing.contentHash
+            )
+        )
+        return newPath
     }
 
     suspend fun networkSearch(q: String) = api.search(q)
