@@ -258,11 +258,35 @@ class MainViewModel(
         viewModelScope.launch {
             try {
                 val newPrefix = notes.renameFolder(folder, newName) ?: return@launch
-                _collapsedFolders.update { if (folder in it) (it - folder) + newPrefix else it }
+                remapCollapsed(folder, newPrefix)
                 scheduleAutoSync()
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Rename failed: ${e.message}") }
             }
+        }
+    }
+
+    fun moveFolder(folder: String, newParent: String) {
+        viewModelScope.launch {
+            try {
+                val newPrefix = notes.moveFolder(folder, newParent) ?: return@launch
+                remapCollapsed(folder, newPrefix)
+                scheduleAutoSync()
+            } catch (e: Exception) {
+                _sync.update { it.copy(error = "Move failed: ${e.message}") }
+            }
+        }
+    }
+
+    // Follows collapsed state across a folder prefix rewrite so expanded
+    // folders stay expanded after a rename/move.
+    private fun remapCollapsed(oldPrefix: String, newPrefix: String) {
+        _collapsedFolders.update { collapsed ->
+            collapsed.map { path ->
+                if (path == oldPrefix || path.startsWith("$oldPrefix/")) {
+                    newPrefix + path.removePrefix(oldPrefix)
+                } else path
+            }.toSet()
         }
     }
 

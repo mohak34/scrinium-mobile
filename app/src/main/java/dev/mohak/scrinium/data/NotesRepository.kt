@@ -132,9 +132,32 @@ class NotesRepository(
         val parent = folder.substringBeforeLast('/', "")
         val newPrefix = if (parent.isBlank()) segment else "$parent/$segment"
         if (newPrefix == folder) return null
-        val affected = noteDao.getAll()
-            .filter { !it.isDeleted && it.path.startsWith("$folder/") }
+        return rewritePrefix(folder, newPrefix)
+    }
+
+    /**
+     * Local-only folder move: reparents [folder] under [newParentRaw]
+     * (blank = vault root), keeping its name. Same sync mechanics as
+     * [renameFolder].
+     */
+    suspend fun moveFolder(folder: String, newParentRaw: String): String? {
+        val newParent = normalizeFolder(newParentRaw)
+        val base = folder.substringAfterLast('/')
+        val newPrefix = if (newParent.isBlank()) base else "$newParent/$base"
+        if (newPrefix == folder) return null
+        if (newPrefix.startsWith("$folder/")) {
+            throw IllegalArgumentException("Can't move a folder into itself")
+        }
+        return rewritePrefix(folder, newPrefix)
+    }
+
+    private suspend fun rewritePrefix(folder: String, newPrefix: String): String? {
+        val all = noteDao.getAll().filter { !it.isDeleted }
+        val affected = all.filter { it.path.startsWith("$folder/") }
         if (affected.isEmpty()) return null
+        if (all.any { it.path.startsWith("$newPrefix/") }) {
+            throw IllegalArgumentException("A folder already exists at $newPrefix")
+        }
         for (note in affected) {
             val target = newPrefix + note.path.removePrefix(folder)
             if (noteDao.get(target) != null) {

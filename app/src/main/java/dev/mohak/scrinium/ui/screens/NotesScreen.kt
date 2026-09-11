@@ -78,6 +78,7 @@ fun NotesScreen(vm: MainViewModel) {
     val folders = remember(notes) { folderPaths(notes) }
     var folderMenu by remember { mutableStateOf<String?>(null) }
     var moveTarget by remember { mutableStateOf<NoteEntity?>(null) }
+    var moveFolderTarget by remember { mutableStateOf<String?>(null) }
     var renameFolderTarget by remember { mutableStateOf<String?>(null) }
     var deleteFolderTarget by remember { mutableStateOf<String?>(null) }
 
@@ -172,6 +173,10 @@ fun NotesScreen(vm: MainViewModel) {
                         folderMenu = null
                         renameFolderTarget = folder
                     }
+                    FolderMenuButton("Move folder") {
+                        folderMenu = null
+                        moveFolderTarget = folder
+                    }
                     FolderMenuButton("Delete folder ($count notes)") {
                         folderMenu = null
                         deleteFolderTarget = folder
@@ -193,6 +198,18 @@ fun NotesScreen(vm: MainViewModel) {
             onMove = { dest ->
                 moveTarget = null
                 vm.moveNote(note.path, dest)
+            }
+        )
+    }
+
+    moveFolderTarget?.let { folder ->
+        MoveFolderDialog(
+            folder = folder,
+            folders = folders.filter { it != folder && !it.startsWith("$folder/") },
+            onDismiss = { moveFolderTarget = null },
+            onMove = { dest ->
+                moveFolderTarget = null
+                vm.moveFolder(folder, dest)
             }
         )
     }
@@ -301,10 +318,63 @@ private fun MoveNoteDialog(
     )
 }
 
+@Composable
+private fun MoveFolderDialog(
+    folder: String,
+    folders: List<String>,
+    onDismiss: () -> Unit,
+    onMove: (String) -> Unit
+) {
+    val currentParent = folder.substringBeforeLast('/', "")
+    var selected by remember(folder) { mutableStateOf(currentParent) }
+    var newFolder by remember(folder) { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Move folder", maxLines = 1) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 320.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                FolderOption(
+                    label = "All notes",
+                    sublabel = "Vault root",
+                    selected = selected.isEmpty() && newFolder.isBlank(),
+                    onClick = { selected = ""; newFolder = "" }
+                )
+                for (option in folders) {
+                    FolderOption(
+                        label = option,
+                        sublabel = null,
+                        selected = selected == option && newFolder.isBlank(),
+                        onClick = { selected = option; newFolder = "" }
+                    )
+                }
+                OutlinedTextField(
+                    value = newFolder,
+                    onValueChange = { newFolder = it },
+                    label = { Text("Or new folder…") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onMove(newFolder.ifBlank { selected }) }) { Text("Move") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun FolderOption(label: String, sublabel: String?, selected: Boolean, onClick: () -> Unit) {
-    Row(
+private fun FolderOption(label: String, sublabel: String?, selected: Boolean, onClick: () -> Unit) {    Row(
         modifier = Modifier
             .fillMaxWidth()
             .combinedClickable(onClick = onClick)
