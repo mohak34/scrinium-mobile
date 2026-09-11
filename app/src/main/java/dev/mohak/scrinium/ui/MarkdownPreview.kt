@@ -1,8 +1,8 @@
 package dev.mohak.scrinium.ui
 
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.ClickableText
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -18,8 +18,18 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+private val wikilinkPattern = Regex("""\[\[([^|\]]+)(?:\|([^\]]+))?]]""")
+private val tagPattern = Regex("""(?<!\S)#([A-Za-z][A-Za-z0-9_-]*(?:/[A-Za-z][A-Za-z0-9_-]*)*)""")
+private val calloutPattern = Regex("""\[!(\w+)](.*)""")
+
 @Composable
-fun MarkdownText(markdown: String, modifier: Modifier = Modifier) {
+fun MarkdownText(
+    markdown: String,
+    modifier: Modifier = Modifier,
+    onWikilinkClick: (String) -> Unit = {},
+    onToggleTaskLine: (Int) -> Unit = {},
+    onTagClick: (String) -> Unit = {}
+) {
     val colors = MaterialTheme.colorScheme
     val renderer = remember(colors) {
         MarkdownRenderer(
@@ -30,12 +40,29 @@ fun MarkdownText(markdown: String, modifier: Modifier = Modifier) {
             outline = colors.outline
         )
     }
-    Text(
-        text = renderer.render(markdown),
+    val rendered = remember(markdown, renderer) { renderer.render(markdown) }
+    ClickableText(
+        text = rendered,
         modifier = modifier,
-        color = colors.onSurface,
-        fontSize = 15.sp,
-        lineHeight = 25.5.sp
+        style = androidx.compose.ui.text.TextStyle(
+            color = colors.onSurface,
+            fontSize = 15.sp,
+            lineHeight = 25.5.sp
+        ),
+        onClick = { offset ->
+            val annotations = rendered.getStringAnnotations(start = offset, end = offset)
+            annotations.firstOrNull { it.tag == "toggle" }?.let {
+                it.item.toIntOrNull()?.let(onToggleTaskLine)
+                return@ClickableText
+            }
+            annotations.firstOrNull { it.tag == "wikilink" }?.let {
+                onWikilinkClick(it.item)
+                return@ClickableText
+            }
+            annotations.firstOrNull { it.tag == "tag" }?.let {
+                onTagClick(it.item)
+            }
+        }
     )
 }
 
@@ -88,14 +115,19 @@ private class MarkdownRenderer(
                         quote += lines[i].trimStart().drop(1).trimStart()
                         i++
                     }
-                    appendBlockquote(quote)
+                    val callout = quote.firstOrNull()?.let { calloutPattern.matchEntire(it.trim()) }
+                    if (callout != null) {
+                        appendCallout(callout.groupValues[1], callout.groupValues[2].trim(), quote.drop(1))
+                    } else {
+                        appendBlockquote(quote)
+                    }
                     append("\n\n")
                 }
                 listMarker(trimmed) != null -> {
-                    val items = mutableListOf<Pair<String, String>>()
+                    val items = mutableListOf<Triple<String, String, Int>>()
                     while (i < lines.size && listMarker(lines[i].trimStart()) != null) {
                         val (marker, rest) = listMarker(lines[i].trimStart())!!
-                        items += marker to rest
+                        items += Triple(marker, rest, i)
                         i++
                     }
                     appendList(items)
@@ -168,8 +200,8 @@ private class MarkdownRenderer(
         }
     }
 
-    private fun AnnotatedString.Builder.appendList(items: List<Pair<String, String>>) {
-        items.forEachIndexed { index, (marker, text) ->
+    private fun AnnotatedString.Builder.appendList(items: List<Triple<String, String, Int>>) {
+        items.forEachIndexed { index, (marker, text, lineIdx) ->
             val prefix = when (marker) {
                 "bullet" -> "\u2022  "
                 "checked" -> "\u2611  "
@@ -179,8 +211,11 @@ private class MarkdownRenderer(
             val style = SpanStyle(
                 color = if (marker == "checked") onSurfaceVariant else onSurface
             )
+            val toggleable = marker == "checked" || marker == "unchecked"
+            if (toggleable) pushStringAnnotation(tag = "toggle", annotation = lineIdx.toString())
             if (prefix.isNotEmpty()) withStyle(style) { append(prefix) }
             appendInlineStyled(text, base = style)
+            if (toggleable) pop()
             if (index != items.lastIndex) append('\n')
         }
     }
@@ -202,7 +237,53 @@ private class MarkdownRenderer(
         }
     }
 
+    private fun AnnotatedString.Builder.appendCallout(kind: String, title: String, lines: List<String>) {
+        val labelStyle = SpanStyle(fontWeight = FontWeight.SemiBold, color = primary)
+        withStyle(labelStyle) { append(kind.uppercase()) }
+        if (title.isNotBlank()) {
+            withStyle(SpanStyle(color = onSurfaceVariant)) { append("  $title") }
+        }
+        for (line in lines) {
+            append('\n')
+            appendInlineStyled(line, base = SpanStyle(color = onSurfaceVariant))
+        }
+    }
+
     private fun AnnotatedString.Builder.appendInlineStyled(text: String, base: SpanStyle = SpanStyle()) {
+        // Wikilinks first: annotated spans the tap handler resolves.
+        var rest = text
+        while (true) {
+            val m = wikilinkPattern.find(rest) ?: break
+            if (m.range.first > 0) appendInlineTags(rest.substring(0, m.range.first), base)
+            val target = m.groupValues[1].trim()
+            val label = m.groupValues[2].ifBlank { target }
+            pushStringAnnotation(tag = "wikilink", annotation = target)
+            withStyle(
+                base.merge(SpanStyle(textDecoration = TextDecoration.Underline, color = primary))
+            ) { append(label) }
+            pop()
+            rest = rest.substring(m.range.last + 1)
+        }
+        appendInlineTags(rest, base)
+    }
+
+    private fun AnnotatedString.Builder.appendInlineTags(text: String, base: SpanStyle) {
+        // Tag pills: primary on tinted background, tappable to browse.
+        var rest = text
+        while (true) {
+            val m = tagPattern.find(rest) ?: break
+            if (m.range.first > 0) appendInlineBasic(rest.substring(0, m.range.first), base)
+            pushStringAnnotation(tag = "tag", annotation = m.groupValues[1])
+            withStyle(
+                base.merge(SpanStyle(color = primary, background = codeBackground))
+            ) { append(m.value) }
+            pop()
+            rest = rest.substring(m.range.last + 1)
+        }
+        appendInlineBasic(rest, base)
+    }
+
+    private fun AnnotatedString.Builder.appendInlineBasic(text: String, base: SpanStyle = SpanStyle()) {
         var i = 0
         while (i < text.length) {
             val rest = text.substring(i)

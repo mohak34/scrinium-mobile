@@ -278,6 +278,60 @@ class MainViewModel(
         searchQuery.value = q
     }
 
+    // Preview interactions (no-ops for plain text, wired in EditorScreen).
+    fun openWikilink(targetRaw: String) {
+        val target = targetRaw.substringBefore('#').trim()
+        if (target.isEmpty()) return
+        viewModelScope.launch {
+            val all = notes.observeAll().first().filter { !it.isDeleted }
+            val current = _editor.value
+            val dir = current?.path?.substringBeforeLast('/', "") ?: ""
+            val candidates = buildList {
+                if (dir.isNotBlank()) add("$dir/$target")
+                if (dir.isNotBlank()) add("$dir/$target.md")
+                add(target)
+                add(if (target.endsWith(".md", ignoreCase = true)) target else "$target.md")
+            }
+            val direct = candidates.firstOrNull { c -> all.any { it.path == c } }
+            if (direct != null) {
+                openNote(direct)
+                return@launch
+            }
+            val stem = target.substringAfterLast('/').removeSuffix(".md")
+            val matches = all.filter {
+                it.path.substringAfterLast('/').removeSuffix(".md").equals(stem, ignoreCase = true)
+            }
+            if (matches.size == 1) {
+                openNote(matches[0].path)
+            } else {
+                _sync.update {
+                    it.copy(error = if (matches.isEmpty()) "Note not found: $target" else "Multiple notes match: $target")
+                }
+            }
+        }
+    }
+
+    fun toggleTaskLine(lineIdx: Int) {
+        val current = _editor.value ?: return
+        val lines = current.text.lines()
+        if (lineIdx !in lines.indices) return
+        val line = lines[lineIdx]
+        val toggled = when {
+            "- [ ]" in line -> line.replaceFirst("- [ ]", "- [x]")
+            "- [x]" in line -> line.replaceFirst("- [x]", "- [ ]")
+            "- [X]" in line -> line.replaceFirst("- [X]", "- [ ]")
+            else -> return
+        }
+        val out = lines.toMutableList()
+        out[lineIdx] = toggled
+        updateEditorText(out.joinToString("\n"))
+    }
+
+    fun searchTag(tag: String) {
+        searchQuery.value = "#$tag"
+        _screen.update { Screen.Search }
+    }
+
     fun deleteCurrentNote() {
         viewModelScope.launch {
             val current = _editor.value ?: return@launch

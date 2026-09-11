@@ -82,7 +82,10 @@ fun EditorScreen(vm: MainViewModel) {
                     .fillMaxSize()
                     .padding(padding)
                     .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                onWikilinkClick = { vm.openWikilink(it) },
+                onToggleTaskLine = { vm.toggleTaskLine(it) },
+                onTagClick = { vm.searchTag(it) }
             )
         } else {
             BasicTextField(
