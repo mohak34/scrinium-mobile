@@ -279,9 +279,9 @@ fun NotesScreen(vm: MainViewModel) {
                                             val event = awaitPointerEvent()
                                             val change = event.changes.firstOrNull { it.id == id }
                                                 ?: continue
+                                            if (dragItem != null) tracking = true
                                             if (!change.pressed) break
-                                            if (dragItem != null) {
-                                                tracking = true
+                                            if (tracking) {
                                                 change.consume()
                                                 val y = change.position.y
                                                 if (!moved && abs(y - down.position.y) > touchSlop) {
