@@ -196,8 +196,10 @@ class MainViewModel(
     fun syncNow(force: Boolean = false) {
         if (_sync.value.syncing) return
         if (!force) {
-            val last = _sync.value.lastSyncAt ?: return
-            if (System.currentTimeMillis() - last < 30_000) return
+            // Null means "never synced" — that is exactly when a sync is due.
+            // Only throttle when we have a previous timestamp.
+            val last = _sync.value.lastSyncAt
+            if (last != null && System.currentTimeMillis() - last < 30_000) return
         }
         viewModelScope.launch {
             _sync.update { it.copy(syncing = true, error = null) }
