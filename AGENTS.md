@@ -12,9 +12,10 @@ rules below are the decisions that keep it small and battery-friendly.
 ## Non-negotiables
 
 1. **No foreground service, no polling loop.** Sync runs as a WorkManager job
-   (`setRequiredNetworkType(CONNECTED)`, conservative interval) plus on app
-   foreground and manual pull-to-refresh. Never a persistent background
-   process.
+   (`setRequiredNetworkType(CONNECTED)`, conservative interval), a debounced
+   auto-push ~10s after local edits settle, a 60s pull tick while the app is
+   in the foreground, plus on app foreground and manual pull-to-refresh.
+   Never a persistent background process; nothing runs while backgrounded.
 2. **Manifest-first sync.** Sync fetches `GET /api/notes/manifest` (metadata
    only — path, mtime, size-fingerprint), diffs against Room, and only then
    fetches/pushes the notes that actually changed. Never download the whole

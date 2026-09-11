@@ -117,10 +117,12 @@ This is worth being explicit about since it's your stated top priority:
 - **No foreground service.** Sync is a WorkManager job that runs,
   finishes, and stops — never a persistent background process holding
   a wakelock.
-- **No polling loop.** Sync triggers: app opened, manual pull-to-refresh,
-  and a WorkManager periodic job set to a conservative interval (e.g.
-  every 2-4 hours, `setRequiredNetworkType(NetworkType.CONNECTED)`) —
-  not "check every N minutes."
+- **No polling loop.** Sync triggers: debounced auto-push ~10s after local
+  edits settle, a 60s pull tick while the app is foregrounded, app opened
+  from background, manual pull-to-refresh, and a WorkManager periodic job
+  set to a conservative interval (e.g. every 2-4 hours,
+  `setRequiredNetworkType(NetworkType.CONNECTED)`) — not "check every N
+  minutes" while backgrounded.
 - **Manifest-first sync** (above) means most sync cycles transfer a few
   KB of metadata and nothing else, not full note bodies.
 - **Lazy content loading**: don't hold the entire vault's text in memory

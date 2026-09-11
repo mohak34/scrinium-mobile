@@ -1,5 +1,6 @@
 package dev.mohak.scrinium.ui
 
+import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -12,6 +13,8 @@ import dev.mohak.scrinium.di.AppContainer
 import dev.mohak.scrinium.sync.SyncEngine
 import dev.mohak.scrinium.sync.SyncReport
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -80,6 +83,19 @@ class MainViewModel(
 
     private var signInAction: (suspend () -> Boolean)? = null
 
+    // Push side of auto-sync: one quiet sync ~10s after the last local
+    // mutation settles. Replaces "edit, then wonder why it says unsynced".
+    private var autoSyncJob: Job? = null
+
+    private fun scheduleAutoSync() {
+        autoSyncJob?.cancel()
+        autoSyncJob = viewModelScope.launch {
+            delay(10_000)
+            if (!session.isSignedIn()) return@launch
+            syncNow(force = true, quiet = true)
+        }
+    }
+
     val searchQuery = MutableStateFlow("")
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -101,11 +117,28 @@ class MainViewModel(
                 .filterNotNull()
                 .debounce(500)
                 .distinctUntilChanged()
-                .collect { (path, text) -> notes.saveLocally(path, text) }
+                .collect { (path, text) ->
+                    notes.saveLocally(path, text)
+                    scheduleAutoSync()
+                }
         }
         viewModelScope.launch {
             session.signedIn.collect { signedIn ->
                 if (signedIn) syncNow()
+            }
+        }
+        // Pull side of auto-sync: while the app is in the foreground, pick up
+        // server-side changes about once a minute. Gated on STARTED so nothing
+        // ever runs while backgrounded.
+        viewModelScope.launch {
+            while (true) {
+                delay(60_000)
+                if (ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(
+                        androidx.lifecycle.Lifecycle.State.STARTED
+                    )
+                ) {
+                    syncTick()
+                }
             }
         }
     }
@@ -142,6 +175,7 @@ class MainViewModel(
                 _editor.value = EditorState(path, "# ${path.substringAfterLast('/').removeSuffix(".md")}\n\n")
                 editorEdits.value = null
                 _screen.value = Screen.Editor(path)
+                scheduleAutoSync()
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Create failed: ${e.message}") }
             }
@@ -161,6 +195,7 @@ class MainViewModel(
                 val stored = notes.get(current.path)
                 if (stored != null && !stored.isDeleted && stored.content != current.text) {
                     notes.saveLocally(current.path, current.text)
+                    scheduleAutoSync()
                 }
             }
         }
@@ -187,6 +222,7 @@ class MainViewModel(
         viewModelScope.launch {
             val current = _editor.value ?: return@launch
             notes.deleteLocally(current.path)
+            scheduleAutoSync()
             _editor.value = null
             _screen.value = Screen.Notes
         }
@@ -200,6 +236,7 @@ class MainViewModel(
                 _editor.value = current.copy(path = newPath)
                 editorEdits.value = newPath to current.text
                 _screen.value = Screen.Editor(newPath)
+                scheduleAutoSync()
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Rename failed: ${e.message}") }
             }
@@ -209,7 +246,8 @@ class MainViewModel(
     fun moveNote(path: String, newParent: String) {
         viewModelScope.launch {
             try {
-                notes.moveNote(path, newParent)
+                notes.moveNote(path, newParent) ?: return@launch
+                scheduleAutoSync()
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Move failed: ${e.message}") }
             }
@@ -221,6 +259,7 @@ class MainViewModel(
             try {
                 val newPrefix = notes.renameFolder(folder, newName) ?: return@launch
                 _collapsedFolders.update { if (folder in it) (it - folder) + newPrefix else it }
+                scheduleAutoSync()
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Rename failed: ${e.message}") }
             }
@@ -231,10 +270,11 @@ class MainViewModel(
         viewModelScope.launch {
             notes.deleteFolder(folder)
             _collapsedFolders.update { it - folder }
+            scheduleAutoSync()
         }
     }
 
-    fun syncNow(force: Boolean = false) {
+    fun syncNow(force: Boolean = false, quiet: Boolean = false) {
         if (_sync.value.syncing) return
         if (!force) {
             // Null means "never synced" — that is exactly when a sync is due.
@@ -249,9 +289,22 @@ class MainViewModel(
                 session.updateLastSyncAt(report.completedAt)
                 _sync.update { it.copy(syncing = false, lastSyncAt = report.completedAt, report = report) }
             } catch (e: Exception) {
-                _sync.update { it.copy(syncing = false, error = e.message ?: "Sync failed") }
+                // Automatic syncs stay quiet: offline just leaves the unsynced
+                // count visible until the next attempt. Only user-triggered
+                // syncs raise the error banner.
+                _sync.update { it.copy(syncing = false, error = if (quiet) null else e.message ?: "Sync failed") }
             }
         }
+    }
+
+    // Minutely foreground pull. Quiet: never interrupts the user.
+    fun syncTick() {
+        if (!session.isSignedIn()) return
+        if (_sync.value.syncing) return
+        val last = _sync.value.lastSyncAt
+            ?: session.lastSyncAt.value.let { if (it == 0L) null else it }
+        if (last != null && System.currentTimeMillis() - last < 60_000) return
+        syncNow(quiet = true)
     }
 
     fun syncOnForeground() {
