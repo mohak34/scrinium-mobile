@@ -9,21 +9,28 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import dev.mohak.scrinium.data.NotesRepository
 import dev.mohak.scrinium.data.SessionRepository
 import dev.mohak.scrinium.data.local.NoteEntity
+import dev.mohak.scrinium.data.remote.SearchResult
 import dev.mohak.scrinium.di.AppContainer
 import dev.mohak.scrinium.sync.SyncEngine
 import dev.mohak.scrinium.sync.SyncReport
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -98,15 +105,44 @@ class MainViewModel(
 
     val searchQuery = MutableStateFlow("")
 
+    data class SearchHit(val path: String, val title: String, val snippet: String?)
+
     @OptIn(ExperimentalCoroutinesApi::class)
-    val searchResults: StateFlow<List<NoteEntity>> = searchQuery
+    private val localHits = searchQuery
         .debounce(250)
         .distinctUntilChanged()
         .flatMapLatest { q ->
             if (q.isBlank()) notes.observeAll() else notes.search(q)
         }
         .map { list -> list.filter { !it.isDeleted } }
+
+    // Server FTS runs alongside local search: better ranking plus notes the
+    // phone hasn't synced yet. Read-only and quiet — offline just yields
+    // local results.
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val serverHits: StateFlow<List<SearchResult>> = searchQuery
+        .debounce(400)
+        .distinctUntilChanged()
+        .filter { it.isNotBlank() }
+        .flatMapLatest { q ->
+            flow { emit(notes.networkSearch(q)) }.catch { emit(emptyList()) }
+        }
+        .flowOn(Dispatchers.IO)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val searchResults: StateFlow<List<SearchHit>> =
+        combine(localHits, serverHits, searchQuery) { local, server, q ->
+            if (q.isBlank()) return@combine emptyList()
+            val localPaths = local.map { it.path }.toSet()
+            buildList {
+                for (note in local) {
+                    add(SearchHit(note.path, noteTitle(note.path, note.content), snippet(note.content, q)))
+                }
+                for (hit in server) {
+                    if (hit.path !in localPaths) add(SearchHit(hit.path, hit.title, hit.snippet))
+                }
+            }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     init {
         viewModelScope.launch {
@@ -162,6 +198,30 @@ class MainViewModel(
             _editor.value = EditorState(note.path, note.content)
             editorEdits.value = null
             _screen.value = Screen.Editor(note.path)
+        }
+    }
+
+    // Server-only hits aren't in Room yet — pull them in (with manifest hash
+    // so sync stays consistent) and open straight from the pulled content.
+    fun openSearchHit(hit: SearchHit) {
+        viewModelScope.launch {
+            val local = notes.get(hit.path)
+            if (local != null && !local.isDeleted) {
+                openNote(hit.path)
+                return@launch
+            }
+            try {
+                val pulled = notes.pullNote(hit.path)
+                if (pulled == null) {
+                    _sync.update { it.copy(error = "Note is no longer on the server") }
+                    return@launch
+                }
+                _editor.value = EditorState(pulled.path, pulled.content)
+                editorEdits.value = null
+                _screen.value = Screen.Editor(pulled.path)
+            } catch (e: Exception) {
+                _sync.update { it.copy(error = "Couldn't open note: ${e.message}") }
+            }
         }
     }
 

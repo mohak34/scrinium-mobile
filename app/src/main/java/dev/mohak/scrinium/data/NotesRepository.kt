@@ -94,6 +94,26 @@ class NotesRepository(
     suspend fun networkSearch(q: String) = api.search(q)
 
     /**
+     * Pulls a server-side note into Room with its manifest hash, so the next
+     * sync treats it as up to date instead of re-pulling or — worse —
+     * conflict-duplicating it. Returns null when the note is already gone
+     * server-side.
+     */
+    suspend fun pullNote(path: String): NoteEntity? {
+        val content = api.fetchNote(path)
+        val meta = api.fetchManifest().firstOrNull { it.path == path } ?: return null
+        val entity = NoteEntity(
+            path = path,
+            content = content,
+            remoteUpdatedAt = meta.updatedAt.toLong(),
+            localModifiedAt = null,
+            contentHash = meta.contentHash
+        )
+        noteDao.upsert(entity)
+        return entity
+    }
+
+    /**
      * Local-only move. Same tombstone + PUT mechanism as [renameNote], so the
      * next sync deletes the old path and pushes the new one — the server
      * creates intermediate directories on PUT. Never touches the network.
