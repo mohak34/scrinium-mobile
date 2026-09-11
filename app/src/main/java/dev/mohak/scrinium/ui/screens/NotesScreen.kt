@@ -2,7 +2,10 @@ package dev.mohak.scrinium.ui.screens
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,10 +14,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -33,6 +38,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -40,13 +46,26 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.mohak.scrinium.data.local.NoteEntity
@@ -58,6 +77,61 @@ import dev.mohak.scrinium.ui.name
 import dev.mohak.scrinium.ui.noteTitle
 import dev.mohak.scrinium.ui.relativeTime
 import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
+
+private const val ROOT_DROP_KEY = "root-drop"
+private const val HOVER_EXPAND_MS = 700L
+
+// Non-composing drag scratch state. Finger position updates every frame while
+// dragging, so it stays out of Compose state — only dropTarget (highlight)
+// and dragItem (overlay) are observable.
+private class DragHolder {
+    var moved = false
+    var containerTop = 0f
+    var viewportTop = 0f
+    var viewportHeight = 0f
+    var fingerWindowY = 0f
+    var hoverFolder: String? = null
+    var hoverSince = 0L
+}
+
+// Gesture callbacks handed to rows. Each wraps a rememberUpdatedState so the
+// pointerInput blocks (keyed on stable item keys) never see stale closures.
+private class RowDrag(
+    val onStart: State<(TreeItem, String, Float) -> Unit>,
+    val onMove: State<(Float) -> Unit>,
+    val onEnd: State<(() -> Unit) -> Unit>
+)
+
+@Composable
+private fun Modifier.treeDraggable(
+    dragKey: String,
+    item: TreeItem,
+    label: String,
+    rowDrag: RowDrag,
+    onTap: () -> Unit,
+    onMenu: () -> Unit
+): Modifier {
+    var coords by remember(dragKey) { mutableStateOf<LayoutCoordinates?>(null) }
+    return this
+        .onGloballyPositioned { coords = it }
+        .clickable(onClick = onTap)
+        .pointerInput(dragKey) {
+            detectDragGesturesAfterLongPress(
+                onDragStart = { offset ->
+                    val c = coords ?: return@detectDragGesturesAfterLongPress
+                    rowDrag.onStart.value(item, label, c.localToWindow(offset).y)
+                },
+                onDrag = { change, _ ->
+                    change.consume()
+                    val c = coords ?: return@detectDragGesturesAfterLongPress
+                    rowDrag.onMove.value(c.localToWindow(change.position).y)
+                },
+                onDragEnd = { rowDrag.onEnd.value(onMenu) },
+                onDragCancel = { rowDrag.onEnd.value(onMenu) }
+            )
+        }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -74,6 +148,16 @@ fun NotesScreen(vm: MainViewModel) {
         }
     }
 
+    val listState = rememberLazyListState()
+    val haptics = LocalHapticFeedback.current
+    val density = LocalDensity.current
+    val edgePx = with(density) { 96.dp.toPx() }
+    val drag = remember { DragHolder() }
+    var dragItem by remember { mutableStateOf<TreeItem?>(null) }
+    var dropTarget by remember { mutableStateOf<String?>(null) }
+    var dragLabel by remember { mutableStateOf("") }
+    var dragFingerY by remember { mutableFloatStateOf(0f) }
+
     val items = remember(notes, collapsed) { buildTree(notes, collapsed) }
     val folders = remember(notes) { folderPaths(notes) }
     var folderMenu by remember { mutableStateOf<String?>(null) }
@@ -81,6 +165,103 @@ fun NotesScreen(vm: MainViewModel) {
     var moveFolderTarget by remember { mutableStateOf<String?>(null) }
     var renameFolderTarget by remember { mutableStateOf<String?>(null) }
     var deleteFolderTarget by remember { mutableStateOf<String?>(null) }
+
+    // Folders a dragged folder may not be dropped into: itself + descendants.
+    val dragBlocked = remember(dragItem, notes) {
+        val path = (dragItem as? TreeItem.Folder)?.path ?: return@remember emptySet()
+        folders.filterTo(mutableSetOf()) { it == path || it.startsWith("$path/") }
+    }
+
+    fun resolveTarget(key: Any?): String? {
+        val item = dragItem ?: return null
+        return when {
+            key == ROOT_DROP_KEY -> ""
+            key is String && key.startsWith("d:") -> {
+                val path = key.removePrefix("d:")
+                if (path in dragBlocked) null else path
+            }
+            key is String && key.startsWith("f:") -> {
+                val parent = key.removePrefix("f:").substringBeforeLast('/', "")
+                val folder = item as? TreeItem.Folder
+                if (folder != null && (parent == folder.path || parent.startsWith(folder.path + "/"))) {
+                    null
+                } else parent
+            }
+            else -> null
+        }
+    }
+
+    fun onDragStart(item: TreeItem, label: String, winY: Float) {
+        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+        drag.moved = false
+        drag.hoverFolder = null
+        dragLabel = label
+        drag.fingerWindowY = winY
+        dragFingerY = winY - drag.containerTop
+        dragItem = item
+        dropTarget = null
+    }
+
+    fun onDragMove(winY: Float) {
+        drag.moved = true
+        drag.fingerWindowY = winY
+        dragFingerY = winY - drag.containerTop
+        val relY = winY - drag.viewportTop
+        val key = listState.layoutInfo.visibleItemsInfo
+            .firstOrNull { relY >= it.offset && relY < it.offset + it.size }?.key
+        val target = resolveTarget(key)
+        if (target != dropTarget) dropTarget = target
+        val nowMs = System.currentTimeMillis()
+        if (target != null && target.isNotEmpty() && target in collapsed) {
+            if (drag.hoverFolder != target) {
+                drag.hoverFolder = target
+                drag.hoverSince = nowMs
+            } else if (nowMs - drag.hoverSince > HOVER_EXPAND_MS) {
+                vm.toggleFolder(target)
+                drag.hoverFolder = null
+            }
+        } else {
+            drag.hoverFolder = null
+        }
+    }
+
+    fun onDragEnd(openMenu: () -> Unit) {
+        val wasMoved = drag.moved
+        val item = dragItem
+        val target = dropTarget
+        dragItem = null
+        dropTarget = null
+        drag.hoverFolder = null
+        if (!wasMoved) {
+            openMenu()
+            return
+        }
+        if (item == null || target == null) return
+        when (item) {
+            is TreeItem.Folder -> vm.moveFolder(item.path, target)
+            is TreeItem.Note -> vm.moveNote(item.note.path, target)
+        }
+    }
+
+    val rowDrag = RowDrag(
+        onStart = rememberUpdatedState(::onDragStart),
+        onMove = rememberUpdatedState(::onDragMove),
+        onEnd = rememberUpdatedState(::onDragEnd)
+    )
+
+    // Edge auto-scroll while dragging. Reads the holder directly so the
+    // per-frame loop never recomposes.
+    LaunchedEffect(dragItem) {
+        if (dragItem == null) return@LaunchedEffect
+        while (true) {
+            delay(16)
+            val y = drag.fingerWindowY
+            when {
+                y < drag.viewportTop + edgePx -> listState.scrollBy(-14f)
+                y > drag.viewportTop + drag.viewportHeight - edgePx -> listState.scrollBy(14f)
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -107,7 +288,7 @@ fun NotesScreen(vm: MainViewModel) {
     ) { padding ->
         PullToRefreshBox(
             isRefreshing = sync.syncing,
-            onRefresh = { vm.syncNow(force = true) },
+            onRefresh = { if (dragItem == null) vm.syncNow(force = true) },
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
@@ -115,37 +296,115 @@ fun NotesScreen(vm: MainViewModel) {
             if (items.isEmpty() && !sync.syncing) {
                 EmptyState()
             } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(bottom = 88.dp)
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .onGloballyPositioned { drag.containerTop = it.positionInWindow().y }
                 ) {
-                    items(
-                        items,
-                        key = {
-                            when (it) {
-                                is TreeItem.Folder -> "d:${it.path}"
-                                is TreeItem.Note -> "f:${it.note.path}"
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .onGloballyPositioned {
+                                drag.viewportTop = it.positionInWindow().y
+                                drag.viewportHeight = it.size.height.toFloat()
+                            },
+                        contentPadding = PaddingValues(bottom = 88.dp)
+                    ) {
+                        stickyHeader(key = ROOT_DROP_KEY) {
+                            if (dragItem != null) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(
+                                            if (dropTarget == "") MaterialTheme.colorScheme.primaryContainer
+                                            else MaterialTheme.colorScheme.surfaceVariant
+                                        )
+                                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Move to All notes",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = if (dropTarget == "") MaterialTheme.colorScheme.onPrimaryContainer
+                                        else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                         }
-                    ) { item ->
-                        when (item) {
-                            is TreeItem.Folder -> FolderRow(
-                                folder = item,
-                                expanded = item.path !in collapsed,
-                                onToggle = { vm.toggleFolder(item.path) },
-                                onMenu = { folderMenu = item.path }
-                            )
-                            is TreeItem.Note -> NoteRow(
-                                note = item.note,
-                                now = now,
-                                depth = item.depth,
-                                onClick = { vm.openNote(item.note.path) },
-                                onMenu = { moveTarget = item.note }
-                            )
+                        items(
+                            items,
+                            key = {
+                                when (it) {
+                                    is TreeItem.Folder -> "d:${it.path}"
+                                    is TreeItem.Note -> "f:${it.note.path}"
+                                }
+                            }
+                        ) { item ->
+                            when (item) {
+                                is TreeItem.Folder -> FolderRow(
+                                    folder = item,
+                                    expanded = item.path !in collapsed,
+                                    dimmed = (dragItem as? TreeItem.Folder)?.path == item.path,
+                                    highlighted = dropTarget == item.path,
+                                    dragModifier = Modifier.treeDraggable(
+                                        dragKey = "d:${item.path}",
+                                        item = item,
+                                        label = "${item.name} (${item.noteCount})",
+                                        rowDrag = rowDrag,
+                                        onTap = { vm.toggleFolder(item.path) },
+                                        onMenu = { folderMenu = item.path }
+                                    ),
+                                    onToggle = { vm.toggleFolder(item.path) }
+                                )
+                                is TreeItem.Note -> {
+                                    val parent = item.note.path.substringBeforeLast('/', "")
+                                    NoteRow(
+                                        note = item.note,
+                                        now = now,
+                                        depth = item.depth,
+                                        dimmed = (dragItem as? TreeItem.Note)?.note?.path == item.note.path,
+                                        highlighted = dropTarget != null && dropTarget == parent,
+                                        dragModifier = Modifier.treeDraggable(
+                                            dragKey = "f:${item.note.path}",
+                                            item = item,
+                                            label = noteTitle(item.note.path, item.note.content),
+                                            rowDrag = rowDrag,
+                                            onTap = { vm.openNote(item.note.path) },
+                                            onMenu = { moveTarget = item.note }
+                                        ),
+                                        onClick = { vm.openNote(item.note.path) }
+                                    )
+                                }
+                            }
+                        }
+                        item {
+                            SyncFooter(sync.syncing, unsynced, sync.report?.errors ?: 0, sync.report?.failures.orEmpty())
                         }
                     }
-                    item {
-                        SyncFooter(sync.syncing, unsynced, sync.report?.errors ?: 0, sync.report?.failures.orEmpty())
+                    // Floating drag shadow. No pointer handlers, so touches pass
+                    // straight through to the list underneath.
+                    if (dragItem != null) {
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 24.dp)
+                                .offset {
+                                    IntOffset(
+                                        0,
+                                        (dragFingerY - with(density) { 24.dp.toPx() }).roundToInt()
+                                    )
+                                },
+                            tonalElevation = 6.dp,
+                            shape = MaterialTheme.shapes.medium
+                        ) {
+                            Text(
+                                text = dragLabel,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -374,7 +633,8 @@ private fun MoveFolderDialog(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun FolderOption(label: String, sublabel: String?, selected: Boolean, onClick: () -> Unit) {    Row(
+private fun FolderOption(label: String, sublabel: String?, selected: Boolean, onClick: () -> Unit) {
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .combinedClickable(onClick = onClick)
@@ -403,13 +663,24 @@ private fun FolderOption(label: String, sublabel: String?, selected: Boolean, on
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun FolderRow(folder: TreeItem.Folder, expanded: Boolean, onToggle: () -> Unit, onMenu: () -> Unit) {
+private fun FolderRow(
+    folder: TreeItem.Folder,
+    expanded: Boolean,
+    dimmed: Boolean,
+    highlighted: Boolean,
+    dragModifier: Modifier,
+    onToggle: () -> Unit
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .combinedClickable(onClick = onToggle, onLongClick = onMenu)
+            .alpha(if (dimmed) 0.35f else 1f)
+            .background(
+                if (highlighted) MaterialTheme.colorScheme.primaryContainer
+                else Color.Transparent
+            )
+            .then(dragModifier)
             .padding(start = (8 + folder.depth * 20).dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -442,14 +713,26 @@ private fun FolderRow(folder: TreeItem.Folder, expanded: Boolean, onToggle: () -
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun NoteRow(note: NoteEntity, now: Long, depth: Int, onClick: () -> Unit, onMenu: () -> Unit) {
+private fun NoteRow(
+    note: NoteEntity,
+    now: Long,
+    depth: Int,
+    dimmed: Boolean,
+    highlighted: Boolean,
+    dragModifier: Modifier,
+    onClick: () -> Unit
+) {
     val updatedAt = note.localModifiedAt ?: note.remoteUpdatedAt
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .combinedClickable(onClick = onClick, onLongClick = onMenu)
+            .alpha(if (dimmed) 0.35f else 1f)
+            .background(
+                if (highlighted) MaterialTheme.colorScheme.primaryContainer
+                else Color.Transparent
+            )
+            .then(dragModifier)
             .padding(start = (36 + depth * 20).dp, end = 16.dp, top = 10.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
