@@ -46,6 +46,14 @@ sealed interface Screen {
     data object Tags : Screen
 }
 
+// Back history for the editor: note→note (wikilinks), search→note and
+// tags→note all return where they came from instead of home.
+private sealed interface History {
+    data class Note(val path: String) : History
+    data class Search(val query: String, val origin: Screen) : History
+    data class Tags(val tag: String?) : History
+}
+
 data class SyncUiState(
     val syncing: Boolean = false,
     val lastSyncAt: Long? = null,
@@ -111,6 +119,42 @@ class MainViewModel(
     }
 
     val searchQuery = MutableStateFlow("")
+
+    // Where back-from-search lands. Set on every entry into Search.
+    private val _searchOrigin = MutableStateFlow<Screen>(Screen.Notes)
+
+    private val history = ArrayDeque<History>()
+
+    private fun pushHistory(entry: History) {
+        if (history.lastOrNull() != entry) history.addLast(entry)
+        while (history.size > 20) history.removeFirst()
+    }
+
+    // Remembers the current screen so leaving it for another note can come
+    // back. Called before every note switch, never on restore.
+    private fun pushHistoryForLeave() {
+        when (val s = _screen.value) {
+            is Screen.Editor -> {
+                val p = _editor.value?.path ?: return
+                pushHistory(History.Note(p))
+            }
+            Screen.Search -> pushHistory(History.Search(searchQuery.value, _searchOrigin.value))
+            Screen.Tags -> pushHistory(History.Tags(_selectedTag.value))
+            else -> Unit
+        }
+    }
+
+    // Saves in-flight editor text to Room (with title sync + auto-push).
+    // openNote used to drop text typed right before a wikilink tap.
+    private suspend fun flushEditor() {
+        val current = _editor.value ?: return
+        val stored = notes.get(current.path)
+        if (stored != null && !stored.isDeleted && stored.content != current.text) {
+            notes.saveLocally(current.path, current.text)
+            maybeSyncTitleToFilename(current.path, current.text)
+            scheduleAutoSync()
+        }
+    }
 
     data class SearchHit(val path: String, val title: String, val snippet: String?)
 
@@ -218,6 +262,12 @@ class MainViewModel(
 
     fun openNote(path: String) {
         viewModelScope.launch {
+            flushEditor()
+            if (_editor.value?.path == path) {
+                _screen.value = Screen.Editor(path)
+                return@launch
+            }
+            pushHistoryForLeave()
             val note = notes.get(path) ?: return@launch
             _editor.value = EditorState(note.path, note.content)
             editorEdits.value = null
@@ -241,6 +291,12 @@ class MainViewModel(
                     _sync.update { it.copy(error = "Note is no longer on the server") }
                     return@launch
                 }
+                flushEditor()
+                if (_editor.value?.path == pulled.path) {
+                    _screen.value = Screen.Editor(pulled.path)
+                    return@launch
+                }
+                pushHistoryForLeave()
                 _editor.value = EditorState(pulled.path, pulled.content)
                 editorEdits.value = null
                 titleSyncEdits.value = null
@@ -303,24 +359,44 @@ class MainViewModel(
     }
 
     fun closeEditor() {
-        val current = _editor.value
-        if (current != null) {
-            viewModelScope.launch {
-                val stored = notes.get(current.path)
-                if (stored != null && !stored.isDeleted && stored.content != current.text) {
-                    notes.saveLocally(current.path, current.text)
-                    maybeSyncTitleToFilename(current.path, current.text)
-                    scheduleAutoSync()
+        viewModelScope.launch {
+            flushEditor()
+            editorEdits.value = null
+            titleSyncEdits.value = null
+            when (val prev = history.removeLastOrNull()) {
+                is History.Note -> {
+                    val note = notes.get(prev.path)
+                    if (note != null && !note.isDeleted) {
+                        _editor.value = EditorState(note.path, note.content)
+                        _screen.value = Screen.Editor(note.path)
+                    } else {
+                        _editor.value = null
+                        _screen.value = Screen.Notes
+                    }
+                }
+                is History.Search -> {
+                    _editor.value = null
+                    searchQuery.value = prev.query
+                    _searchOrigin.value = prev.origin
+                    _screen.value = Screen.Search
+                }
+                is History.Tags -> {
+                    _editor.value = null
+                    _screen.value = Screen.Tags
+                    selectTag(prev.tag)
+                }
+                null -> {
+                    _editor.value = null
+                    _screen.value = Screen.Notes
                 }
             }
         }
-        editorEdits.value = null
-        titleSyncEdits.value = null
-        _editor.value = null
-        _screen.value = Screen.Notes
     }
 
-    fun openSearch() = _screen.update { Screen.Search }
+    fun openSearch() {
+        _searchOrigin.value = _screen.value
+        _screen.update { Screen.Search }
+    }
     fun openSettings() = _screen.update { Screen.Settings }
 
     // Tags are server-driven (vault-wide counts the phone can't compute
@@ -379,7 +455,14 @@ class MainViewModel(
 
     fun closeSearch() {
         searchQuery.value = ""
-        _screen.update { Screen.Notes }
+        // Back from search returns where it came from: a tag tap in preview
+        // goes back to that note, not home. Falls back to Notes when the
+        // editor is gone (e.g. note deleted meanwhile).
+        val origin = _searchOrigin.value
+        _searchOrigin.value = Screen.Notes
+        _screen.value =
+            if (origin is Screen.Editor && _editor.value?.path == origin.path) origin
+            else Screen.Notes
     }
 
     fun closeSettings() = _screen.update { Screen.Notes }
@@ -439,6 +522,7 @@ class MainViewModel(
 
     fun searchTag(tag: String) {
         searchQuery.value = "#$tag"
+        _searchOrigin.value = _screen.value
         _screen.update { Screen.Search }
     }
 
