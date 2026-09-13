@@ -22,8 +22,6 @@ reconciles with the server in the background while the app is open. See
 - Foreground-only sync: 5s auto-push after edits settle, 60s pull tick,
   sync on foreground and pull-to-refresh. Killing the app stops everything.
 
-Attachments are out of scope for v1.
-
 ## Getting started
 
 Needs the Scrinium backend running (it provides auth, manifest, search,
@@ -74,18 +72,3 @@ Credential Manager Google Sign-In, then `POST /api/auth/mobile`
 Keystore-backed AES-GCM key, sent as `Authorization: Bearer` per request.
 401 drops the token and re-runs sign-in.
 
-## Layout
-
-- `data/local/` — Room database, DAO, entity
-- `data/remote/` — Retrofit API, auth interceptor
-- `data/` — repositories, encrypted token store, session
-- `sync/` — manifest-first sync engine with conflict copies
-- `ui/screens/` — Notes, Editor, Search, Tags, Trash, Settings, Login
-- `ui/` — ViewModel (observes Room, owns navigation), theme, preview
-  renderer, tree model
-- `di/` — manual DI container
-
-## Workflow
-
-One branch per feature, squash-merge via pull request. Build the branch,
-install on a device, test against a local backend before merging.
