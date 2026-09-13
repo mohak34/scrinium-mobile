@@ -36,6 +36,27 @@ data class RenameRequest(val newPath: String)
 data class SearchResult(val path: String, val title: String, val snippet: String)
 
 @Serializable
+data class TagCount(val tag: String, val count: Int)
+
+@Serializable
+data class TaggedHit(val path: String, val title: String, val snippet: String)
+
+@Serializable
+data class TrashEntry(
+    val trashName: String,
+    val originalPath: String,
+    val deletedAt: Long = 0L,
+    val isDir: Boolean = false,
+    val size: Long? = null
+)
+
+@Serializable
+data class RestoreRequest(val trashName: String)
+
+@Serializable
+data class RestoreResponse(val ok: Boolean = true, val path: String = "")
+
+@Serializable
 data class PublicShare(
     val id: String,
     val notePath: String,
@@ -73,6 +94,24 @@ private interface ScriniumService {
 
     @GET("api/search")
     suspend fun search(@Query("q") q: String): List<SearchResult>
+
+    @GET("api/tags")
+    suspend fun tags(): List<TagCount>
+
+    @GET("api/tagged")
+    suspend fun tagged(@Query("tag") tag: String): List<TaggedHit>
+
+    @GET("api/trash")
+    suspend fun trash(): List<TrashEntry>
+
+    @POST("api/trash/restore")
+    suspend fun restoreTrash(@Body body: RestoreRequest): RestoreResponse
+
+    @DELETE("api/trash")
+    suspend fun purgeTrash(@Query("trashName") trashName: String): Response<ResponseBody>
+
+    @DELETE("api/trash")
+    suspend fun emptyTrash(@Query("all") all: Int): Response<ResponseBody>
 
     @GET("api/shares")
     suspend fun shares(@Query("path") path: String): List<PublicShare>
@@ -126,6 +165,25 @@ class ScriniumApi(
         if (!res.isSuccessful) throw ApiException(res.code())
     }
     suspend fun search(q: String): List<SearchResult> = service.search(q)
+
+    suspend fun fetchTags(): List<TagCount> = service.tags()
+
+    suspend fun fetchTagged(tag: String): List<TaggedHit> = service.tagged(tag)
+
+    suspend fun fetchTrash(): List<TrashEntry> = service.trash()
+
+    suspend fun restoreTrash(trashName: String): String =
+        service.restoreTrash(RestoreRequest(trashName)).path
+
+    suspend fun purgeTrash(trashName: String) {
+        val res = service.purgeTrash(trashName)
+        if (!res.isSuccessful) throw ApiException(res.code())
+    }
+
+    suspend fun emptyTrash() {
+        val res = service.emptyTrash(1)
+        if (!res.isSuccessful) throw ApiException(res.code())
+    }
 
     suspend fun fetchShares(path: String): List<PublicShare> = service.shares(path)
 
