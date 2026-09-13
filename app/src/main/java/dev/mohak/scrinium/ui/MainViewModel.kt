@@ -276,14 +276,16 @@ class MainViewModel(
         titleSyncEdits.value = current.path to text
     }
 
-    // Web parity: editing the H1 renames the file. Local-only tombstone +
-    // PUT like a manual rename. Skips quietly on collision — the file keeps
-    // its name instead of gaining a surprise suffix.
+    // Web parity: editing the title renames the file — frontmatter `title:`
+    // first, else the H1. Local-only tombstone + PUT like a manual rename.
+    // Skips quietly on collision — the file keeps its name instead of
+    // gaining a surprise suffix.
     private suspend fun maybeSyncTitleToFilename(path: String, text: String) {
-        val h1 = firstH1(text) ?: return
-        val safe = sanitizeTitleForFilename(h1) ?: return
         val dir = path.substringBeforeLast('/', "")
         val stem = path.substringAfterLast('/').removeSuffix(".md")
+        val title = effectiveTitle(text, stem)
+        if (title == stem) return
+        val safe = sanitizeTitleForFilename(title) ?: return
         if (safe == stem) return
         val target = if (dir.isBlank()) "$safe.md" else "$dir/$safe.md"
         if (notes.get(target) != null) return
