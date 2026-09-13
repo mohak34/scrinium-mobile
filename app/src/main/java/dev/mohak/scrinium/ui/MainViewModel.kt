@@ -138,7 +138,15 @@ class MainViewModel(
             if (q.isBlank()) return@combine emptyList()
             val localPaths = local.map { it.path }.toSet()
             buildList {
-                for (note in local) {
+                // Rank like the web client: exact/prefix title hits first,
+                // body-only mentions last — not Room's alphabetical order.
+                val ranked = local.sortedWith(
+                    compareBy(
+                        { searchRank(noteTitle(it.path, it.content), it.path, q) },
+                        { noteTitle(it.path, it.content).lowercase() }
+                    )
+                )
+                for (note in ranked) {
                     add(SearchHit(note.path, noteTitle(note.path, note.content), snippet(note.content, q)))
                 }
                 for (hit in server) {

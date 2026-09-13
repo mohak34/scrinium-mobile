@@ -23,6 +23,23 @@ fun noteTitle(path: String, content: String): String {
     return path.substringAfterLast('/').removeSuffix(".md")
 }
 
+// Relevance bucket mirroring the web client's titleScore (rank.ts):
+// title-prefix first, body-only mentions last. Lower wins.
+fun searchRank(title: String, path: String, query: String): Int {
+    val q = query.trim().lowercase()
+    if (q.isEmpty()) return 4
+    val t = title.lowercase()
+    if (t.startsWith(q)) return 0
+    val tokens = q.split(Regex("[^a-z0-9]+")).filter { it.isNotBlank() }
+    if (tokens.isEmpty()) return 4
+    val words = t.split(Regex("[^a-z0-9]+")).filter { it.isNotBlank() }
+    if (tokens.any { tok -> words.any { w -> w.startsWith(tok) } }) return 1
+    if (tokens.any { tok -> t.contains(tok) }) return 2
+    val p = path.lowercase()
+    if (tokens.any { tok -> p.contains(tok) }) return 3
+    return 4
+}
+
 // First query-matching line, trimmed for result rows. Null when the content
 // doesn't contain the query (e.g. path-only local matches).
 fun snippet(content: String, query: String, maxLen: Int = 140): String? {
