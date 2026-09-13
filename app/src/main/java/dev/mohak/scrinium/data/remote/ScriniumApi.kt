@@ -35,6 +35,12 @@ data class RenameRequest(val newPath: String)
 @Serializable
 data class SearchResult(val path: String, val title: String, val snippet: String)
 
+@Serializable
+data class TagCount(val tag: String, val count: Int)
+
+@Serializable
+data class TaggedHit(val path: String, val title: String, val snippet: String)
+
 private interface ScriniumService {
     @POST("api/auth/mobile")
     suspend fun mobileAuth(@Body body: MobileAuthRequest): MobileAuthResponse
@@ -62,6 +68,12 @@ private interface ScriniumService {
 
     @GET("api/search")
     suspend fun search(@Query("q") q: String): List<SearchResult>
+
+    @GET("api/tags")
+    suspend fun tags(): List<TagCount>
+
+    @GET("api/tagged")
+    suspend fun tagged(@Query("tag") tag: String): List<TaggedHit>
 }
 
 class ApiException(val status: Int) : Exception("API error $status")
@@ -106,6 +118,10 @@ class ScriniumApi(
         if (!res.isSuccessful) throw ApiException(res.code())
     }
     suspend fun search(q: String): List<SearchResult> = service.search(q)
+
+    suspend fun fetchTags(): List<TagCount> = service.tags()
+
+    suspend fun fetchTagged(tag: String): List<TaggedHit> = service.tagged(tag)
 
     companion object {
         fun encPath(path: String): String =
