@@ -119,6 +119,12 @@ fun SettingsScreen(vm: MainViewModel) {
             }
             Spacer(Modifier.height(24.dp))
 
+            SectionLabel("Vault")
+            OutlinedButton(onClick = { vm.openTrash() }) {
+                Text("Trash")
+            }
+            Spacer(Modifier.height(24.dp))
+
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Spacer(Modifier.height(16.dp))
 

@@ -70,21 +70,30 @@ fun SearchScreen(vm: MainViewModel) {
                     contentPadding = PaddingValues(bottom = 16.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    items(results, key = { it.path }) { note ->
+                    items(results, key = { it.path }) { hit ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { vm.openNote(note.path) }
+                                .clickable { vm.openSearchHit(hit) }
                                 .padding(horizontal = 16.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column {
                                 Text(
-                                    text = note.path.substringAfterLast('/').removeSuffix(".md"),
+                                    text = hit.title,
                                     style = MaterialTheme.typography.bodyLarge,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
-                                val dir = note.path.substringBeforeLast('/', "")
+                                hit.snippet?.let { snippet ->
+                                    Text(
+                                        text = snippet,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 2,
+                                        modifier = Modifier.padding(top = 2.dp)
+                                    )
+                                }
+                                val dir = hit.path.substringBeforeLast('/', "")
                                 if (dir.isNotBlank()) {
                                     Text(
                                         text = dir,

@@ -93,12 +93,51 @@ class NotesRepository(
 
     suspend fun networkSearch(q: String) = api.search(q)
 
+    suspend fun fetchTags() = api.fetchTags()
+
+    suspend fun fetchTagged(tag: String) = api.fetchTagged(tag)
+
+    suspend fun fetchTrash() = api.fetchTrash()
+
+    suspend fun restoreTrash(trashName: String) = api.restoreTrash(trashName)
+
+    suspend fun purgeTrash(trashName: String) = api.purgeTrash(trashName)
+
+    suspend fun emptyTrash() = api.emptyTrash()
+
+    suspend fun fetchShares(path: String) = api.fetchShares(path)
+
+    suspend fun createShare(path: String, password: String?) = api.createShare(path, password)
+
+    suspend fun deleteShare(id: String) = api.deleteShare(id)
+
+    /**
+     * Pulls a server-side note into Room with its manifest hash, so the next
+     * sync treats it as up to date instead of re-pulling or — worse —
+     * conflict-duplicating it. Returns null when the note is already gone
+     * server-side.
+     */
+    suspend fun pullNote(path: String): NoteEntity? {
+        val content = api.fetchNote(path)
+        val meta = api.fetchManifest().firstOrNull { it.path == path } ?: return null
+        val entity = NoteEntity(
+            path = path,
+            content = content,
+            remoteUpdatedAt = meta.updatedAt.toLong(),
+            localModifiedAt = null,
+            contentHash = meta.contentHash
+        )
+        noteDao.upsert(entity)
+        return entity
+    }
+
     /**
      * Local-only move. Same tombstone + PUT mechanism as [renameNote], so the
      * next sync deletes the old path and pushes the new one — the server
      * creates intermediate directories on PUT. Never touches the network.
-     * A colliding destination gets a "name N" suffix instead of failing:
-     * a drag never typed a name, so there is nothing to correct.
+     * A colliding destination gets a "name (N)" suffix instead of failing
+     * (same convention as the web client's uniquePath): a drag never typed
+     * a name, so there is nothing to correct.
      * Returns the new path, or null when there is nothing to do.
      */
     suspend fun moveNote(path: String, newParentRaw: String): String? {
@@ -198,7 +237,7 @@ class NotesRepository(
         return parts.joinToString("/")
     }
 
-    // First free "stem N.ext" for a colliding note destination.
+    // First free "stem (N).ext" for a colliding note destination.
     private suspend fun uniqueNotePath(dir: String, base: String): String {
         val dot = base.lastIndexOf('.')
         val stem = if (dot > 0) base.substring(0, dot) else base
@@ -206,13 +245,13 @@ class NotesRepository(
         val prefix = if (dir.isBlank()) "" else "$dir/"
         var i = 1
         while (true) {
-            val candidate = "$prefix$stem $i$ext"
+            val candidate = "$prefix$stem ($i)$ext"
             if (noteDao.get(candidate) == null) return candidate
             i++
         }
     }
 
-    // First free "base N" for a colliding folder destination. Only live
+    // First free "base (N)" for a colliding folder destination. Only live
     // notes count — tombstones are already on their way out.
     private suspend fun uniqueFolderPrefix(want: String): String {
         val live = noteDao.getAll().filter { !it.isDeleted }
@@ -220,7 +259,7 @@ class NotesRepository(
         if (!taken(want)) return want
         var i = 1
         while (true) {
-            val candidate = "$want $i"
+            val candidate = "$want ($i)"
             if (!taken(candidate)) return candidate
             i++
         }
@@ -230,7 +269,7 @@ class NotesRepository(
         var i = 0
         while (true) {
             i++
-            val base = if (i == 1) "Untitled.md" else "Untitled $i.md"
+            val base = if (i == 1) "Untitled.md" else "Untitled ($i).md"
             val full = if (dir.isBlank()) base else "$dir/$base"
             if (existing.none { it == full }) return full
         }

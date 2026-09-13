@@ -1,6 +1,7 @@
 package dev.mohak.scrinium.ui.screens
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -12,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -30,6 +32,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -46,6 +50,7 @@ fun EditorScreen(vm: MainViewModel) {
     var preview by remember { mutableStateOf(false) }
     var showRename by remember { mutableStateOf(false) }
     var showDelete by remember { mutableStateOf(false) }
+    var showShare by remember { mutableStateOf(false) }
 
     val fileName = state.path.substringAfterLast('/').removeSuffix(".md")
 
@@ -71,6 +76,12 @@ fun EditorScreen(vm: MainViewModel) {
                     IconButton(onClick = { showDelete = true }) {
                         Icon(Icons.Default.Delete, contentDescription = "Delete")
                     }
+                    IconButton(onClick = {
+                        vm.loadShares(state.path)
+                        showShare = true
+                    }) {
+                        Icon(Icons.Default.Share, contentDescription = "Share")
+                    }
                 }
             )
         }
@@ -82,7 +93,10 @@ fun EditorScreen(vm: MainViewModel) {
                     .fillMaxSize()
                     .padding(padding)
                     .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                onWikilinkClick = { vm.openWikilink(it) },
+                onToggleTaskLine = { vm.toggleTaskLine(it) },
+                onTagClick = { vm.searchTag(it) }
             )
         } else {
             BasicTextField(
@@ -153,6 +167,71 @@ fun EditorScreen(vm: MainViewModel) {
             },
             dismissButton = {
                 TextButton(onClick = { showDelete = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showShare) {
+        val shares by vm.shares.collectAsStateWithLifecycle()
+        val clipboard = LocalClipboardManager.current
+        var password by remember(state.path) { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showShare = false },
+            title = { Text("Share links") },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    if (shares.isEmpty()) {
+                        Text(
+                            text = "No links yet. Anyone with the link can read this note.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    for (share in shares) {
+                        val url = vm.shareUrl(share.id)
+                        Column(modifier = Modifier.padding(vertical = 6.dp)) {
+                            Text(
+                                text = url,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Row {
+                                if (share.hasPassword) {
+                                    Text(
+                                        text = "locked",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(end = 8.dp)
+                                    )
+                                }
+                                TextButton(onClick = {
+                                    clipboard.setText(AnnotatedString(url))
+                                }) { Text("Copy") }
+                                TextButton(onClick = { vm.deleteShareLink(share.id) }) {
+                                    Text("Remove")
+                                }
+                            }
+                        }
+                    }
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { password = it },
+                        singleLine = true,
+                        placeholder = { Text("Password (optional)") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp)
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.createShareLink(password)
+                    password = ""
+                }) { Text("New link") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showShare = false }) { Text("Done") }
             }
         )
     }
