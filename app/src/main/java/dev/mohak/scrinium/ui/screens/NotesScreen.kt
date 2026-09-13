@@ -234,14 +234,23 @@ fun NotesScreen(vm: MainViewModel) {
                     containerColor = MaterialTheme.colorScheme.background
                 ),
                 actions = {
-                    IconButton(onClick = { vm.openSearch() }) {
-                        Icon(Icons.Default.Search, contentDescription = "Search")
-                    }
-                    TextButton(onClick = { vm.openTags() }) {
-                        Text("#")
-                    }
-                    IconButton(onClick = { vm.openSettings() }) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(-12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = { vm.openSearch() }) {
+                            Icon(Icons.Default.Search, contentDescription = "Search")
+                        }
+                        IconButton(onClick = { vm.openTags() }) {
+                            Text(
+                                text = "#",
+                                style = MaterialTheme.typography.titleLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        IconButton(onClick = { vm.openSettings() }) {
+                            Icon(Icons.Default.Settings, contentDescription = "Settings")
+                        }
                     }
                 }
             )

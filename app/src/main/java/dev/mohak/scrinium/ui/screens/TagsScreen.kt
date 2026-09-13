@@ -1,6 +1,7 @@
 package dev.mohak.scrinium.ui.screens
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -62,12 +63,13 @@ fun TagsScreen(vm: MainViewModel) {
                 modifier = Modifier.fillMaxSize().padding(padding)
             ) {
                 if (!loading && tags.isEmpty()) {
-                    Text(
-                        text = "No tags yet",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(16.dp)
-                    )
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            text = "No tags yet",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 } else {
                     LazyColumn(
                         contentPadding = PaddingValues(bottom = 16.dp),
@@ -84,7 +86,7 @@ fun TagsScreen(vm: MainViewModel) {
                                 Text(
                                     text = "#${tag.tag}",
                                     style = MaterialTheme.typography.bodyLarge,
-                                    color = MaterialTheme.colorScheme.primary,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                     modifier = Modifier.weight(1f)
                                 )
                                 Text(
@@ -100,38 +102,48 @@ fun TagsScreen(vm: MainViewModel) {
         } else {
             Column(modifier = Modifier.fillMaxSize().padding(padding)) {
                 if (hitsLoading) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                LazyColumn(
-                    contentPadding = PaddingValues(bottom = 16.dp),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    items(hits, key = { it.path }) { hit ->
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { vm.openTaggedHit(hit) }
-                                .padding(horizontal = 16.dp, vertical = 10.dp)
-                        ) {
-                            Text(
-                                text = hit.title,
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            if (hit.snippet.isNotBlank()) {
+                if (!hitsLoading && hits.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            text = "No notes with #$selected",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        contentPadding = PaddingValues(bottom = 16.dp),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        items(hits, key = { it.path }) { hit ->
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { vm.openTaggedHit(hit) }
+                                    .padding(horizontal = 16.dp, vertical = 10.dp)
+                            ) {
                                 Text(
-                                    text = hit.snippet,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 2,
-                                    modifier = Modifier.padding(top = 2.dp)
+                                    text = hit.title,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurface
                                 )
-                            }
-                            val dir = hit.path.substringBeforeLast('/', "")
-                            if (dir.isNotBlank()) {
-                                Text(
-                                    text = dir,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                if (hit.snippet.isNotBlank()) {
+                                    Text(
+                                        text = hit.snippet,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 2,
+                                        modifier = Modifier.padding(top = 2.dp)
+                                    )
+                                }
+                                val dir = hit.path.substringBeforeLast('/', "")
+                                if (dir.isNotBlank()) {
+                                    Text(
+                                        text = dir,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                         }
                     }
