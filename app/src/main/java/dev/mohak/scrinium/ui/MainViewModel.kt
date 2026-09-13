@@ -10,6 +10,8 @@ import dev.mohak.scrinium.data.NotesRepository
 import dev.mohak.scrinium.data.SessionRepository
 import dev.mohak.scrinium.data.local.NoteEntity
 import dev.mohak.scrinium.data.remote.SearchResult
+import dev.mohak.scrinium.data.remote.TagCount
+import dev.mohak.scrinium.data.remote.TaggedHit
 import dev.mohak.scrinium.di.AppContainer
 import dev.mohak.scrinium.sync.SyncEngine
 import dev.mohak.scrinium.sync.SyncReport
@@ -41,6 +43,7 @@ sealed interface Screen {
     data class Editor(val path: String) : Screen
     data object Search : Screen
     data object Settings : Screen
+    data object Tags : Screen
 }
 
 data class SyncUiState(
@@ -139,7 +142,15 @@ class MainViewModel(
             if (q.isBlank()) return@combine emptyList()
             val localPaths = local.map { it.path }.toSet()
             buildList {
-                for (note in local) {
+                // Rank like the web client: exact/prefix title hits first,
+                // body-only mentions last — not Room's alphabetical order.
+                val ranked = local.sortedWith(
+                    compareBy(
+                        { searchRank(noteTitle(it.path, it.content), it.path, q) },
+                        { noteTitle(it.path, it.content).lowercase() }
+                    )
+                )
+                for (note in ranked) {
                     add(SearchHit(note.path, noteTitle(note.path, note.content), snippet(note.content, q)))
                 }
                 for (hit in server) {
@@ -309,6 +320,60 @@ class MainViewModel(
 
     fun openSearch() = _screen.update { Screen.Search }
     fun openSettings() = _screen.update { Screen.Settings }
+
+    // Tags are server-driven (vault-wide counts the phone can't compute
+    // cheaply). Loaded on open, quiet offline failure leaves stale list.
+    private val _tags = MutableStateFlow<List<TagCount>>(emptyList())
+    val tags: StateFlow<List<TagCount>> = _tags.asStateFlow()
+    private val _tagsLoading = MutableStateFlow(false)
+    val tagsLoading: StateFlow<Boolean> = _tagsLoading.asStateFlow()
+    private val _selectedTag = MutableStateFlow<String?>(null)
+    val selectedTag: StateFlow<String?> = _selectedTag.asStateFlow()
+    private val _taggedHits = MutableStateFlow<List<TaggedHit>>(emptyList())
+    val taggedHits: StateFlow<List<TaggedHit>> = _taggedHits.asStateFlow()
+    private val _taggedLoading = MutableStateFlow(false)
+    val taggedLoading: StateFlow<Boolean> = _taggedLoading.asStateFlow()
+
+    fun openTags() {
+        _screen.update { Screen.Tags }
+        refreshTags()
+    }
+
+    fun closeTags() {
+        _selectedTag.value = null
+        _screen.update { Screen.Notes }
+    }
+
+    fun refreshTags() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _tagsLoading.value = true
+            try {
+                _tags.value = notes.fetchTags()
+            } catch (_: Exception) {
+            } finally {
+                _tagsLoading.value = false
+            }
+        }
+    }
+
+    fun selectTag(tag: String?) {
+        _selectedTag.value = tag
+        if (tag == null) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _taggedLoading.value = true
+            try {
+                _taggedHits.value = notes.fetchTagged(tag)
+            } catch (e: Exception) {
+                _sync.update { it.copy(error = "Couldn't load tag: ${e.message}") }
+            } finally {
+                _taggedLoading.value = false
+            }
+        }
+    }
+
+    fun openTaggedHit(hit: TaggedHit) {
+        openSearchHit(SearchHit(hit.path, hit.title, hit.snippet))
+    }
 
     fun closeSearch() {
         searchQuery.value = ""
