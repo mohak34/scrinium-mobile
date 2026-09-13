@@ -36,6 +36,12 @@ data class RenameRequest(val newPath: String)
 data class SearchResult(val path: String, val title: String, val snippet: String)
 
 @Serializable
+data class TagCount(val tag: String, val count: Int)
+
+@Serializable
+data class TaggedHit(val path: String, val title: String, val snippet: String)
+
+@Serializable
 data class TrashEntry(
     val trashName: String,
     val originalPath: String,
@@ -77,6 +83,12 @@ private interface ScriniumService {
 
     @GET("api/search")
     suspend fun search(@Query("q") q: String): List<SearchResult>
+
+    @GET("api/tags")
+    suspend fun tags(): List<TagCount>
+
+    @GET("api/tagged")
+    suspend fun tagged(@Query("tag") tag: String): List<TaggedHit>
 
     @GET("api/trash")
     suspend fun trash(): List<TrashEntry>
@@ -133,6 +145,10 @@ class ScriniumApi(
         if (!res.isSuccessful) throw ApiException(res.code())
     }
     suspend fun search(q: String): List<SearchResult> = service.search(q)
+
+    suspend fun fetchTags(): List<TagCount> = service.tags()
+
+    suspend fun fetchTagged(tag: String): List<TaggedHit> = service.tagged(tag)
 
     suspend fun fetchTrash(): List<TrashEntry> = service.trash()
 

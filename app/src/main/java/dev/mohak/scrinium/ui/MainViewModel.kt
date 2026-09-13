@@ -10,6 +10,8 @@ import dev.mohak.scrinium.data.NotesRepository
 import dev.mohak.scrinium.data.SessionRepository
 import dev.mohak.scrinium.data.local.NoteEntity
 import dev.mohak.scrinium.data.remote.SearchResult
+import dev.mohak.scrinium.data.remote.TagCount
+import dev.mohak.scrinium.data.remote.TaggedHit
 import dev.mohak.scrinium.data.remote.TrashEntry
 import dev.mohak.scrinium.di.AppContainer
 import dev.mohak.scrinium.sync.SyncEngine
@@ -42,7 +44,16 @@ sealed interface Screen {
     data class Editor(val path: String) : Screen
     data object Search : Screen
     data object Settings : Screen
+    data object Tags : Screen
     data object Trash : Screen
+}
+
+// Back history for the editor: note→note (wikilinks), search→note and
+// tags→note all return where they came from instead of home.
+private sealed interface History {
+    data class Note(val path: String) : History
+    data class Search(val query: String, val origin: Screen) : History
+    data class Tags(val tag: String?) : History
 }
 
 data class SyncUiState(
@@ -90,6 +101,10 @@ class MainViewModel(
 
     private val editorEdits = MutableStateFlow<Pair<String, String>?>(null)
 
+    // H1 -> filename runs on a longer debounce than the save itself, so an
+    // in-progress heading doesn't rename the file on every keystroke.
+    private val titleSyncEdits = MutableStateFlow<Pair<String, String>?>(null)
+
     private var signInAction: (suspend () -> Boolean)? = null
 
     // Push side of auto-sync: one quiet sync shortly after the last local
@@ -106,6 +121,42 @@ class MainViewModel(
     }
 
     val searchQuery = MutableStateFlow("")
+
+    // Where back-from-search lands. Set on every entry into Search.
+    private val _searchOrigin = MutableStateFlow<Screen>(Screen.Notes)
+
+    private val history = ArrayDeque<History>()
+
+    private fun pushHistory(entry: History) {
+        if (history.lastOrNull() != entry) history.addLast(entry)
+        while (history.size > 20) history.removeFirst()
+    }
+
+    // Remembers the current screen so leaving it for another note can come
+    // back. Called before every note switch, never on restore.
+    private fun pushHistoryForLeave() {
+        when (val s = _screen.value) {
+            is Screen.Editor -> {
+                val p = _editor.value?.path ?: return
+                pushHistory(History.Note(p))
+            }
+            Screen.Search -> pushHistory(History.Search(searchQuery.value, _searchOrigin.value))
+            Screen.Tags -> pushHistory(History.Tags(_selectedTag.value))
+            else -> Unit
+        }
+    }
+
+    // Saves in-flight editor text to Room (with title sync + auto-push).
+    // openNote used to drop text typed right before a wikilink tap.
+    private suspend fun flushEditor() {
+        val current = _editor.value ?: return
+        val stored = notes.get(current.path)
+        if (stored != null && !stored.isDeleted && stored.content != current.text) {
+            notes.saveLocally(current.path, current.text)
+            maybeSyncTitleToFilename(current.path, current.text)
+            scheduleAutoSync()
+        }
+    }
 
     data class SearchHit(val path: String, val title: String, val snippet: String?)
 
@@ -137,7 +188,15 @@ class MainViewModel(
             if (q.isBlank()) return@combine emptyList()
             val localPaths = local.map { it.path }.toSet()
             buildList {
-                for (note in local) {
+                // Rank like the web client: exact/prefix title hits first,
+                // body-only mentions last — not Room's alphabetical order.
+                val ranked = local.sortedWith(
+                    compareBy(
+                        { searchRank(noteTitle(it.path, it.content), it.path, q) },
+                        { noteTitle(it.path, it.content).lowercase() }
+                    )
+                )
+                for (note in ranked) {
                     add(SearchHit(note.path, noteTitle(note.path, note.content), snippet(note.content, q)))
                 }
                 for (hit in server) {
@@ -158,6 +217,15 @@ class MainViewModel(
                 .collect { (path, text) ->
                     notes.saveLocally(path, text)
                     scheduleAutoSync()
+                }
+        }
+        viewModelScope.launch {
+            titleSyncEdits
+                .filterNotNull()
+                .debounce(1500)
+                .distinctUntilChanged()
+                .collect { (path, text) ->
+                    maybeSyncTitleToFilename(path, text)
                 }
         }
         viewModelScope.launch {
@@ -196,9 +264,16 @@ class MainViewModel(
 
     fun openNote(path: String) {
         viewModelScope.launch {
+            flushEditor()
+            if (_editor.value?.path == path) {
+                _screen.value = Screen.Editor(path)
+                return@launch
+            }
+            pushHistoryForLeave()
             val note = notes.get(path) ?: return@launch
             _editor.value = EditorState(note.path, note.content)
             editorEdits.value = null
+            titleSyncEdits.value = null
             _screen.value = Screen.Editor(note.path)
         }
     }
@@ -218,8 +293,15 @@ class MainViewModel(
                     _sync.update { it.copy(error = "Note is no longer on the server") }
                     return@launch
                 }
+                flushEditor()
+                if (_editor.value?.path == pulled.path) {
+                    _screen.value = Screen.Editor(pulled.path)
+                    return@launch
+                }
+                pushHistoryForLeave()
                 _editor.value = EditorState(pulled.path, pulled.content)
                 editorEdits.value = null
+                titleSyncEdits.value = null
                 _screen.value = Screen.Editor(pulled.path)
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Couldn't open note: ${e.message}") }
@@ -236,6 +318,7 @@ class MainViewModel(
                 val path = notes.createNote(existing, folder)
                 _editor.value = EditorState(path, "# ${path.substringAfterLast('/').removeSuffix(".md")}\n\n")
                 editorEdits.value = null
+                titleSyncEdits.value = null
                 _screen.value = Screen.Editor(path)
                 scheduleAutoSync()
             } catch (e: Exception) {
@@ -248,26 +331,110 @@ class MainViewModel(
         val current = _editor.value ?: return
         _editor.value = current.copy(text = text)
         editorEdits.value = current.path to text
+        titleSyncEdits.value = current.path to text
+    }
+
+    // Web parity: editing the title renames the file — frontmatter `title:`
+    // first, else the H1. Local-only tombstone + PUT like a manual rename.
+    // Skips quietly on collision — the file keeps its name instead of
+    // gaining a surprise suffix.
+    private suspend fun maybeSyncTitleToFilename(path: String, text: String) {
+        val dir = path.substringBeforeLast('/', "")
+        val stem = path.substringAfterLast('/').removeSuffix(".md")
+        val title = effectiveTitle(text, stem)
+        if (title == stem) return
+        val safe = sanitizeTitleForFilename(title) ?: return
+        if (safe == stem) return
+        val target = if (dir.isBlank()) "$safe.md" else "$dir/$safe.md"
+        if (notes.get(target) != null) return
+        try {
+            val newPath = notes.renameNote(path, safe) ?: return
+            if (_editor.value?.path == path) {
+                _editor.value = _editor.value?.copy(path = newPath)
+                val updatedText = _editor.value?.text ?: text
+                editorEdits.value = newPath to updatedText
+                _screen.value = Screen.Editor(newPath)
+            }
+            scheduleAutoSync()
+        } catch (_: Exception) {
+        }
     }
 
     fun closeEditor() {
-        val current = _editor.value
-        if (current != null) {
-            viewModelScope.launch {
-                val stored = notes.get(current.path)
-                if (stored != null && !stored.isDeleted && stored.content != current.text) {
-                    notes.saveLocally(current.path, current.text)
-                    scheduleAutoSync()
+        viewModelScope.launch {
+            flushEditor()
+            editorEdits.value = null
+            titleSyncEdits.value = null
+            when (val prev = history.removeLastOrNull()) {
+                is History.Note -> {
+                    val note = notes.get(prev.path)
+                    if (note != null && !note.isDeleted) {
+                        _editor.value = EditorState(note.path, note.content)
+                        _screen.value = Screen.Editor(note.path)
+                    } else {
+                        _editor.value = null
+                        _screen.value = Screen.Notes
+                    }
+                }
+                is History.Search -> {
+                    _editor.value = null
+                    searchQuery.value = prev.query
+                    _searchOrigin.value = prev.origin
+                    _screen.value = Screen.Search
+                }
+                is History.Tags -> {
+                    _editor.value = null
+                    _screen.value = Screen.Tags
+                    selectTag(prev.tag)
+                }
+                null -> {
+                    _editor.value = null
+                    _screen.value = Screen.Notes
                 }
             }
         }
-        editorEdits.value = null
-        _editor.value = null
-        _screen.value = Screen.Notes
     }
 
-    fun openSearch() = _screen.update { Screen.Search }
+    fun openSearch() {
+        _searchOrigin.value = _screen.value
+        _screen.update { Screen.Search }
+    }
     fun openSettings() = _screen.update { Screen.Settings }
+
+    // Tags are server-driven (vault-wide counts the phone can't compute
+    // cheaply). Loaded on open, quiet offline failure leaves stale list.
+    private val _tags = MutableStateFlow<List<TagCount>>(emptyList())
+    val tags: StateFlow<List<TagCount>> = _tags.asStateFlow()
+    private val _tagsLoading = MutableStateFlow(false)
+    val tagsLoading: StateFlow<Boolean> = _tagsLoading.asStateFlow()
+    private val _selectedTag = MutableStateFlow<String?>(null)
+    val selectedTag: StateFlow<String?> = _selectedTag.asStateFlow()
+    private val _taggedHits = MutableStateFlow<List<TaggedHit>>(emptyList())
+    val taggedHits: StateFlow<List<TaggedHit>> = _taggedHits.asStateFlow()
+    private val _taggedLoading = MutableStateFlow(false)
+    val taggedLoading: StateFlow<Boolean> = _taggedLoading.asStateFlow()
+
+    fun openTags() {
+        _screen.update { Screen.Tags }
+        refreshTags()
+    }
+
+    fun closeTags() {
+        _selectedTag.value = null
+        _screen.update { Screen.Notes }
+    }
+
+    fun refreshTags() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _tagsLoading.value = true
+            try {
+                _tags.value = notes.fetchTags()
+            } catch (_: Exception) {
+            } finally {
+                _tagsLoading.value = false
+            }
+        }
+    }
 
     // Trash is server-side (deletes move there on sync). Read-only list +
     // restore/purge calls, then a quiet sync to converge Room.
@@ -292,6 +459,21 @@ class MainViewModel(
                 _sync.update { it.copy(error = "Couldn't load trash: ${e.message}") }
             } finally {
                 _trashLoading.value = false
+            }
+        }
+    }
+
+    fun selectTag(tag: String?) {
+        _selectedTag.value = tag
+        if (tag == null) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _taggedLoading.value = true
+            try {
+                _taggedHits.value = notes.fetchTagged(tag)
+            } catch (e: Exception) {
+                _sync.update { it.copy(error = "Couldn't load tag: ${e.message}") }
+            } finally {
+                _taggedLoading.value = false
             }
         }
     }
@@ -330,15 +512,81 @@ class MainViewModel(
         }
     }
 
+    fun openTaggedHit(hit: TaggedHit) {
+        openSearchHit(SearchHit(hit.path, hit.title, hit.snippet))
+    }
+
     fun closeSearch() {
         searchQuery.value = ""
-        _screen.update { Screen.Notes }
+        // Back from search returns where it came from: a tag tap in preview
+        // goes back to that note, not home. Falls back to Notes when the
+        // editor is gone (e.g. note deleted meanwhile).
+        val origin = _searchOrigin.value
+        _searchOrigin.value = Screen.Notes
+        _screen.value =
+            if (origin is Screen.Editor && _editor.value?.path == origin.path) origin
+            else Screen.Notes
     }
 
     fun closeSettings() = _screen.update { Screen.Notes }
 
     fun setSearchQuery(q: String) {
         searchQuery.value = q
+    }
+
+    // Preview interactions (no-ops for plain text, wired in EditorScreen).
+    fun openWikilink(targetRaw: String) {
+        val target = targetRaw.substringBefore('#').trim()
+        if (target.isEmpty()) return
+        viewModelScope.launch {
+            val all = notes.observeAll().first().filter { !it.isDeleted }
+            val current = _editor.value
+            val dir = current?.path?.substringBeforeLast('/', "") ?: ""
+            val candidates = buildList {
+                if (dir.isNotBlank()) add("$dir/$target")
+                if (dir.isNotBlank()) add("$dir/$target.md")
+                add(target)
+                add(if (target.endsWith(".md", ignoreCase = true)) target else "$target.md")
+            }
+            val direct = candidates.firstOrNull { c -> all.any { it.path == c } }
+            if (direct != null) {
+                openNote(direct)
+                return@launch
+            }
+            val stem = target.substringAfterLast('/').removeSuffix(".md")
+            val matches = all.filter {
+                it.path.substringAfterLast('/').removeSuffix(".md").equals(stem, ignoreCase = true)
+            }
+            if (matches.size == 1) {
+                openNote(matches[0].path)
+            } else {
+                _sync.update {
+                    it.copy(error = if (matches.isEmpty()) "Note not found: $target" else "Multiple notes match: $target")
+                }
+            }
+        }
+    }
+
+    fun toggleTaskLine(lineIdx: Int) {
+        val current = _editor.value ?: return
+        val lines = current.text.lines()
+        if (lineIdx !in lines.indices) return
+        val line = lines[lineIdx]
+        val toggled = when {
+            "- [ ]" in line -> line.replaceFirst("- [ ]", "- [x]")
+            "- [x]" in line -> line.replaceFirst("- [x]", "- [ ]")
+            "- [X]" in line -> line.replaceFirst("- [X]", "- [ ]")
+            else -> return
+        }
+        val out = lines.toMutableList()
+        out[lineIdx] = toggled
+        updateEditorText(out.joinToString("\n"))
+    }
+
+    fun searchTag(tag: String) {
+        searchQuery.value = "#$tag"
+        _searchOrigin.value = _screen.value
+        _screen.update { Screen.Search }
     }
 
     fun deleteCurrentNote() {
@@ -356,8 +604,20 @@ class MainViewModel(
             val current = _editor.value ?: return@launch
             try {
                 val newPath = notes.renameNote(current.path, newName) ?: return@launch
-                _editor.value = current.copy(path = newPath)
-                editorEdits.value = newPath to current.text
+                // Filename -> title: keep the H1/frontmatter in step with the
+                // new name, same as the web client. Never injects when the
+                // note has no title source.
+                var text = current.text
+                val stem = newPath.substringAfterLast('/').removeSuffix(".md")
+                if (effectiveTitle(text, "") != stem) {
+                    setEffectiveTitle(text, stem)?.let { updated ->
+                        text = updated
+                        notes.saveLocally(newPath, updated)
+                    }
+                }
+                _editor.value = EditorState(newPath, text)
+                editorEdits.value = null
+                titleSyncEdits.value = null
                 _screen.value = Screen.Editor(newPath)
                 scheduleAutoSync()
             } catch (e: Exception) {
