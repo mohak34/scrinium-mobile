@@ -1,6 +1,5 @@
 package dev.mohak.scrinium.ui.screens
 
-import android.content.Intent
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -34,7 +33,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
@@ -55,7 +53,6 @@ fun EditorScreen(vm: MainViewModel) {
     var showShare by remember { mutableStateOf(false) }
 
     val fileName = state.path.substringAfterLast('/').removeSuffix(".md")
-    val context = LocalContext.current
 
     Scaffold(
         topBar = {
@@ -79,21 +76,11 @@ fun EditorScreen(vm: MainViewModel) {
                     IconButton(onClick = { showDelete = true }) {
                         Icon(Icons.Default.Delete, contentDescription = "Delete")
                     }
-                    TextButton(onClick = {
+                    IconButton(onClick = {
                         vm.loadShares(state.path)
                         showShare = true
                     }) {
-                        Text("Share")
-                    }
-                    IconButton(onClick = {
-                        val send = Intent(Intent.ACTION_SEND).apply {
-                            type = "text/plain"
-                            putExtra(Intent.EXTRA_SUBJECT, "$fileName.md")
-                            putExtra(Intent.EXTRA_TEXT, state.text)
-                        }
-                        context.startActivity(Intent.createChooser(send, "Share note"))
-                    }) {
-                        Icon(Icons.Default.Share, contentDescription = "Export")
+                        Icon(Icons.Default.Share, contentDescription = "Share")
                     }
                 }
             )
