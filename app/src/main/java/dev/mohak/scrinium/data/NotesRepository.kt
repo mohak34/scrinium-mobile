@@ -63,11 +63,12 @@ class NotesRepository(
      * Local-only rename. The old path is tombstoned ([isDeleted]) so the next
      * sync pushes DELETE, and the new path carries [localModifiedAt] so the
      * same sync pushes PUT. Never touches the network — safe offline.
-     * Returns the new path, or null when there is nothing to do.
-     * Throws [IllegalArgumentException] when the target path already exists.
+     * Returns the new path, or null when there is nothing to do (including a
+     * tombstoned source). Throws [IllegalArgumentException] when the target
+     * path already exists.
      */
     suspend fun renameNote(path: String, newName: String): String? {
-        val existing = noteDao.get(path) ?: return null
+        val existing = noteDao.get(path)?.takeIf { !it.isDeleted } ?: return null
         val safe = newName.trim().replace("/", "")
         if (safe.isBlank()) return null
         val base = if (safe.endsWith(".md", ignoreCase = true)) safe else "$safe.md"
@@ -146,7 +147,7 @@ class NotesRepository(
      * Returns the new path, or null when there is nothing to do.
      */
     suspend fun moveNote(path: String, newParentRaw: String): String? {
-        val existing = noteDao.get(path) ?: return null
+        val existing = noteDao.get(path)?.takeIf { !it.isDeleted } ?: return null
         val newParent = normalizeFolder(newParentRaw)
         val base = path.substringAfterLast('/')
         var newPath = if (newParent.isBlank()) base else "$newParent/$base"

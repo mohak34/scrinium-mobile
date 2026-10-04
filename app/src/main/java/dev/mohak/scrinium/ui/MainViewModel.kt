@@ -251,13 +251,21 @@ class MainViewModel(
         viewModelScope.launch {
             notes.observeUnsyncedCount().collect { _unsyncedCount.value = it }
         }
+        // Both debounced writers re-resolve their path and prefer the open
+        // editor's latest text: a rename or move can land while an edit is
+        // still pending, and writing to the old path would revive it.
         viewModelScope.launch {
             editorEdits
                 .filterNotNull()
                 .debounce(500)
                 .distinctUntilChanged()
                 .collect { (path, text) ->
-                    notes.saveLocally(path, text)
+                    val target = currentPath(path)
+                    val stored = notes.get(target)
+                    if (stored?.isDeleted == true) return@collect
+                    val latest = _editor.value?.takeIf { it.path == target }?.text ?: text
+                    if (stored?.content == latest) return@collect
+                    notes.saveLocally(target, latest)
                     scheduleAutoSync()
                 }
         }
@@ -267,7 +275,8 @@ class MainViewModel(
                 .debounce(1500)
                 .distinctUntilChanged()
                 .collect { (path, text) ->
-                    maybeSyncTitleToFilename(path, text)
+                    val target = currentPath(path)
+                    maybeSyncTitleToFilename(target, _editor.value?.takeIf { it.path == target }?.text ?: text)
                 }
         }
         viewModelScope.launch {
@@ -391,13 +400,7 @@ class MainViewModel(
         if (notes.get(target) != null) return
         try {
             val newPath = notes.renameNote(path, safe) ?: return
-            remapPaths(path, newPath)
-            if (_editor.value?.path == path) {
-                _editor.value = _editor.value?.copy(path = newPath)
-                val updatedText = _editor.value?.text ?: text
-                editorEdits.value = newPath to updatedText
-                _screen.value = Screen.Editor(newPath)
-            }
+            followMove(path, newPath)
             scheduleAutoSync()
         } catch (_: Exception) {
         }
@@ -410,7 +413,7 @@ class MainViewModel(
             titleSyncEdits.value = null
             when (val prev = history.removeLastOrNull()) {
                 is History.Note -> {
-                    val note = notes.get(prev.path)
+                    val note = notes.get(currentPath(prev.path))
                     if (note != null && !note.isDeleted) {
                         _editor.value = EditorState(note.path, note.content)
                         _screen.value = Screen.Editor(note.path)
@@ -810,9 +813,10 @@ class MainViewModel(
     // Deleting the open note also closes it.
     fun deleteNote(path: String) {
         viewModelScope.launch {
-            notes.deleteLocally(path)
+            val target = currentPath(path)
+            notes.deleteLocally(target)
             scheduleAutoSync()
-            if (_editor.value?.path == path) {
+            if (_editor.value?.path == target) {
                 _editor.value = null
                 _screen.value = Screen.Notes
             }
@@ -828,24 +832,19 @@ class MainViewModel(
     // into a note that has none.
     fun renameNote(path: String, newName: String) {
         viewModelScope.launch {
-            val open = _editor.value?.takeIf { it.path == path }
-            if (open != null) flushEditor()
+            flushEditor()
             try {
-                val newPath = notes.renameNote(path, newName) ?: return@launch
-                remapPaths(path, newPath)
-                var text = open?.text ?: notes.get(newPath)?.content ?: return@launch
+                val source = currentPath(path)
+                val newPath = notes.renameNote(source, newName) ?: return@launch
+                followMove(source, newPath)
+                val open = _editor.value?.takeIf { it.path == newPath }
+                val text = open?.text ?: notes.get(newPath)?.content ?: return@launch
                 val stem = newPath.substringAfterLast('/').removeSuffix(".md")
                 if (effectiveTitle(text, "") != stem) {
                     setEffectiveTitle(text, stem)?.let { updated ->
-                        text = updated
                         notes.saveLocally(newPath, updated)
+                        if (open != null) _editor.value = open.copy(text = updated)
                     }
-                }
-                if (open != null) {
-                    _editor.value = EditorState(newPath, text)
-                    editorEdits.value = null
-                    titleSyncEdits.value = null
-                    _screen.value = Screen.Editor(newPath)
                 }
                 scheduleAutoSync()
             } catch (e: Exception) {
@@ -856,9 +855,11 @@ class MainViewModel(
 
     fun moveNote(path: String, newParent: String) {
         viewModelScope.launch {
+            flushEditor()
             try {
-                val newPath = notes.moveNote(path, newParent) ?: return@launch
-                remapPaths(path, newPath)
+                val source = currentPath(path)
+                val newPath = notes.moveNote(source, newParent) ?: return@launch
+                followMove(source, newPath)
                 scheduleAutoSync()
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Move failed: ${e.message}") }
@@ -869,8 +870,9 @@ class MainViewModel(
     fun renameFolder(folder: String, newName: String) {
         viewModelScope.launch {
             try {
+                flushEditor()
                 val newPrefix = notes.renameFolder(folder, newName) ?: return@launch
-                remapPaths(folder, newPrefix)
+                followMove(folder, newPrefix)
                 scheduleAutoSync()
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Rename failed: ${e.message}") }
@@ -881,13 +883,41 @@ class MainViewModel(
     fun moveFolder(folder: String, newParent: String) {
         viewModelScope.launch {
             try {
+                flushEditor()
                 val newPrefix = notes.moveFolder(folder, newParent) ?: return@launch
-                remapPaths(folder, newPrefix)
+                followMove(folder, newPrefix)
                 scheduleAutoSync()
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Move failed: ${e.message}") }
             }
         }
+    }
+
+    // Where the open note went on each rename or move this session. Dialogs,
+    // history and pending saves can hold a path an automatic title rename
+    // has since tombstoned; [currentPath] follows the chain to the live note.
+    private val movedTo = mutableMapOf<String, String>()
+
+    private suspend fun currentPath(path: String): String {
+        var p = path
+        repeat(32) {
+            val next = movedTo[p] ?: return p
+            if (notes.get(p)?.isDeleted != true) return p
+            p = next
+        }
+        return p
+    }
+
+    // Points pins, collapsed folders and the open editor at the new path
+    // after a note or folder prefix rewrite.
+    private fun followMove(oldPrefix: String, newPrefix: String) {
+        remapPaths(oldPrefix, newPrefix)
+        val open = _editor.value ?: return
+        if (open.path != oldPrefix && !open.path.startsWith("$oldPrefix/")) return
+        val moved = newPrefix + open.path.removePrefix(oldPrefix)
+        movedTo[open.path] = moved
+        _editor.value = open.copy(path = moved)
+        if (_screen.value == Screen.Editor(open.path)) _screen.value = Screen.Editor(moved)
     }
 
     // Follows collapsed and pinned state across a path or folder prefix
