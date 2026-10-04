@@ -89,6 +89,19 @@ keystore described in `keystore.properties`:
 `ANDROID_HOME` must point at an Android SDK, e.g.
 `export ANDROID_HOME=~/Android/Sdk`.
 
+## Testing on an emulator without Google
+
+Debug builds accept an API token at launch, so the emulator can skip
+Google sign-in. Release builds strip this.
+
+1. Run the backend dev server on `localhost:5173`, ideally against a
+   throwaway `VAULT_DIR` and `DATABASE_PATH`.
+2. Insert a row into `api_tokens`: `token_hash` is the SHA-256 hex of a
+   random raw token, `user_email` an allowed email. Add a matching `user`
+   row too, or the calendar route answers 401 and the app signs out.
+3. `./gradlew installDebug`, then
+   `adb shell am start -n dev.mohak.scrinium/.MainActivity --es dev_token <raw> --es dev_email <email>`
+
 ## Auth
 
 Credential Manager Google Sign-In, then `POST /api/auth/mobile`
