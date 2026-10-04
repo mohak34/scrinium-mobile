@@ -103,6 +103,12 @@ class MainViewModel(
         .map { list -> list.filter { !it.isDeleted } }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
+    // Everything waiting to upload, deletion markers included (a rename or
+    // move is a marker at the old path plus an edit at the new one).
+    val pendingNotes: StateFlow<List<NoteEntity>> = notes.observeAll()
+        .map { list -> list.filter { it.localModifiedAt != null }.sortedByDescending { it.localModifiedAt } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     private val _unsyncedCount = MutableStateFlow(0)
     val unsyncedCount: StateFlow<Int> = _unsyncedCount.asStateFlow()
 

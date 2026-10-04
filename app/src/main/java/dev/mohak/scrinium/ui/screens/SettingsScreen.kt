@@ -34,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -167,8 +168,7 @@ private fun PageRow(icon: Int, title: String, status: String, onClick: (() -> Un
 @Composable
 private fun SyncPage(vm: MainViewModel) {
     val sync by vm.sync.collectAsStateWithLifecycle()
-    val notes by vm.notesFlow.collectAsStateWithLifecycle()
-    val pending = notes.filter { it.localModifiedAt != null }.sortedByDescending { it.localModifiedAt }
+    val pending by vm.pendingNotes.collectAsStateWithLifecycle()
     val failures = sync.report?.failures.orEmpty()
     val healthy = !sync.syncing && failures.isEmpty() && pending.isEmpty() && sync.error == null
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
@@ -206,8 +206,8 @@ private fun SyncPage(vm: MainViewModel) {
             GroupHeader("Waiting to upload", "${pending.size}")
             pending.forEach { n ->
                 Row(Modifier.fillMaxWidth().height(36.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Sym(R.drawable.ms_description, tint = Sc.text3, size = 17.dp)
-                    Text(n.path.removeSuffix(".md"), style = Type.body, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = 8.dp))
+                    Sym(if (n.isDeleted) R.drawable.ms_delete else R.drawable.ms_description, tint = Sc.text3, size = 17.dp)
+                    Text(n.path.removeSuffix(".md"), style = Type.body.copy(color = if (n.isDeleted) Sc.text3 else Sc.text), textDecoration = if (n.isDeleted) TextDecoration.LineThrough else null, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = 8.dp))
                     Text(relativeTime(n.localModifiedAt!!), style = Type.mono)
                 }
             }
