@@ -1,10 +1,12 @@
 package dev.mohak.scrinium.ui
 
 import androidx.compose.ui.graphics.Color
+import dev.mohak.scrinium.data.remote.CalendarEvent
 import dev.mohak.scrinium.data.remote.TaskDto
 import java.text.DateFormat
 import java.util.Calendar
 import java.util.Date
+import java.util.TimeZone
 
 // Task vocabulary, mirrored from the web client's taskModel.ts. The keys are
 // the wire values; order is the board's column order.
@@ -98,4 +100,38 @@ fun groupByDue(tasks: List<TaskDto>): List<TaskGroup> {
         TaskGroup("No date", open.filter { it.dueAt == null }),
         TaskGroup("Done", done)
     ).filter { it.rows.isNotEmpty() }
+}
+
+/**
+ * Local-midnight days an event covers. All-day events come from Google as
+ * UTC midnights with an exclusive end, so their dates are read in UTC and
+ * rebuilt as local days. Timed events cover every day they touch.
+ */
+fun eventDays(e: CalendarEvent): List<Long> {
+    val (first, last) = if (e.allDay) {
+        val utc = Calendar.getInstance(TimeZone.getTimeZone("UTC"))
+        fun local(ms: Long): Long {
+            utc.timeInMillis = ms
+            return Calendar.getInstance().apply {
+                clear()
+                set(utc.get(Calendar.YEAR), utc.get(Calendar.MONTH), utc.get(Calendar.DAY_OF_MONTH))
+            }.timeInMillis
+        }
+        local(e.start) to local(maxOf(e.start, e.end - 1))
+    } else {
+        startOfDay(e.start) to startOfDay(maxOf(e.start, e.end - 1))
+    }
+    val days = mutableListOf<Long>()
+    val cal = Calendar.getInstance().apply { timeInMillis = first }
+    while (cal.timeInMillis <= last && days.size < 62) {
+        days += cal.timeInMillis
+        cal.add(Calendar.DAY_OF_MONTH, 1)
+    }
+    return days
+}
+
+fun eventTimeLabel(e: CalendarEvent): String {
+    if (e.allDay) return "All day"
+    val f = DateFormat.getTimeInstance(DateFormat.SHORT)
+    return "${f.format(Date(e.start))} - ${f.format(Date(e.end))}"
 }

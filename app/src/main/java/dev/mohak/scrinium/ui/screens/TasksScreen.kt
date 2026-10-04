@@ -64,6 +64,9 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.mohak.scrinium.data.remote.CalendarEvent
+import dev.mohak.scrinium.ui.eventDays
+import dev.mohak.scrinium.ui.eventTimeLabel
 import dev.mohak.scrinium.data.remote.TaskDto
 import dev.mohak.scrinium.ui.DOING_LIMIT
 import dev.mohak.scrinium.ui.MainViewModel
@@ -287,8 +290,8 @@ private fun BoardCard(task: TaskDto, subtasks: Int, tasksVm: TasksViewModel) {
     }
 }
 
-// Month grid of due dates. Google Calendar events are web-only for now: the
-// events endpoint needs a browser session, not the phone's token.
+// Month grid of due dates with the linked Google Calendar's events on top,
+// read-only like the web.
 @Composable
 private fun TaskCalendar(
     tasks: List<TaskDto>,
@@ -304,6 +307,19 @@ private fun TaskCalendar(
         }.let { startOfDay(it.timeInMillis) })
     }
     val byDay = tasks.filter { it.dueAt != null }.groupBy { startOfDay(it.dueAt!!) }
+    val calendar by tasksVm.calendar.collectAsStateWithLifecycle()
+    LaunchedEffect(month) {
+        val next = Calendar.getInstance().apply {
+            timeInMillis = month
+            add(Calendar.MONTH, 1)
+        }.timeInMillis
+        tasksVm.loadEvents(month, next)
+    }
+    val eventsByDay = remember(calendar) {
+        buildMap<Long, MutableList<CalendarEvent>> {
+            for (e in calendar.events) for (d in eventDays(e)) getOrPut(d) { mutableListOf() } += e
+        }
+    }
     val cal = Calendar.getInstance().apply { timeInMillis = month }
     val title = SimpleDateFormat("MMMM yyyy", Locale.getDefault()).format(cal.time)
     val firstDow = cal.firstDayOfWeek
@@ -370,6 +386,7 @@ private fun TaskCalendar(
                                     DayCell(
                                         day = dayNum,
                                         tasks = byDay[dayMs].orEmpty(),
+                                        events = eventsByDay[dayMs]?.size ?: 0,
                                         isToday = dayMs == today,
                                         selected = dayMs == selectedDay,
                                         onClick = { onSelectDay(dayMs) }
@@ -385,7 +402,23 @@ private fun TaskCalendar(
         item {
             SectionHeader(SimpleDateFormat("EEEE, MMM d", Locale.getDefault()).format(selectedDay))
         }
-        if (dayTasks.isEmpty()) item { EmptyHint("Nothing due") }
+        val dayEvents = eventsByDay[selectedDay].orEmpty()
+        items(dayEvents, key = { "e-${it.id}" }) { e ->
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    eventTimeLabel(e),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(120.dp)
+                )
+                Text(e.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        if (dayTasks.isEmpty() && dayEvents.isEmpty()) item { EmptyHint("Nothing due") }
+        if (calendar.needsConnect) item { EmptyHint("Connect Google Calendar on the web to see events here") }
         items(dayTasks, key = { it.id }) { t ->
             TaskRow(
                 task = t,
@@ -399,7 +432,7 @@ private fun TaskCalendar(
 }
 
 @Composable
-private fun DayCell(day: Int, tasks: List<TaskDto>, isToday: Boolean, selected: Boolean, onClick: () -> Unit) {
+private fun DayCell(day: Int, tasks: List<TaskDto>, events: Int, isToday: Boolean, selected: Boolean, onClick: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     val open = tasks.filter { !it.isDone }
     Column(
@@ -432,6 +465,17 @@ private fun DayCell(day: Int, tasks: List<TaskDto>, isToday: Boolean, selected: 
             if (open.size > 3) {
                 Text("+${open.size - 3}", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
             }
+        }
+        // Events: a thin neutral bar, kept apart from the area-colored task dots.
+        if (events > 0) {
+            Spacer(Modifier.height(2.dp))
+            Box(
+                Modifier
+                    .fillMaxWidth(0.6f)
+                    .height(2.dp)
+                    .clip(RoundedCornerShape(1.dp))
+                    .background(colors.outline)
+            )
         }
     }
 }

@@ -5,10 +5,12 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import dev.mohak.scrinium.data.remote.CalendarResponse
 import dev.mohak.scrinium.data.remote.NewTaskRequest
 import dev.mohak.scrinium.data.remote.ScriniumApi
 import dev.mohak.scrinium.data.remote.TaskDto
 import dev.mohak.scrinium.di.AppContainer
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -47,6 +49,24 @@ class TasksViewModel(private val api: ScriniumApi) : ViewModel() {
     // Tasks linked to the note open in the editor (its info panel).
     private val _noteTasks = MutableStateFlow<List<TaskDto>>(emptyList())
     val noteTasks: StateFlow<List<TaskDto>> = _noteTasks.asStateFlow()
+
+    // Google Calendar events for the month the calendar shows. Read-only and
+    // quiet: offline or unlinked just shows no events.
+    private val _calendar = MutableStateFlow(CalendarResponse())
+    val calendar: StateFlow<CalendarResponse> = _calendar.asStateFlow()
+
+    private var eventsJob: Job? = null
+
+    fun loadEvents(from: Long, to: Long) {
+        eventsJob?.cancel()
+        eventsJob = viewModelScope.launch {
+            _calendar.value = try {
+                api.fetchCalendarEvents(from, to)
+            } catch (_: Exception) {
+                CalendarResponse()
+            }
+        }
+    }
 
     fun dismissError() {
         _error.value = null
