@@ -117,7 +117,10 @@ class TasksViewModel(private val api: ScriniumApi, private val reminders: Remind
     // offline then is not an error worth showing.
     fun refresh(quiet: Boolean = false) {
         viewModelScope.launch {
-            if (!quiet) _loading.value = true
+            if (!quiet) {
+                _loading.value = true
+                _error.value = null
+            }
             try {
                 load()
             } catch (e: Exception) {

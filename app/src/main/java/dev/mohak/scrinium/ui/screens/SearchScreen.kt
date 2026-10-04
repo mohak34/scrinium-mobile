@@ -52,10 +52,13 @@ fun SearchScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
     val recent by vm.recentSearches.collectAsStateWithLifecycle()
     val tags by vm.tags.collectAsStateWithLifecycle()
     val tasks by tasksVm.tasks.collectAsStateWithLifecycle()
+    val tasksLoading by tasksVm.loading.collectAsStateWithLifecycle()
+    val tasksError by tasksVm.error.collectAsStateWithLifecycle()
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) {
         vm.refreshTags()
+        tasksVm.refresh()
         if (query.isBlank()) focus.requestFocus()
     }
 
@@ -131,7 +134,12 @@ fun SearchScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                         }
                     }
                 } else {
-                    if (taskHits.isEmpty()) item { Text("No tasks match \"$query\"", style = Type.meta, modifier = Modifier.padding(16.dp)) }
+                    // Cached hits stay listed under a failed refresh; an empty
+                    // list only claims "no match" once tasks actually loaded.
+                    tasksError?.let { item { Text(it, style = Type.meta.copy(color = Sc.red), modifier = Modifier.padding(16.dp)) } }
+                    if (taskHits.isEmpty() && tasksError == null) {
+                        item { Text(if (tasksLoading) "Loading tasks" else "No tasks match \"$query\"", style = Type.meta, modifier = Modifier.padding(16.dp)) }
+                    }
                     items(taskHits, key = { it.id }) { t ->
                         TaskRow(t, null, onToggle = { tasksVm.toggleDone(t) }, onOpen = {
                             vm.rememberSearch(query)
