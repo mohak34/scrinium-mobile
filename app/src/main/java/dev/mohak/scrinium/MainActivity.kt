@@ -132,7 +132,7 @@ private fun AppScreen(vm: MainViewModel, tasksVm: TasksViewModel, screen: Screen
         Screen.Notes -> NotesScreen(vm)
         is Screen.Editor -> EditorScreen(vm, tasksVm)
         Screen.Search -> SearchScreen(vm, tasksVm)
-        Screen.Settings -> SettingsScreen(vm, tasksVm)
+        Screen.Settings -> SettingsScreen(vm)
         Screen.Tags -> TagsScreen(vm)
         Screen.Trash -> TrashScreen(vm)
         Screen.Tasks -> TasksScreen(tasksVm)

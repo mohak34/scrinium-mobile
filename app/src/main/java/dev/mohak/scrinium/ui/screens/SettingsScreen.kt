@@ -53,7 +53,6 @@ import dev.mohak.scrinium.ui.MarkdownText
 import dev.mohak.scrinium.ui.MonoFont
 import dev.mohak.scrinium.ui.Sc
 import dev.mohak.scrinium.ui.Sym
-import dev.mohak.scrinium.ui.TasksViewModel
 import dev.mohak.scrinium.ui.TextAction
 import dev.mohak.scrinium.ui.TopBar
 import dev.mohak.scrinium.ui.Type
@@ -65,7 +64,7 @@ private enum class Page(val title: String) { Index("Settings"), Sync("Sync"), De
 
 /** Settings: a list with one status line per row, each opening its own page. */
 @Composable
-fun SettingsScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
+fun SettingsScreen(vm: MainViewModel) {
     var page by rememberSaveable { mutableStateOf(Page.Index) }
     BackHandler(enabled = page != Page.Index) { page = Page.Index }
     LaunchedEffect(Unit) {
@@ -76,26 +75,26 @@ fun SettingsScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
         TopBar(page.title, onBack = { if (page == Page.Index) vm.closeSettings() else page = Page.Index })
         Box(Modifier.weight(1f)) {
             when (page) {
-                Page.Index -> IndexPage(vm, tasksVm) { page = it }
+                Page.Index -> IndexPage(vm) { page = it }
                 Page.Sync -> SyncPage(vm)
                 Page.Devices -> DevicesPage(vm)
                 Page.Template -> TemplatePage(vm)
-                Page.Reminders -> RemindersPage(tasksVm)
+                Page.Reminders -> RemindersPage(vm)
             }
         }
     }
 }
 
 @Composable
-private fun IndexPage(vm: MainViewModel, tasksVm: TasksViewModel, open: (Page) -> Unit) {
+private fun IndexPage(vm: MainViewModel, open: (Page) -> Unit) {
     val email by vm.email.collectAsStateWithLifecycle()
     val sync by vm.sync.collectAsStateWithLifecycle()
     val unsynced by vm.unsyncedCount.collectAsStateWithLifecycle()
     val devices by vm.devices.collectAsStateWithLifecycle()
     val template by vm.template.collectAsStateWithLifecycle()
     val trash by vm.trash.collectAsStateWithLifecycle()
-    val remindersOn by tasksVm.remindersOn.collectAsStateWithLifecycle()
-    val scheduledReminders by tasksVm.scheduledReminders.collectAsStateWithLifecycle()
+    val remindersOn by vm.remindersOn.collectAsStateWithLifecycle()
+    val scheduledReminders by vm.scheduledReminders.collectAsStateWithLifecycle()
     var confirmSignOut by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
@@ -305,10 +304,10 @@ private fun TemplatePage(vm: MainViewModel) {
 }
 
 @Composable
-private fun RemindersPage(tasksVm: TasksViewModel) {
-    val on by tasksVm.remindersOn.collectAsStateWithLifecycle()
+private fun RemindersPage(vm: MainViewModel) {
+    val on by vm.remindersOn.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    val scheduled by tasksVm.scheduledReminders.collectAsStateWithLifecycle()
+    val scheduled by vm.scheduledReminders.collectAsStateWithLifecycle()
     val allowed = NotificationManagerCompat.from(context).areNotificationsEnabled()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         Row(Modifier.fillMaxWidth().heightIn(min = 60.dp).padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -318,7 +317,7 @@ private fun RemindersPage(tasksVm: TasksViewModel) {
             }
             Switch(
                 checked = on,
-                onCheckedChange = { tasksVm.setRemindersOn(it) },
+                onCheckedChange = { vm.setRemindersOn(it) },
                 colors = SwitchDefaults.colors(
                     checkedTrackColor = Sc.fill,
                     checkedThumbColor = Sc.onFill,

@@ -27,18 +27,22 @@ private fun findWikilinks(text: String): List<Wikilink> =
         .toList()
 
 /**
- * Exact path first (`target` or `target.md`), then case-insensitive stem
- * match with the shortest path winning (Obsidian's rule, same as the web).
+ * The note a `[[target]]` written in [sourcePath] opens. Vault path first
+ * (`target` or `target.md`), then the same path relative to the source's
+ * folder, then a case-insensitive stem match that must be unique. Null when
+ * missing or ambiguous. Navigation, backlinks and autocomplete all use this
+ * so they agree on where a link goes.
  */
-fun resolveWikilink(target: String, notePaths: List<String>): String? {
-    val t = target.trim()
+fun resolveWikilink(target: String, sourcePath: String, notePaths: List<String>): String? {
+    val t = target.substringBefore('#').trim()
     if (t.isEmpty()) return null
     val withExt = if (t.endsWith(".md", ignoreCase = true)) t else "$t.md"
-    notePaths.firstOrNull { it.equals(withExt, ignoreCase = true) }?.let { return it }
+    val dir = sourcePath.substringBeforeLast('/', "")
+    for (c in listOfNotNull(withExt, dir.ifEmpty { null }?.let { "$it/$withExt" })) {
+        notePaths.firstOrNull { it.equals(c, ignoreCase = true) }?.let { return it }
+    }
     val want = stem(withExt).lowercase()
-    return notePaths
-        .filter { stem(it).lowercase() == want }
-        .minWithOrNull(compareBy<String> { it.length }.thenBy { it })
+    return notePaths.filter { stem(it).lowercase() == want }.singleOrNull()
 }
 
 // A line with links replaced by their display text, trimmed for a list row.
@@ -73,7 +77,7 @@ fun findBacklinks(target: String, notes: List<Pair<String, String>>): NoteBackli
         if (path == target) continue
         val lines = content.split('\n')
         lines.firstOrNull { line ->
-            findWikilinks(line).any { resolveWikilink(it.target, paths) == target }
+            findWikilinks(line).any { resolveWikilink(it.target, path, paths) == target }
         }?.let { linked += Backlink(path, plainExcerpt(it)) }
         if (mention == null) continue
         lines.firstOrNull { line ->

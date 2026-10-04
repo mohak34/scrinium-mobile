@@ -230,12 +230,25 @@ private interface ScriniumService {
 
 class ApiException(val status: Int) : Exception("API error $status")
 
+// What TasksViewModel needs from the server, so tests can fake it.
+interface TasksApi {
+    suspend fun fetchTasks(): List<TaskDto>
+    suspend fun fetchTasksForNote(path: String): List<TaskDto>
+    suspend fun createTask(body: NewTaskRequest): TaskDto
+    suspend fun patchTask(id: String, patch: JsonObject): TaskDto
+    suspend fun deleteTask(id: String)
+    suspend fun fetchTaskLinks(id: String): List<String>
+    suspend fun addTaskLink(id: String, notePath: String): List<String>
+    suspend fun removeTaskLink(id: String, notePath: String): List<String>
+    suspend fun fetchCalendarEvents(from: Long, to: Long): CalendarResponse
+}
+
 class ScriniumApi(
     baseUrl: String,
     tokenProvider: () -> String?,
     onUnauthorized: () -> Unit,
     cacheDir: File
-) {
+) : TasksApi {
     private val textMediaType = "text/plain".toMediaType()
     private val root = baseUrl.trimEnd('/') + "/"
 
@@ -309,25 +322,25 @@ class ScriniumApi(
         if (!res.isSuccessful) throw ApiException(res.code())
     }
 
-    suspend fun fetchTasks(): List<TaskDto> = service.tasks()
+    override suspend fun fetchTasks(): List<TaskDto> = service.tasks()
 
-    suspend fun fetchTasksForNote(path: String): List<TaskDto> = service.tasks(note = path)
+    override suspend fun fetchTasksForNote(path: String): List<TaskDto> = service.tasks(note = path)
 
-    suspend fun createTask(body: NewTaskRequest): TaskDto = service.createTask(body)
+    override suspend fun createTask(body: NewTaskRequest): TaskDto = service.createTask(body)
 
-    suspend fun patchTask(id: String, patch: JsonObject): TaskDto = service.patchTask(Uri.encode(id), patch)
+    override suspend fun patchTask(id: String, patch: JsonObject): TaskDto = service.patchTask(Uri.encode(id), patch)
 
-    suspend fun deleteTask(id: String) {
+    override suspend fun deleteTask(id: String) {
         val res = service.deleteTask(Uri.encode(id))
         if (!res.isSuccessful) throw ApiException(res.code())
     }
 
-    suspend fun fetchTaskLinks(id: String): List<String> = service.taskLinks(Uri.encode(id))
+    override suspend fun fetchTaskLinks(id: String): List<String> = service.taskLinks(Uri.encode(id))
 
-    suspend fun addTaskLink(id: String, notePath: String): List<String> =
+    override suspend fun addTaskLink(id: String, notePath: String): List<String> =
         service.addTaskLink(Uri.encode(id), TaskLinkRequest(notePath))
 
-    suspend fun removeTaskLink(id: String, notePath: String): List<String> =
+    override suspend fun removeTaskLink(id: String, notePath: String): List<String> =
         service.removeTaskLink(Uri.encode(id), notePath)
 
     // Vault-relative image path -> raw bytes, through the auth-gated asset API.
@@ -356,7 +369,7 @@ class ScriniumApi(
         if (!res.isSuccessful) throw ApiException(res.code())
     }
 
-    suspend fun fetchCalendarEvents(from: Long, to: Long): CalendarResponse = service.calendarEvents(from, to)
+    override suspend fun fetchCalendarEvents(from: Long, to: Long): CalendarResponse = service.calendarEvents(from, to)
 
     companion object {
         fun encPath(path: String): String =

@@ -86,6 +86,9 @@ in release.
 
 Paths are URL-encoded per segment. Backlinks are computed on the phone from
 Room (`ui/Backlinks.kt`, a port of the web's `wikilinks.ts`), not fetched.
+One `resolveWikilink` serves link taps, backlinks and `[[` autocomplete:
+vault path, then the source note's folder, then a unique name. Unlike the
+web it does not pick the shortest path when a name is ambiguous.
 
 ## Sync engine rules
 

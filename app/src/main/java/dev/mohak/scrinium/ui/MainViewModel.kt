@@ -24,11 +24,13 @@ import dev.mohak.scrinium.data.remote.TagCount
 import dev.mohak.scrinium.data.remote.TaggedHit
 import dev.mohak.scrinium.data.remote.TrashEntry
 import dev.mohak.scrinium.di.AppContainer
+import dev.mohak.scrinium.reminders.Reminders
 import dev.mohak.scrinium.sync.SyncEngine
 import dev.mohak.scrinium.sync.SyncReport
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -81,14 +83,19 @@ data class SyncUiState(
     val report: SyncReport? = null
 )
 
-data class EditorState(val path: String, val text: String)
+private var nextEditorId = 0L
+
+// [id] names one open-note session: a fresh one per note opened, kept by
+// renames (copy), so the editor field survives its note changing path.
+data class EditorState(val path: String, val text: String, val id: Long = ++nextEditorId)
 
 class MainViewModel(
     private val session: SessionRepository,
     private val notes: NotesRepository,
     private val syncEngine: SyncEngine,
     private val images: ImageLoader,
-    private val prefs: Prefs
+    private val prefs: Prefs,
+    private val reminders: Reminders
 ) : ViewModel() {
 
     val signedIn: StateFlow<Boolean> = session.signedIn
@@ -145,6 +152,19 @@ class MainViewModel(
     }
 
     fun setTemplate(value: String) = prefs.setTemplate(value)
+
+    // Settings > Reminders: the switch and what is scheduled right now.
+    // Turning it on re-arms the stored schedule; task loads keep it current.
+    private val _remindersOn = MutableStateFlow(reminders.enabled)
+    val remindersOn: StateFlow<Boolean> = _remindersOn.asStateFlow()
+
+    val scheduledReminders: StateFlow<List<Reminders.Entry>> = reminders.observeScheduled()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), reminders.scheduled())
+
+    fun setRemindersOn(on: Boolean) {
+        reminders.enabled = on
+        _remindersOn.value = on
+    }
 
     private val editorEdits = MutableStateFlow<Pair<String, String>?>(null)
 
@@ -624,30 +644,16 @@ class MainViewModel(
         val target = targetRaw.substringBefore('#').trim()
         if (target.isEmpty()) return
         viewModelScope.launch {
-            val all = notes.observeAll().first().filter { !it.isDeleted }
-            val current = _editor.value
-            val dir = current?.path?.substringBeforeLast('/', "") ?: ""
-            val candidates = buildList {
-                if (dir.isNotBlank()) add("$dir/$target")
-                if (dir.isNotBlank()) add("$dir/$target.md")
-                add(target)
-                add(if (target.endsWith(".md", ignoreCase = true)) target else "$target.md")
-            }
-            val direct = candidates.firstOrNull { c -> all.any { it.path == c } }
-            if (direct != null) {
-                openNote(direct)
+            val paths = notes.observeAll().first().filter { !it.isDeleted }.map { it.path }
+            val hit = resolveWikilink(target, _editor.value?.path ?: "", paths)
+            if (hit != null) {
+                openNote(hit)
                 return@launch
             }
             val stem = target.substringAfterLast('/').removeSuffix(".md")
-            val matches = all.filter {
-                it.path.substringAfterLast('/').removeSuffix(".md").equals(stem, ignoreCase = true)
-            }
-            if (matches.size == 1) {
-                openNote(matches[0].path)
-            } else {
-                _sync.update {
-                    it.copy(error = if (matches.isEmpty()) "Note not found: $target" else "Multiple notes match: $target")
-                }
+            val matches = paths.count { it.substringAfterLast('/').removeSuffix(".md").equals(stem, ignoreCase = true) }
+            _sync.update {
+                it.copy(error = if (matches == 0) "Note not found: $target" else "Multiple notes match: $target")
             }
         }
     }
@@ -773,6 +779,8 @@ class MainViewModel(
             val ext = mime.substringAfter('/').replace("jpeg", "jpg")
             val stored = notes.uploadAttachment(body, mime, "image.$ext", ATTACHMENTS_FOLDER)
             "![${name.substringBeforeLast('.').ifBlank { "image" }}](${noteRelative(notePath, stored)})"
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             _sync.update { it.copy(error = "Image upload failed: ${e.message}") }
             null
@@ -1021,6 +1029,10 @@ class MainViewModel(
         _sync.update { it.copy(error = null) }
     }
 
+    fun reportError(message: String) {
+        _sync.update { it.copy(error = message) }
+    }
+
     companion object {
         private const val AUTO_PUSH_DELAY_MS = 5_000L
         private const val FOREGROUND_PULL_MS = 60_000L
@@ -1033,7 +1045,8 @@ class MainViewModel(
                     notes = container.notesRepository,
                     syncEngine = container.syncEngine,
                     images = container.imageLoader,
-                    prefs = container.prefs
+                    prefs = container.prefs,
+                    reminders = container.reminders
                 )
             }
         }

@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.mohak.scrinium.R
 import dev.mohak.scrinium.ui.Backlink
+import dev.mohak.scrinium.ui.ErrorStrip
 import dev.mohak.scrinium.ui.GroupHeader
 import dev.mohak.scrinium.ui.InputBox
 import dev.mohak.scrinium.ui.MainViewModel
@@ -61,6 +62,7 @@ fun NotePanel(
     onDismiss: () -> Unit
 ) {
     val noteTasks by tasksVm.noteTasks.collectAsStateWithLifecycle()
+    val taskError by tasksVm.error.collectAsStateWithLifecycle()
     val backlinks by vm.backlinks.collectAsStateWithLifecycle()
     val notes by vm.notesFlow.collectAsStateWithLifecycle()
     var tab by rememberSaveable { mutableIntStateOf(0) }
@@ -132,6 +134,7 @@ fun NotePanel(
                     }
                 }
                 2 -> {
+                    taskError?.let { e -> item { ErrorStrip(e) { tasksVm.dismissError() } } }
                     items(noteTasks, key = { "t-${it.id}" }) { t ->
                         TaskRow(t, null, onToggle = { tasksVm.toggleDone(t) }, onOpen = {
                             onDismiss()
@@ -147,8 +150,11 @@ fun NotePanel(
                             icon = R.drawable.ms_add,
                             keyboardOptions = KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Done),
                             keyboardActions = KeyboardActions(onDone = {
-                                tasksVm.create(newTask, status = TaskStatus.Inbox, linkPath = path)
-                                newTask = ""
+                                val title = newTask
+                                // Kept on failure for a retry; cleared unless more was typed.
+                                tasksVm.create(title, status = TaskStatus.Inbox, linkPath = path, onCreated = {
+                                    if (newTask == title) newTask = ""
+                                })
                             })
                         )
                     }

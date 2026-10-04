@@ -61,6 +61,9 @@ fun MarkdownText(
     onWikilinkClick: (String) -> Unit = {},
     onToggleTaskLine: (Int) -> Unit = {},
     onTagClick: (String) -> Unit = {},
+    // [imageBase] is what relative image references resolve against (the
+    // note's path): a new base reloads every image.
+    imageBase: String = "",
     loadImage: suspend (String) -> ImageBitmap? = { null },
     onHeadingPositioned: (line: Int, y: Int) -> Unit = { _, _ -> }
 ) {
@@ -237,7 +240,7 @@ fun MarkdownText(
                         }
                     }
                 }
-                is Block.Image -> MarkdownImage(block, loadImage, Sc.text3)
+                is Block.Image -> MarkdownImage(block, imageBase, loadImage, Sc.text3)
                 is Block.Rule -> HorizontalDivider(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -252,8 +255,13 @@ fun MarkdownText(
 // Loads through the caller (auth + cache live there). Alt text stands in
 // while loading and when the image can't be fetched.
 @Composable
-private fun MarkdownImage(block: Block.Image, loadImage: suspend (String) -> ImageBitmap?, muted: Color) {
-    val bitmap by produceState<ImageBitmap?>(null, block.url) { value = loadImage(block.url) }
+private fun MarkdownImage(block: Block.Image, base: String, loadImage: suspend (String) -> ImageBitmap?, muted: Color) {
+    // Same `photo.png` in another note is another file: key on both, and
+    // drop the old bitmap before the new one loads.
+    val bitmap by produceState<ImageBitmap?>(null, base, block.url) {
+        value = null
+        value = loadImage(block.url)
+    }
     val image = bitmap
     if (image == null) {
         androidx.compose.material3.Text(

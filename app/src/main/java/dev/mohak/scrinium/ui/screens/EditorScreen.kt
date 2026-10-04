@@ -65,6 +65,8 @@ import dev.mohak.scrinium.ui.toggleLinePrefix
 import dev.mohak.scrinium.ui.wrapSelection
 import dev.mohak.scrinium.ui.folderPaths
 import dev.mohak.scrinium.ui.lineStartOffset
+import java.io.IOException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -92,8 +94,9 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
 
     // The field keeps its own selection so an image lands at the cursor.
     // Text changed elsewhere (task toggles in preview, title sync) is adopted
-    // with the selection clamped to the new length.
-    var field by remember(state.path) { mutableStateOf(TextFieldValue(state.text)) }
+    // with the selection clamped to the new length. Keyed by the editor
+    // session, not the path, so a title-sync rename keeps cursor and IME.
+    var field by remember(state.id) { mutableStateOf(TextFieldValue(state.text)) }
     if (field.text != state.text) {
         val end = state.text.length
         field = field.copy(
@@ -104,8 +107,8 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
 
     // Undo: a snapshot before each burst of typing (a pause of a second
     // starts a new one), so one tap undoes a phrase, not a letter.
-    val undo = remember(state.path) { ArrayDeque<TextFieldValue>() }
-    var lastEdit by remember(state.path) { mutableLongStateOf(0L) }
+    val undo = remember(state.id) { ArrayDeque<TextFieldValue>() }
+    var lastEdit by remember(state.id) { mutableLongStateOf(0L) }
 
     fun apply(next: TextFieldValue) {
         if (next.text != field.text) {
@@ -130,25 +133,37 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
     } else {
         LiveMarkdownTransformation(-1, -1, palette)
     }
-    val suggestions = remember(field.text, field.selection, notes, tags, focused) {
+    val suggestions = remember(field.text, field.selection, state.path, notes, tags, focused) {
         if (!focused || !field.selection.collapsed) emptyList()
-        else completions(field.text, field.selection.start, notes.map { it.path }, tags)
+        else completions(field.text, field.selection.start, state.path, notes.map { it.path }, tags)
     }
 
     val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         val notePath = state.path
+        val editorId = state.id
         scope.launch {
             uploading = true
-            val (bytes, mime, name) = withContext(Dispatchers.IO) {
-                val resolver = context.contentResolver
-                val name = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
-                    ?.use { c -> if (c.moveToFirst()) c.getString(0) else null } ?: "image"
-                Triple(resolver.openInputStream(uri)?.use { it.readBytes() }, resolver.getType(uri), name)
+            val markdown = try {
+                // Providers throw for unreadable picks (an offline cloud photo,
+                // a revoked grant); that is an upload error, not a crash.
+                val (bytes, mime, name) = withContext(Dispatchers.IO) {
+                    val resolver = context.contentResolver
+                    val name = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+                        ?.use { c -> if (c.moveToFirst()) c.getString(0) else null } ?: "image"
+                    Triple(resolver.openInputStream(uri)?.use { it.readBytes() }, resolver.getType(uri), name)
+                }
+                if (bytes == null) throw IOException("no data")
+                vm.uploadImage(notePath, bytes, mime, name)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                vm.reportError("Couldn't read image: ${e.message}")
+                null
+            } finally {
+                uploading = false
             }
-            val markdown = bytes?.let { vm.uploadImage(notePath, it, mime, name) }
-            uploading = false
-            if (markdown == null || vm.editor.value?.path != notePath) return@launch
+            if (markdown == null || vm.editor.value?.id != editorId) return@launch
             // Own line, like the web's paste: break before it if mid-line.
             val at = field.selection.start
             val needsBreak = at > 0 && field.text[at - 1] != '\n'
@@ -199,6 +214,7 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                 onWikilinkClick = { vm.openWikilink(it) },
                 onToggleTaskLine = { vm.toggleTaskLine(it) },
                 onTagClick = { vm.searchTag(it) },
+                imageBase = state.path,
                 loadImage = { vm.loadImage(state.path, it) },
                 onHeadingPositioned = { line, y -> headingY[line] = y }
             )

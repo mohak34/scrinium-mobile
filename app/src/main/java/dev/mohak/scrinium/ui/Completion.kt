@@ -9,7 +9,9 @@ data class Suggestion(val label: String, val detail: String?, val from: Int, val
 private val wikiTrigger = Regex("""\[\[([^\]\[#|\n]*)$""")
 private val tagTrigger = Regex("""(?:^|[\s(\[{'">])#([A-Za-z0-9/_-]*)$""")
 
-fun completions(text: String, cursor: Int, notePaths: List<String>, tags: List<String>): List<Suggestion> {
+// [sourcePath] is the note being edited: a picked note is inserted by name
+// when that resolves to it from here, else by its vault path.
+fun completions(text: String, cursor: Int, sourcePath: String, notePaths: List<String>, tags: List<String>): List<Suggestion> {
     if (cursor !in 0..text.length) return emptyList()
     val lineStart = text.lastIndexOf('\n', cursor - 1) + 1
     val before = text.substring(lineStart, cursor)
@@ -21,7 +23,10 @@ fun completions(text: String, cursor: Int, notePaths: List<String>, tags: List<S
             .filter { (_, stem) -> typed in stem.lowercase() }
             .sortedWith(compareBy({ !it.second.lowercase().startsWith(typed) }, { it.second.lowercase() }))
             .take(20)
-            .map { (path, stem) -> Suggestion(stem, path.takeIf { '/' in it }, from, "$stem]]") }
+            .map { (path, stem) ->
+                val target = if (resolveWikilink(stem, sourcePath, notePaths) == path) stem else path.removeSuffix(".md")
+                Suggestion(stem, path.takeIf { '/' in it }, from, "$target]]")
+            }
             .toList()
     }
     tagTrigger.find(before)?.let { m ->
