@@ -142,13 +142,12 @@ private fun SwipeRow(e: TrashEntry, today: Long, onRestore: () -> Unit, onPurge:
     val scope = rememberCoroutineScope()
     SwipeToDismissBox(
         state = state,
+        // The row always springs back: delete asks first, and a restore only
+        // drops the row once the trash refresh confirms it, so a failed
+        // restore leaves it swipeable for a retry.
         onDismiss = { value ->
-            if (value == SwipeToDismissBoxValue.StartToEnd) onRestore()
-            else {
-                // Asks first, so the row springs back.
-                onPurge()
-                scope.launch { state.reset() }
-            }
+            if (value == SwipeToDismissBoxValue.StartToEnd) onRestore() else onPurge()
+            scope.launch { state.reset() }
         },
         backgroundContent = {
             val restore = state.dismissDirection == SwipeToDismissBoxValue.StartToEnd
