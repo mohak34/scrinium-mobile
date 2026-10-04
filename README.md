@@ -10,27 +10,36 @@ reconciles with the server in the background while the app is open. See
 
 ## Features
 
+- Five bottom tabs: Notes, Tasks, Search (center), Board, Calendar.
+  Look ported from the web app: true black, teal accent, Space Grotesk,
+  Atkinson Hyperlegible Next and JetBrains Mono, Material Symbols icons
 - File tree with folders: create, rename, move, delete, drag and drop
 - Live-preview markdown editor: marks hide except on the cursor's line,
   `[[` note and `#tag` autocomplete. Rich preview mode too: headings,
   lists, task checkboxes, code, math, blockquotes, kind-colored callouts,
-  wikilinks, tag pills
+  wikilinks, tag pills. A format bar above the keyboard (bold, italic,
+  link, tag, checkbox, list, image) with undo
 - Pinned notes and folders, new-note template (`{{title}}`), both kept on
   the phone like the web keeps them in the browser
 - PDF export through the Android print dialog
 - Title-filename two-way sync (first `# ` heading and frontmatter `title:`)
-- Server full-text search with snippets, title-ranked like the web client
+- Search tab: notes (server full-text with snippets, title-ranked like the
+  web client) and tasks, recent searches, tag shortcuts
 - Tag browsing via the server tags API
-- Server trash with restore, purge, empty
+- Server trash with restore, purge, empty, restore all. Swipe right to
+  restore, left to delete forever
 - Public share links with optional passwords
-- Tasks: list (Overdue, Today, Upcoming, No date, Done), board by status,
-  month calendar by due date with Google Calendar events, area filter.
+- Tasks: list grouped by status with area tabs, board paged by status
+  (long-press to move), month calendar by due date with Google Calendar
+  events, area filter.
   Detail screen with status, area, priority, due date and time, reminder,
   waiting-on, subtasks and linked notes. Online only. Reminders become
-  phone notifications; ones set on the web arm the next time the app opens
+  phone notifications; ones set on the web arm the next time the app opens.
+  Settings can turn reminders off and lists the scheduled ones
 - Note panel: outline, frontmatter properties, tasks linked to the note,
   backlinks, unlinked mentions you can turn into links, word count
-- Devices: list and revoke signed-in phones from Settings
+- Settings: sync status with notes waiting to upload, devices (list and
+  revoke signed-in phones), template editor with preview
 - Images in preview (vault images through the asset API, disk-cached for
   an hour), and image upload from the editor into `attachments/`
 - Foreground-only sync: 5s auto-push after edits settle, 60s pull tick,
