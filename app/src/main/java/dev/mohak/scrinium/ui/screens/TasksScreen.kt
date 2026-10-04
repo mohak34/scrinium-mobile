@@ -286,12 +286,16 @@ fun CalendarScreen(tasksVm: TasksViewModel) {
             IconBtn(R.drawable.ms_chevron_right, "Next month", { shiftMonth(1) })
         }
         error?.let { ErrorStrip(it) { tasksVm.dismissError() } }
-        MonthGrid(month, selectedDay, today, byDay, eventsByDay) { selectedDay = it }
-        Divider()
         Box(Modifier.weight(1f)) {
             val dayTasks = byDay[selectedDay].orEmpty().sortedBy { it.dueAt }
             val dayEvents = eventsByDay[selectedDay].orEmpty().sortedWith(compareBy({ !it.allDay }, { it.start }))
+            // The grid scrolls with the agenda: a six-week month in landscape
+            // would otherwise leave the agenda no height.
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 96.dp)) {
+                item(key = "grid") {
+                    MonthGrid(month, selectedDay, today, byDay, eventsByDay) { selectedDay = it }
+                    Divider()
+                }
                 item {
                     GroupHeader(
                         SimpleDateFormat("EEE d MMM", Locale.getDefault()).format(Date(selectedDay)),
