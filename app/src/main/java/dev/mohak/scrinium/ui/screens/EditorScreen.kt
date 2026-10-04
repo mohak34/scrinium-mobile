@@ -249,6 +249,7 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                     onWikilinkClick = { vm.openWikilink(it) },
                     onToggleTaskLine = { vm.toggleTaskLine(it) },
                     onTagClick = { vm.searchTag(it) },
+                    imageBase = state.path,
                     loadImage = { vm.loadImage(state.path, it) },
                     onHeadingPositioned = { line, y -> headingY[line] = y }
                 )
