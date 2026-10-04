@@ -13,8 +13,10 @@ import dev.mohak.scrinium.di.AppContainer
 import dev.mohak.scrinium.reminders.Reminders
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonElement
@@ -81,7 +83,8 @@ class TasksViewModel(private val api: ScriniumApi, private val reminders: Remind
     private val _remindersOn = MutableStateFlow(reminders.enabled)
     val remindersOn: StateFlow<Boolean> = _remindersOn.asStateFlow()
 
-    fun scheduledReminders(): List<Reminders.Entry> = reminders.scheduled()
+    val scheduledReminders: StateFlow<List<Reminders.Entry>> = reminders.observeScheduled()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), reminders.scheduled())
 
     fun setRemindersOn(on: Boolean) {
         reminders.enabled = on

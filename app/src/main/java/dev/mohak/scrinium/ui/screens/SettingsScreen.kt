@@ -25,7 +25,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -95,6 +94,7 @@ private fun IndexPage(vm: MainViewModel, tasksVm: TasksViewModel, open: (Page) -
     val template by vm.template.collectAsStateWithLifecycle()
     val trash by vm.trash.collectAsStateWithLifecycle()
     val remindersOn by tasksVm.remindersOn.collectAsStateWithLifecycle()
+    val scheduledReminders by tasksVm.scheduledReminders.collectAsStateWithLifecycle()
     var confirmSignOut by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
@@ -122,7 +122,7 @@ private fun IndexPage(vm: MainViewModel, tasksVm: TasksViewModel, open: (Page) -
         }.joinToString("  ·  ")) { open(Page.Sync) }
         PageRow(R.drawable.ms_devices, "Devices", if (devices.isEmpty()) "Phones signed in to your vault" else "${devices.size} signed in") { open(Page.Devices) }
         PageRow(R.drawable.ms_note_add, "New note template", template.lineSequence().firstOrNull { it.isNotBlank() }?.takeIf { "{{title}}" in template } ?: "# {{title}}  (default)") { open(Page.Template) }
-        PageRow(R.drawable.ms_notifications, "Reminders", if (remindersOn) "On  ·  ${tasksVm.scheduledReminders().size} scheduled" else "Off") { open(Page.Reminders) }
+        PageRow(R.drawable.ms_notifications, "Reminders", if (remindersOn) "On  ·  ${scheduledReminders.size} scheduled" else "Off") { open(Page.Reminders) }
         PageRow(R.drawable.ms_delete, "Trash", if (trash.isEmpty()) "Empty" else "${trash.size} item${if (trash.size == 1) "" else "s"}") { vm.openTrash() }
         Divider()
         PageRow(R.drawable.ms_info, "About", "Version ${BuildConfig.VERSION_NAME}", onClick = null)
@@ -308,9 +308,7 @@ private fun TemplatePage(vm: MainViewModel) {
 private fun RemindersPage(tasksVm: TasksViewModel) {
     val on by tasksVm.remindersOn.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    // Re-read the schedule when the switch flips.
-    var tick by remember { mutableLongStateOf(0L) }
-    val scheduled = remember(on, tick) { tasksVm.scheduledReminders() }
+    val scheduled by tasksVm.scheduledReminders.collectAsStateWithLifecycle()
     val allowed = NotificationManagerCompat.from(context).areNotificationsEnabled()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         Row(Modifier.fillMaxWidth().heightIn(min = 60.dp).padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -320,10 +318,7 @@ private fun RemindersPage(tasksVm: TasksViewModel) {
             }
             Switch(
                 checked = on,
-                onCheckedChange = {
-                    tasksVm.setRemindersOn(it)
-                    tick++
-                },
+                onCheckedChange = { tasksVm.setRemindersOn(it) },
                 colors = SwitchDefaults.colors(
                     checkedTrackColor = Sc.fill,
                     checkedThumbColor = Sc.onFill,

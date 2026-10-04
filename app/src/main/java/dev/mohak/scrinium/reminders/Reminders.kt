@@ -14,6 +14,9 @@ import dev.mohak.scrinium.MainActivity
 import dev.mohak.scrinium.R
 import dev.mohak.scrinium.data.remote.TaskDto
 import dev.mohak.scrinium.ui.isDone
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
 
 /**
  * Task reminders as phone notifications. Reminders live on the server, so
@@ -36,19 +39,34 @@ class Reminders(context: Context) {
 
     data class Entry(val at: Long, val title: String)
 
+    // Off cancels the alarms but keeps the schedule, so turning it back on
+    // re-arms offline instead of waiting for the next task fetch.
     var enabled: Boolean
         get() = settings.getBoolean("enabled", true)
         set(value) {
             settings.edit().putBoolean("enabled", value).apply()
-            if (!value) clearAll()
+            if (value) rearm() else cancelAlarms()
         }
 
-    /** Alarms waiting to fire, soonest first. */
-    fun scheduled(): List<Entry> = stored().values.sortedBy { it.at }
+    /** Future reminders, soonest first. Armed only while [enabled]. */
+    fun scheduled(): List<Entry> {
+        val now = System.currentTimeMillis()
+        return stored().values.filter { it.at > now }.sortedBy { it.at }
+    }
 
-    /** Makes the scheduled alarms match [tasks]' future, not-done reminders. */
+    /** [scheduled], re-emitted whenever the stored schedule changes. */
+    fun observeScheduled(): Flow<List<Entry>> = callbackFlow {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> trySend(scheduled()) }
+        trySend(scheduled())
+        store.registerOnSharedPreferenceChangeListener(listener)
+        awaitClose { store.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+
+    /**
+     * Makes the stored schedule match [tasks]' future, not-done reminders,
+     * arming alarms only while [enabled].
+     */
     fun sync(tasks: List<TaskDto>) {
-        if (!enabled) return clearAll()
         val now = System.currentTimeMillis()
         val want = tasks
             .filter { !it.isDone && it.remindAt != null && it.remindAt > now }
@@ -61,7 +79,7 @@ class Reminders(context: Context) {
         }
         for ((id, e) in want) {
             if (have[id] == e) continue
-            arm(id, e)
+            if (enabled) arm(id, e)
             edit.putString(id, "${e.at}\t${e.title}")
         }
         edit.apply()
@@ -78,8 +96,13 @@ class Reminders(context: Context) {
         edit.apply()
     }
 
-    fun clearAll() {
+    private fun cancelAlarms() {
         for ((id, e) in stored()) alarms.cancel(pending(id, e.title))
+    }
+
+    /** Sign-out: cancels every alarm and forgets the schedule. */
+    fun clearAll() {
+        cancelAlarms()
         store.edit().clear().apply()
     }
 
