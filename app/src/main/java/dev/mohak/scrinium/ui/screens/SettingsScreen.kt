@@ -24,6 +24,10 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -123,6 +127,25 @@ fun SettingsScreen(vm: MainViewModel) {
             OutlinedButton(onClick = { vm.openTrash() }) {
                 Text("Trash")
             }
+            Spacer(Modifier.height(24.dp))
+
+            SectionLabel("New note template")
+            var template by remember { mutableStateOf(vm.template.value) }
+            OutlinedTextField(
+                value = template,
+                onValueChange = {
+                    template = it
+                    vm.setTemplate(it)
+                },
+                placeholder = { Text("# {{title}}") },
+                minLines = 3,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                text = "Used when it contains {{title}}. This phone only.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             Spacer(Modifier.height(24.dp))
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)

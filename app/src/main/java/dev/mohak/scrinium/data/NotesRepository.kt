@@ -39,19 +39,19 @@ class NotesRepository(
         )
     }
 
-    suspend fun createNote(existingPaths: List<String>, folder: String = ""): String {
+    // [body] builds the initial text from the note's title (the template).
+    suspend fun createNote(existingPaths: List<String>, folder: String, body: (String) -> String): NoteEntity {
         val dir = normalizeFolder(folder)
         val name = generateName(existingPaths, dir)
-        noteDao.upsert(
-            NoteEntity(
-                path = name,
-                content = "# ${name.substringAfterLast('/').removeSuffix(".md")}\n\n",
-                remoteUpdatedAt = 0L,
-                localModifiedAt = System.currentTimeMillis(),
-                contentHash = ""
-            )
+        val note = NoteEntity(
+            path = name,
+            content = body(name.substringAfterLast('/').removeSuffix(".md")),
+            remoteUpdatedAt = 0L,
+            localModifiedAt = System.currentTimeMillis(),
+            contentHash = ""
         )
-        return name
+        noteDao.upsert(note)
+        return note
     }
 
     suspend fun deleteLocally(path: String) {

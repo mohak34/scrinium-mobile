@@ -4,6 +4,7 @@ import android.content.Context
 import dev.mohak.scrinium.BuildConfig
 import dev.mohak.scrinium.data.ImageLoader
 import dev.mohak.scrinium.data.NotesRepository
+import dev.mohak.scrinium.data.Prefs
 import dev.mohak.scrinium.data.SecureTokenStore
 import dev.mohak.scrinium.data.SessionRepository
 import dev.mohak.scrinium.data.local.AppDatabase
@@ -20,6 +21,7 @@ class AppContainer(context: Context) {
 
     val database = AppDatabase.build(appContext)
     val tokenStore = SecureTokenStore(appContext)
+    val prefs = Prefs(appContext)
 
     lateinit var sessionRepository: SessionRepository
     lateinit var api: ScriniumApi

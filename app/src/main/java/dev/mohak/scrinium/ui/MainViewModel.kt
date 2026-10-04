@@ -10,6 +10,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import dev.mohak.scrinium.BuildConfig
 import dev.mohak.scrinium.data.ImageLoader
 import dev.mohak.scrinium.data.NotesRepository
+import dev.mohak.scrinium.data.Prefs
 import dev.mohak.scrinium.data.noteRelative
 import dev.mohak.scrinium.data.resolveImage
 import dev.mohak.scrinium.data.SessionRepository
@@ -78,7 +79,8 @@ class MainViewModel(
     private val session: SessionRepository,
     private val notes: NotesRepository,
     private val syncEngine: SyncEngine,
-    private val images: ImageLoader
+    private val images: ImageLoader,
+    private val prefs: Prefs
 ) : ViewModel() {
 
     val signedIn: StateFlow<Boolean> = session.signedIn
@@ -108,6 +110,17 @@ class MainViewModel(
     fun toggleFolder(path: String) {
         _collapsedFolders.update { if (path in it) it - path else it + path }
     }
+
+    // Pinned notes and folders sort first at their level of the tree.
+    val pinned: StateFlow<Set<String>> = prefs.pinned
+    val template: StateFlow<String> = prefs.template
+
+    fun togglePin(path: String) {
+        val now = prefs.pinned.value
+        prefs.setPinned(if (path in now) now - path else now + path)
+    }
+
+    fun setTemplate(value: String) = prefs.setTemplate(value)
 
     private val editorEdits = MutableStateFlow<Pair<String, String>?>(null)
 
@@ -326,11 +339,11 @@ class MainViewModel(
         viewModelScope.launch {
             val existing = notes.observeAll().first().map { it.path }
             try {
-                val path = notes.createNote(existing, folder)
-                _editor.value = EditorState(path, "# ${path.substringAfterLast('/').removeSuffix(".md")}\n\n")
+                val note = notes.createNote(existing, folder, prefs::newNoteBody)
+                _editor.value = EditorState(note.path, note.content)
                 editorEdits.value = null
                 titleSyncEdits.value = null
-                _screen.value = Screen.Editor(path)
+                _screen.value = Screen.Editor(note.path)
                 scheduleAutoSync()
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Create failed: ${e.message}") }
@@ -360,6 +373,7 @@ class MainViewModel(
         if (notes.get(target) != null) return
         try {
             val newPath = notes.renameNote(path, safe) ?: return
+            remapPaths(path, newPath)
             if (_editor.value?.path == path) {
                 _editor.value = _editor.value?.copy(path = newPath)
                 val updatedText = _editor.value?.text ?: text
@@ -729,6 +743,7 @@ class MainViewModel(
             val current = _editor.value ?: return@launch
             try {
                 val newPath = notes.renameNote(current.path, newName) ?: return@launch
+                remapPaths(current.path, newPath)
                 // Filename -> title: keep the H1/frontmatter in step with the
                 // new name, same as the web client. Never injects when the
                 // note has no title source.
@@ -754,7 +769,8 @@ class MainViewModel(
     fun moveNote(path: String, newParent: String) {
         viewModelScope.launch {
             try {
-                notes.moveNote(path, newParent) ?: return@launch
+                val newPath = notes.moveNote(path, newParent) ?: return@launch
+                remapPaths(path, newPath)
                 scheduleAutoSync()
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Move failed: ${e.message}") }
@@ -766,7 +782,7 @@ class MainViewModel(
         viewModelScope.launch {
             try {
                 val newPrefix = notes.renameFolder(folder, newName) ?: return@launch
-                remapCollapsed(folder, newPrefix)
+                remapPaths(folder, newPrefix)
                 scheduleAutoSync()
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Rename failed: ${e.message}") }
@@ -778,7 +794,7 @@ class MainViewModel(
         viewModelScope.launch {
             try {
                 val newPrefix = notes.moveFolder(folder, newParent) ?: return@launch
-                remapCollapsed(folder, newPrefix)
+                remapPaths(folder, newPrefix)
                 scheduleAutoSync()
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Move failed: ${e.message}") }
@@ -786,16 +802,14 @@ class MainViewModel(
         }
     }
 
-    // Follows collapsed state across a folder prefix rewrite so expanded
-    // folders stay expanded after a rename/move.
-    private fun remapCollapsed(oldPrefix: String, newPrefix: String) {
-        _collapsedFolders.update { collapsed ->
-            collapsed.map { path ->
-                if (path == oldPrefix || path.startsWith("$oldPrefix/")) {
-                    newPrefix + path.removePrefix(oldPrefix)
-                } else path
-            }.toSet()
-        }
+    // Follows collapsed and pinned state across a path or folder prefix
+    // rewrite so both survive a rename/move.
+    private fun remapPaths(oldPrefix: String, newPrefix: String) {
+        fun remap(paths: Set<String>) = paths.map { path ->
+            if (path == oldPrefix || path.startsWith("$oldPrefix/")) newPrefix + path.removePrefix(oldPrefix) else path
+        }.toSet()
+        _collapsedFolders.update(::remap)
+        prefs.pinned.value.let { if (it.any { p -> p == oldPrefix || p.startsWith("$oldPrefix/") }) prefs.setPinned(remap(it)) }
     }
 
     fun deleteFolder(folder: String) {
@@ -866,7 +880,8 @@ class MainViewModel(
                     session = container.sessionRepository,
                     notes = container.notesRepository,
                     syncEngine = container.syncEngine,
-                    images = container.imageLoader
+                    images = container.imageLoader,
+                    prefs = container.prefs
                 )
             }
         }
