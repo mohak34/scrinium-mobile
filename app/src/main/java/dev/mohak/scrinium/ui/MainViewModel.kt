@@ -40,6 +40,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 sealed interface Screen {
     data object Notes : Screen
@@ -649,6 +650,33 @@ class MainViewModel(
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Unshare failed: ${e.message}") }
             }
+        }
+    }
+
+    // Backlinks for the open note, computed from Room when its info panel
+    // opens (not on every keystroke).
+    private val _backlinks = MutableStateFlow<NoteBacklinks?>(null)
+    val backlinks: StateFlow<NoteBacklinks?> = _backlinks.asStateFlow()
+
+    fun loadBacklinks() {
+        val path = _editor.value?.path ?: return
+        _backlinks.value = null
+        viewModelScope.launch {
+            val all = notes.observeAll().first().filter { !it.isDeleted }.map { it.path to it.content }
+            _backlinks.value = withContext(Dispatchers.Default) { findBacklinks(path, all) }
+        }
+    }
+
+    // Turns the first plain mention of the open note in [sourcePath] into a
+    // wikilink. A local edit like any other: saved to Room, pushed on sync.
+    fun linkMention(sourcePath: String) {
+        val target = _editor.value?.path ?: return
+        viewModelScope.launch {
+            val source = notes.get(sourcePath) ?: return@launch
+            val updated = linkFirstMention(source.content, target) ?: return@launch
+            notes.saveLocally(sourcePath, updated)
+            scheduleAutoSync()
+            loadBacklinks()
         }
     }
 

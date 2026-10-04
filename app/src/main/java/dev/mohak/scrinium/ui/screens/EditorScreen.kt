@@ -1,5 +1,6 @@
 package dev.mohak.scrinium.ui.screens
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -10,11 +11,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -52,6 +57,8 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
     var showRename by remember { mutableStateOf(false) }
     var showDelete by remember { mutableStateOf(false) }
     var showShare by remember { mutableStateOf(false) }
+    var showInfo by remember { mutableStateOf(false) }
+    var showMenu by remember { mutableStateOf(false) }
 
     val fileName = state.path.substringAfterLast('/').removeSuffix(".md")
 
@@ -64,24 +71,48 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                 ),
                 navigationIcon = {
                     IconButton(onClick = { vm.closeEditor() }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
                 actions = {
                     TextButton(onClick = { preview = !preview }) {
                         Text(if (preview) "Edit" else "Preview")
                     }
-                    IconButton(onClick = { showRename = true }) {
-                        Icon(Icons.Default.Edit, contentDescription = "Rename")
-                    }
-                    IconButton(onClick = { showDelete = true }) {
-                        Icon(Icons.Default.Delete, contentDescription = "Delete")
+                    IconButton(onClick = {
+                        vm.loadBacklinks()
+                        tasksVm.loadNoteTasks(state.path)
+                        showInfo = true
+                    }) {
+                        Icon(Icons.Default.Info, contentDescription = "Links and tasks")
                     }
                     IconButton(onClick = {
                         vm.loadShares(state.path)
                         showShare = true
                     }) {
                         Icon(Icons.Default.Share, contentDescription = "Share")
+                    }
+                    Box {
+                        IconButton(onClick = { showMenu = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "More")
+                        }
+                        DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Rename") },
+                                leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                                onClick = {
+                                    showMenu = false
+                                    showRename = true
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Delete") },
+                                leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
+                                onClick = {
+                                    showMenu = false
+                                    showDelete = true
+                                }
+                            )
+                        }
                     }
                 }
             )
@@ -129,6 +160,10 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                 }
             )
         }
+    }
+
+    if (showInfo) {
+        NotePanel(vm, tasksVm, state.path, onDismiss = { showInfo = false })
     }
 
     if (showRename) {
