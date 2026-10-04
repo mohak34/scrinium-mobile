@@ -1,13 +1,17 @@
 package dev.mohak.scrinium.ui
 
 import androidx.lifecycle.ProcessLifecycleOwner
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import dev.mohak.scrinium.BuildConfig
+import dev.mohak.scrinium.data.ImageLoader
 import dev.mohak.scrinium.data.NotesRepository
+import dev.mohak.scrinium.data.noteRelative
+import dev.mohak.scrinium.data.resolveImage
 import dev.mohak.scrinium.data.SessionRepository
 import dev.mohak.scrinium.data.local.NoteEntity
 import dev.mohak.scrinium.data.remote.PublicShare
@@ -73,7 +77,8 @@ data class EditorState(val path: String, val text: String)
 class MainViewModel(
     private val session: SessionRepository,
     private val notes: NotesRepository,
-    private val syncEngine: SyncEngine
+    private val syncEngine: SyncEngine,
+    private val images: ImageLoader
 ) : ViewModel() {
 
     val signedIn: StateFlow<Boolean> = session.signedIn
@@ -680,6 +685,35 @@ class MainViewModel(
         }
     }
 
+    // Image in the open note's preview. Null (alt text shown) when offline
+    // and not cached, or when the reference doesn't resolve.
+    suspend fun loadImage(notePath: String, raw: String): ImageBitmap? {
+        val source = resolveImage(raw, notePath) ?: return null
+        return try {
+            images.load(source)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Uploads a picked image to the vault's attachments folder (the web
+     * default) and returns the markdown to insert, path relative to the note.
+     * Online only; failures surface in the error banner.
+     */
+    suspend fun uploadImage(notePath: String, bytes: ByteArray, mimeType: String?, name: String): String? {
+        return try {
+            val (body, mime) = withContext(Dispatchers.Default) { ImageLoader.prepareUpload(bytes, mimeType) }
+                ?: throw IllegalArgumentException("Unsupported image")
+            val ext = mime.substringAfter('/').replace("jpeg", "jpg")
+            val stored = notes.uploadAttachment(body, mime, "image.$ext", ATTACHMENTS_FOLDER)
+            "![${name.substringBeforeLast('.').ifBlank { "image" }}](${noteRelative(notePath, stored)})"
+        } catch (e: Exception) {
+            _sync.update { it.copy(error = "Image upload failed: ${e.message}") }
+            null
+        }
+    }
+
     fun deleteCurrentNote() {
         viewModelScope.launch {
             val current = _editor.value ?: return@launch
@@ -824,13 +858,15 @@ class MainViewModel(
     companion object {
         private const val AUTO_PUSH_DELAY_MS = 5_000L
         private const val FOREGROUND_PULL_MS = 60_000L
+        private const val ATTACHMENTS_FOLDER = "attachments"
 
         fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 MainViewModel(
                     session = container.sessionRepository,
                     notes = container.notesRepository,
-                    syncEngine = container.syncEngine
+                    syncEngine = container.syncEngine,
+                    images = container.imageLoader
                 )
             }
         }

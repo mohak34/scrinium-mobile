@@ -2,6 +2,7 @@ package dev.mohak.scrinium.di
 
 import android.content.Context
 import dev.mohak.scrinium.BuildConfig
+import dev.mohak.scrinium.data.ImageLoader
 import dev.mohak.scrinium.data.NotesRepository
 import dev.mohak.scrinium.data.SecureTokenStore
 import dev.mohak.scrinium.data.SessionRepository
@@ -24,6 +25,7 @@ class AppContainer(context: Context) {
     lateinit var api: ScriniumApi
 
     val notesRepository: NotesRepository
+    val imageLoader: ImageLoader
     val syncEngine: SyncEngine
 
     init {
@@ -37,6 +39,7 @@ class AppContainer(context: Context) {
         )
         sessionRepository = SessionRepository(appContext, tokenStore, api)
         notesRepository = NotesRepository(database.noteDao(), api)
+        imageLoader = ImageLoader(api)
         syncEngine = SyncEngine(database.noteDao(), api) { tokenStore.token.value }
     }
 }

@@ -1,5 +1,6 @@
 package dev.mohak.scrinium.ui
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,10 +14,14 @@ import androidx.compose.foundation.text.ClickableText
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -31,6 +36,8 @@ import androidx.compose.ui.unit.sp
 private val wikilinkPattern = Regex("""\[\[([^|\]]+)(?:\|([^\]]+))?]]""")
 private val tagPattern = Regex("""(?<!\S)#([A-Za-z][A-Za-z0-9_-]*(?:/[A-Za-z][A-Za-z0-9_-]*)*)""")
 private val calloutPattern = Regex("""\[!([\w-]+)](.*)""")
+// A line that is only an image: `![alt](url)` or `![alt](url "title")`.
+private val imageLinePattern = Regex("""^!\[([^\]]*)]\(\s*(<[^>]+>|[^)\s]+)(?:\s+"[^"]*")?\s*\)$""")
 
 // One parsed block. Text blocks carry a pre-rendered AnnotatedString so tap
 // annotations (tasks, wikilinks, tags) survive the split into composables.
@@ -41,6 +48,7 @@ private sealed interface Block {
     data class Math(val text: String) : Block
     data class Quote(val content: AnnotatedString) : Block
     data class Callout(val kind: String, val title: String, val content: AnnotatedString?) : Block
+    data class Image(val alt: String, val url: String) : Block
     data object Rule : Block
 }
 
@@ -50,7 +58,8 @@ fun MarkdownText(
     modifier: Modifier = Modifier,
     onWikilinkClick: (String) -> Unit = {},
     onToggleTaskLine: (Int) -> Unit = {},
-    onTagClick: (String) -> Unit = {}
+    onTagClick: (String) -> Unit = {},
+    loadImage: suspend (String) -> ImageBitmap? = { null }
 ) {
     val colors = MaterialTheme.colorScheme
     val renderer = remember(colors) {
@@ -233,6 +242,7 @@ fun MarkdownText(
                         }
                     }
                 }
+                is Block.Image -> MarkdownImage(block, loadImage, colors.onSurfaceVariant)
                 is Block.Rule -> HorizontalDivider(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -241,6 +251,32 @@ fun MarkdownText(
                 )
             }
         }
+    }
+}
+
+// Loads through the caller (auth + cache live there). Alt text stands in
+// while loading and when the image can't be fetched.
+@Composable
+private fun MarkdownImage(block: Block.Image, loadImage: suspend (String) -> ImageBitmap?, muted: Color) {
+    val bitmap by produceState<ImageBitmap?>(null, block.url) { value = loadImage(block.url) }
+    val image = bitmap
+    if (image == null) {
+        androidx.compose.material3.Text(
+            text = "[image: ${block.alt.ifBlank { block.url }}]",
+            color = muted,
+            fontSize = 13.sp,
+            modifier = Modifier.padding(bottom = 12.dp)
+        )
+    } else {
+        Image(
+            bitmap = image,
+            contentDescription = block.alt.ifBlank { null },
+            contentScale = ContentScale.FillWidth,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp)
+                .clip(RoundedCornerShape(6.dp))
+        )
     }
 }
 
@@ -324,6 +360,11 @@ private class MarkdownRenderer(
                         if (math.isNotBlank()) out += Block.Math(math)
                         i++
                     }
+                }
+                imageLinePattern.matches(trimmed.trimEnd()) -> {
+                    val m = imageLinePattern.matchEntire(trimmed.trimEnd())!!
+                    out += Block.Image(m.groupValues[1], m.groupValues[2])
+                    i++
                 }
                 headingLevel(trimmed) != null -> {
                     val level = headingLevel(trimmed)!!
@@ -410,7 +451,7 @@ private class MarkdownRenderer(
     }
 
     private fun isBlockStart(line: String): Boolean =
-        line.startsWith("```") || line.startsWith("$$") || line.startsWith(">") ||
+        imageLinePattern.matches(line.trimEnd()) || line.startsWith("```") || line.startsWith("$$") || line.startsWith(">") ||
             line.startsWith("---") || line.startsWith("***") || line.startsWith("___") ||
             headingLevel(line) != null || listMarker(line) != null
 
