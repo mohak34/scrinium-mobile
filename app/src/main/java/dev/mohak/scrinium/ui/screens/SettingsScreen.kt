@@ -24,6 +24,16 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import dev.mohak.scrinium.data.remote.ApiTokenDto
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -58,6 +68,7 @@ fun SettingsScreen(vm: MainViewModel) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp)
         ) {
             SectionLabel("Account")
@@ -123,6 +134,75 @@ fun SettingsScreen(vm: MainViewModel) {
             OutlinedButton(onClick = { vm.openTrash() }) {
                 Text("Trash")
             }
+            Spacer(Modifier.height(24.dp))
+
+            SectionLabel("Devices")
+            val devices by vm.devices.collectAsStateWithLifecycle()
+            LaunchedEffect(Unit) { vm.loadDevices() }
+            val current = vm.currentDeviceHash
+            var revoking by remember { mutableStateOf<ApiTokenDto?>(null) }
+            if (devices.isEmpty()) {
+                Text(
+                    text = "No devices loaded",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            for (d in devices) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = (if (d.tokenHash == current) "This phone" else "Device") + "  " + d.tokenHash.take(8),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = "Signed in ${relativeTime(d.createdAt)}" +
+                                (d.lastUsedAt?.let { ", last used ${relativeTime(it)}" } ?: ""),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    TextButton(onClick = { revoking = d }) { Text("Revoke") }
+                }
+            }
+            revoking?.let { d ->
+                AlertDialog(
+                    onDismissRequest = { revoking = null },
+                    title = { Text("Revoke device?") },
+                    text = {
+                        Text(
+                            if (d.tokenHash == current) "This phone will be signed out."
+                            else "That device will have to sign in again."
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            revoking = null
+                            vm.revokeDevice(d.tokenHash)
+                        }) { Text("Revoke") }
+                    },
+                    dismissButton = { TextButton(onClick = { revoking = null }) { Text("Cancel") } }
+                )
+            }
+            Spacer(Modifier.height(24.dp))
+
+            SectionLabel("New note template")
+            var template by remember { mutableStateOf(vm.template.value) }
+            OutlinedTextField(
+                value = template,
+                onValueChange = {
+                    template = it
+                    vm.setTemplate(it)
+                },
+                placeholder = { Text("# {{title}}") },
+                minLines = 3,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                text = "Used when it contains {{title}}. This phone only.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             Spacer(Modifier.height(24.dp))
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)

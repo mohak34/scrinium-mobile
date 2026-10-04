@@ -11,16 +11,31 @@ reconciles with the server in the background while the app is open. See
 ## Features
 
 - File tree with folders: create, rename, move, delete, drag and drop
-- Markdown editor with rich preview: headings, lists, task checkboxes,
-  tables of code, math, blockquotes, kind-colored callouts, wikilinks, tag
-  pills
+- Live-preview markdown editor: marks hide except on the cursor's line,
+  `[[` note and `#tag` autocomplete. Rich preview mode too: headings,
+  lists, task checkboxes, code, math, blockquotes, kind-colored callouts,
+  wikilinks, tag pills
+- Pinned notes and folders, new-note template (`{{title}}`), both kept on
+  the phone like the web keeps them in the browser
+- PDF export through the Android print dialog
 - Title-filename two-way sync (first `# ` heading and frontmatter `title:`)
 - Server full-text search with snippets, title-ranked like the web client
 - Tag browsing via the server tags API
 - Server trash with restore, purge, empty
 - Public share links with optional passwords
+- Tasks: list (Overdue, Today, Upcoming, No date, Done), board by status,
+  month calendar by due date with Google Calendar events, area filter.
+  Detail screen with status, area, priority, due date and time, reminder,
+  waiting-on, subtasks and linked notes. Online only. Reminders become
+  phone notifications; ones set on the web arm the next time the app opens
+- Note panel: outline, frontmatter properties, tasks linked to the note,
+  backlinks, unlinked mentions you can turn into links, word count
+- Devices: list and revoke signed-in phones from Settings
+- Images in preview (vault images through the asset API, disk-cached for
+  an hour), and image upload from the editor into `attachments/`
 - Foreground-only sync: 5s auto-push after edits settle, 60s pull tick,
-  sync on foreground and pull-to-refresh. Killing the app stops everything.
+  sync on foreground and pull-to-refresh. Killing the app stops sync;
+  only reminder alarms outlive it.
 
 ## Getting started
 

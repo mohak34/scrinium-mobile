@@ -11,11 +11,15 @@ rules below are the decisions that keep it small and battery-friendly.
 
 ## Non-negotiables
 
-1. **No background work at all.** Sync runs only while the app is open:
-   auto-push 5s after local edits settle, a 60s pull tick while
-   foregrounded, plus on app foreground and manual pull-to-refresh. No
-   WorkManager jobs, no foreground service, no polling loop — killing the
-   app stops everything.
+1. **No background work, except reminder alarms.** Sync runs only while
+   the app is open: auto-push 5s after local edits settle, a 60s pull tick
+   while foregrounded, plus on app foreground and manual pull-to-refresh.
+   No WorkManager jobs, no foreground service, no polling loop — killing
+   the app stops sync. The one exception: each future task reminder is an
+   exact `AlarmManager` alarm (`reminders/Reminders.kt`) that wakes the app
+   once to post a notification, re-armed after reboot from local storage.
+   The alarms are rebuilt from the task list whenever the app loads it; no
+   network happens outside the app.
 2. **Manifest-first sync.** Sync fetches `GET /api/notes/manifest` (metadata
    only — path, mtime, size-fingerprint), diffs against Room, and only then
    fetches/pushes the notes that actually changed. Never download the whole
@@ -66,8 +70,25 @@ in release.
 - `DELETE /api/notes/<path>` → move to trash (recovers to vault `.trash`)
 - `GET /api/tree` → nested vault listing
 - `GET /api/search?q=` → `[{ path, title, snippet }]` (FTS5)
+- `GET /api/tasks` (`?note=<path>` for one note's tasks), `POST /api/tasks`,
+  `PATCH|DELETE /api/tasks/<id>`, `GET|POST|DELETE /api/tasks/<id>/links`.
+  Rows are snake_case. Tasks live in the server's SQLite, not the vault, so
+  they are online-only: `TasksViewModel` calls the API directly, no Room.
+- `GET|DELETE /api/tokens` → signed-in devices `[{ token_hash, created_at,
+  last_used_at }]`; DELETE body `{ token_hash }` revokes one. The phone
+  finds its own row by hashing its token.
+- `GET /api/calendar/events?from=&to=` (epoch ms, at most 93 days) →
+  `{ events: [{ id, title, start, end, allDay }], needsConnect? }`, the
+  Google Calendar linked by the web sign-in.
+- `GET /api/assets/<path>` → image bytes; `POST /api/attachments` (multipart
+  `file` + `folder`) → `{ path }`. Phone uploads go to `attachments/`, the
+  web default, and the note gets a note-relative `![name](path)`.
 
-Paths are URL-encoded per segment. Attachments are out of scope for v1.
+Paths are URL-encoded per segment. Backlinks are computed on the phone from
+Room (`ui/Backlinks.kt`, a port of the web's `wikilinks.ts`), not fetched.
+One `resolveWikilink` serves link taps, backlinks and `[[` autocomplete:
+vault path, then the source note's folder, then a unique name. Unlike the
+web it does not pick the shortest path when a name is ambiguous.
 
 ## Sync engine rules
 

@@ -25,11 +25,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
@@ -99,6 +101,7 @@ fun NotesScreen(vm: MainViewModel) {
     val collapsed by vm.collapsedFolders.collectAsStateWithLifecycle()
     val sync by vm.sync.collectAsStateWithLifecycle()
     val unsynced by vm.unsyncedCount.collectAsStateWithLifecycle()
+    val pinned by vm.pinned.collectAsStateWithLifecycle()
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -118,10 +121,11 @@ fun NotesScreen(vm: MainViewModel) {
     var dragLabel by remember { mutableStateOf("") }
     var dragFingerY by remember { mutableFloatStateOf(0f) }
 
-    val items = remember(notes, collapsed) { buildTree(notes, collapsed) }
+    val items = remember(notes, collapsed, pinned) { buildTree(notes, collapsed, pinned) }
     val folders = remember(notes) { folderPaths(notes) }
     var folderMenu by remember { mutableStateOf<String?>(null) }
     var moveTarget by remember { mutableStateOf<NoteEntity?>(null) }
+    var noteMenu by remember { mutableStateOf<NoteEntity?>(null) }
     var moveFolderTarget by remember { mutableStateOf<String?>(null) }
     var renameFolderTarget by remember { mutableStateOf<String?>(null) }
     var deleteFolderTarget by remember { mutableStateOf<String?>(null) }
@@ -241,6 +245,9 @@ fun NotesScreen(vm: MainViewModel) {
                         IconButton(onClick = { vm.openSearch() }) {
                             Icon(Icons.Default.Search, contentDescription = "Search")
                         }
+                        IconButton(onClick = { vm.openTasks() }) {
+                            Icon(Icons.Default.CheckCircle, contentDescription = "Tasks")
+                        }
                         IconButton(onClick = { vm.openTags() }) {
                             Text(
                                 text = "#",
@@ -344,6 +351,7 @@ fun NotesScreen(vm: MainViewModel) {
                                     val parent = item.note.path.substringBeforeLast('/', "")
                                     NoteRow(
                                         note = item.note,
+                                        pinned = item.pinned,
                                         now = now,
                                         depth = item.depth,
                                         highlighted = dropTarget != null && dropTarget == parent,
@@ -356,7 +364,7 @@ fun NotesScreen(vm: MainViewModel) {
                                                 listState.layoutInfo.visibleItemsInfo
                                                     .firstOrNull { it.key == "f:${item.note.path}" }
                                                     ?.let { it.offset + it.size / 2f } ?: 0f
-                                            ) { moveTarget = item.note }
+                                            ) { noteMenu = item.note }
                                         }
                                     )
                                 }
@@ -417,6 +425,10 @@ fun NotesScreen(vm: MainViewModel) {
                         folderMenu = null
                         vm.createNoteIn(folder)
                     }
+                    FolderMenuButton(if (folder in pinned) "Unpin folder" else "Pin folder") {
+                        folderMenu = null
+                        vm.togglePin(folder)
+                    }
                     FolderMenuButton("Rename folder") {
                         folderMenu = null
                         renameFolderTarget = folder
@@ -434,6 +446,29 @@ fun NotesScreen(vm: MainViewModel) {
             confirmButton = {},
             dismissButton = {
                 TextButton(onClick = { folderMenu = null }) { Text("Cancel") }
+            }
+        )
+    }
+
+    noteMenu?.let { note ->
+        AlertDialog(
+            onDismissRequest = { noteMenu = null },
+            title = { Text(noteTitle(note.path, note.content), maxLines = 1) },
+            text = {
+                Column {
+                    FolderMenuButton(if (note.path in pinned) "Unpin" else "Pin") {
+                        noteMenu = null
+                        vm.togglePin(note.path)
+                    }
+                    FolderMenuButton("Move to folder") {
+                        noteMenu = null
+                        moveTarget = note
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { noteMenu = null }) { Text("Cancel") }
             }
         )
     }
@@ -698,6 +733,7 @@ private fun FolderRow(
                 )
             }
         }
+        if (folder.pinned) PinMark()
         Text(
             text = folder.noteCount.toString(),
             style = MaterialTheme.typography.bodySmall,
@@ -719,6 +755,7 @@ private fun FolderRow(
 @Composable
 private fun NoteRow(
     note: NoteEntity,
+    pinned: Boolean,
     now: Long,
     depth: Int,
     highlighted: Boolean,
@@ -751,6 +788,7 @@ private fun NoteRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+        if (pinned) PinMark()
         if (note.localModifiedAt != null) {
             Box(
                 modifier = Modifier
@@ -760,6 +798,16 @@ private fun NoteRow(
             )
         }
     }
+}
+
+@Composable
+private fun PinMark() {
+    Icon(
+        Icons.Default.Star,
+        contentDescription = "Pinned",
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = 8.dp).size(14.dp)
+    )
 }
 
 @Composable

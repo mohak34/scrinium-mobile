@@ -1,10 +1,18 @@
 package dev.mohak.scrinium.data.remote
 
 import android.net.Uri
+import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import okhttp3.Cache
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.ResponseBody
@@ -14,9 +22,12 @@ import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.HTTP
+import retrofit2.http.Multipart
 import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.PUT
+import retrofit2.http.Part
 import retrofit2.http.Path
 import retrofit2.http.Query
 
@@ -66,6 +77,62 @@ data class PublicShare(
 
 @Serializable
 data class CreateShareRequest(val path: String, val password: String? = null)
+
+// Row shape of the server's `tasks` table (snake_case on the wire). Tasks
+// live in the server's SQLite, not in .md files, so they never touch Room.
+@Serializable
+data class TaskDto(
+    val id: String,
+    val title: String,
+    val detail: String = "",
+    val status: String,
+    val priority: String = "none",
+    val area: String? = null,
+    @SerialName("waiting_on") val waitingOn: String? = null,
+    @SerialName("waiting_since") val waitingSince: Long? = null,
+    @SerialName("parent_id") val parentId: String? = null,
+    @SerialName("due_at") val dueAt: Long? = null,
+    @SerialName("remind_at") val remindAt: Long? = null,
+    @SerialName("link_count") val linkCount: Int = 0,
+    val position: Double = 0.0,
+    @SerialName("created_at") val createdAt: Long = 0L,
+    @SerialName("updated_at") val updatedAt: Long = 0L
+)
+
+// No defaults on purpose: the converter skips default-valued fields, and a
+// missing status makes the server pick 'todo' instead of what we asked for.
+@Serializable
+data class NewTaskRequest(
+    val title: String,
+    val status: String,
+    val area: String?,
+    @SerialName("due_at") val dueAt: Long?,
+    @SerialName("parent_id") val parentId: String?
+)
+
+@Serializable
+data class TaskLinkRequest(@SerialName("note_path") val notePath: String)
+
+@Serializable
+data class AttachmentResponse(val path: String)
+
+// One signed-in device. Only the token's SHA-256 is stored server-side.
+@Serializable
+data class ApiTokenDto(
+    @SerialName("token_hash") val tokenHash: String,
+    @SerialName("created_at") val createdAt: Long,
+    @SerialName("last_used_at") val lastUsedAt: Long? = null
+)
+
+@Serializable
+data class RevokeTokenRequest(@SerialName("token_hash") val tokenHash: String)
+
+// Google Calendar event, times in epoch ms. All-day events start at UTC midnight.
+@Serializable
+data class CalendarEvent(val id: String, val title: String, val start: Long, val end: Long, val allDay: Boolean)
+
+@Serializable
+data class CalendarResponse(val events: List<CalendarEvent> = emptyList(), val needsConnect: Boolean = false)
 
 private interface ScriniumService {
     @POST("api/auth/mobile")
@@ -121,24 +188,84 @@ private interface ScriniumService {
 
     @DELETE("api/shares/{id}")
     suspend fun deleteShare(@Path("id") id: String): Response<ResponseBody>
+
+    @GET("api/tasks")
+    suspend fun tasks(@Query("note") note: String? = null): List<TaskDto>
+
+    @POST("api/tasks")
+    suspend fun createTask(@Body body: NewTaskRequest): TaskDto
+
+    // Partial update: only the keys present change; JSON null clears a field.
+    @PATCH("api/tasks/{id}")
+    suspend fun patchTask(@Path("id") id: String, @Body body: JsonObject): TaskDto
+
+    @DELETE("api/tasks/{id}")
+    suspend fun deleteTask(@Path("id") id: String): Response<ResponseBody>
+
+    @GET("api/tasks/{id}/links")
+    suspend fun taskLinks(@Path("id") id: String): List<String>
+
+    @POST("api/tasks/{id}/links")
+    suspend fun addTaskLink(@Path("id") id: String, @Body body: TaskLinkRequest): List<String>
+
+    @DELETE("api/tasks/{id}/links")
+    suspend fun removeTaskLink(@Path("id") id: String, @Query("note_path") notePath: String): List<String>
+
+    @GET("api/tokens")
+    suspend fun tokens(): List<ApiTokenDto>
+
+    @HTTP(method = "DELETE", path = "api/tokens", hasBody = true)
+    suspend fun revokeToken(@Body body: RevokeTokenRequest): Response<ResponseBody>
+
+    @GET("api/calendar/events")
+    suspend fun calendarEvents(@Query("from") from: Long, @Query("to") to: Long): CalendarResponse
+
+    @Multipart
+    @POST("api/attachments")
+    suspend fun uploadAttachment(
+        @Part file: MultipartBody.Part,
+        @Part("folder") folder: RequestBody
+    ): AttachmentResponse
 }
 
 class ApiException(val status: Int) : Exception("API error $status")
 
+// What TasksViewModel needs from the server, so tests can fake it.
+interface TasksApi {
+    suspend fun fetchTasks(): List<TaskDto>
+    suspend fun fetchTasksForNote(path: String): List<TaskDto>
+    suspend fun createTask(body: NewTaskRequest): TaskDto
+    suspend fun patchTask(id: String, patch: JsonObject): TaskDto
+    suspend fun deleteTask(id: String)
+    suspend fun fetchTaskLinks(id: String): List<String>
+    suspend fun addTaskLink(id: String, notePath: String): List<String>
+    suspend fun removeTaskLink(id: String, notePath: String): List<String>
+    suspend fun fetchCalendarEvents(from: Long, to: Long): CalendarResponse
+}
+
 class ScriniumApi(
     baseUrl: String,
     tokenProvider: () -> String?,
-    onUnauthorized: () -> Unit
-) {
+    onUnauthorized: () -> Unit,
+    cacheDir: File
+) : TasksApi {
     private val textMediaType = "text/plain".toMediaType()
+    private val root = baseUrl.trimEnd('/') + "/"
+
+    private val client = OkHttpClient.Builder()
+        .addInterceptor(AuthInterceptor(tokenProvider, onUnauthorized))
+        .build()
+
+    // Images only. The server marks assets `private, max-age=3600`, so a disk
+    // cache keeps recently viewed images working offline. Kept off the note
+    // client so a cached response can never stand in for note content.
+    private val assetClient = client.newBuilder()
+        .cache(Cache(File(cacheDir, "assets"), 50L * 1024 * 1024))
+        .build()
 
     private val service: ScriniumService = Retrofit.Builder()
-        .baseUrl(baseUrl.trimEnd('/') + "/")
-        .client(
-            OkHttpClient.Builder()
-                .addInterceptor(AuthInterceptor(tokenProvider, onUnauthorized))
-                .build()
-        )
+        .baseUrl(root)
+        .client(client)
         .addConverterFactory(Json { ignoreUnknownKeys = true }.asConverterFactory("application/json".toMediaType()))
         .build()
         .create(ScriniumService::class.java)
@@ -194,6 +321,55 @@ class ScriniumApi(
         val res = service.deleteShare(id)
         if (!res.isSuccessful) throw ApiException(res.code())
     }
+
+    override suspend fun fetchTasks(): List<TaskDto> = service.tasks()
+
+    override suspend fun fetchTasksForNote(path: String): List<TaskDto> = service.tasks(note = path)
+
+    override suspend fun createTask(body: NewTaskRequest): TaskDto = service.createTask(body)
+
+    override suspend fun patchTask(id: String, patch: JsonObject): TaskDto = service.patchTask(Uri.encode(id), patch)
+
+    override suspend fun deleteTask(id: String) {
+        val res = service.deleteTask(Uri.encode(id))
+        if (!res.isSuccessful) throw ApiException(res.code())
+    }
+
+    override suspend fun fetchTaskLinks(id: String): List<String> = service.taskLinks(Uri.encode(id))
+
+    override suspend fun addTaskLink(id: String, notePath: String): List<String> =
+        service.addTaskLink(Uri.encode(id), TaskLinkRequest(notePath))
+
+    override suspend fun removeTaskLink(id: String, notePath: String): List<String> =
+        service.removeTaskLink(Uri.encode(id), notePath)
+
+    // Vault-relative image path -> raw bytes, through the auth-gated asset API.
+    suspend fun fetchAsset(path: String): ByteArray = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url(root + "api/assets/" + encPath(path)).build()
+        assetClient.newCall(request).execute().use { res ->
+            if (!res.isSuccessful) throw ApiException(res.code)
+            res.body.bytes()
+        }
+    }
+
+    // Returns the vault-relative path the server stored the image at.
+    suspend fun uploadAttachment(bytes: ByteArray, mimeType: String, fileName: String, folder: String): String {
+        val part = MultipartBody.Part.createFormData(
+            "file",
+            fileName,
+            bytes.toRequestBody(mimeType.toMediaType())
+        )
+        return service.uploadAttachment(part, folder.toRequestBody(textMediaType)).path
+    }
+
+    suspend fun fetchTokens(): List<ApiTokenDto> = service.tokens()
+
+    suspend fun revokeToken(tokenHash: String) {
+        val res = service.revokeToken(RevokeTokenRequest(tokenHash))
+        if (!res.isSuccessful) throw ApiException(res.code())
+    }
+
+    override suspend fun fetchCalendarEvents(from: Long, to: Long): CalendarResponse = service.calendarEvents(from, to)
 
     companion object {
         fun encPath(path: String): String =

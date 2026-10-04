@@ -10,7 +10,10 @@ import androidx.credentials.exceptions.GetCredentialException
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import dev.mohak.scrinium.BuildConfig
+import dev.mohak.scrinium.data.remote.ApiTokenDto
 import dev.mohak.scrinium.data.remote.ScriniumApi
+import dev.mohak.scrinium.reminders.Reminders
+import java.security.MessageDigest
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -18,7 +21,8 @@ import kotlinx.coroutines.flow.asStateFlow
 class SessionRepository(
     context: Context,
     private val tokenStore: SecureTokenStore,
-    private val api: ScriniumApi
+    private val api: ScriniumApi,
+    private val reminders: Reminders
 ) {
     private val credentialManager = CredentialManager.create(context)
 
@@ -87,6 +91,7 @@ class SessionRepository(
     }
 
     suspend fun forceSignOut() {
+        reminders.clearAll()
         tokenStore.setToken(null)
         tokenStore.setEmail(null)
         _email.value = null
@@ -94,6 +99,16 @@ class SessionRepository(
         runCatching {
             credentialManager.clearCredentialState(ClearCredentialStateRequest())
         }
+    }
+
+    // Signed-in devices (API tokens) for this account. The server stores
+    // only SHA-256 hashes, so hashing our own token finds this phone's row.
+    suspend fun fetchDevices(): List<ApiTokenDto> = api.fetchTokens()
+
+    suspend fun revokeDevice(tokenHash: String) = api.revokeToken(tokenHash)
+
+    fun currentTokenHash(): String? = tokenStore.token.value?.let { raw ->
+        MessageDigest.getInstance("SHA-256").digest(raw.toByteArray()).joinToString("") { "%02x".format(it) }
     }
 
     fun clearError() {

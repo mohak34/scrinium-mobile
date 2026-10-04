@@ -1,15 +1,23 @@
 package dev.mohak.scrinium.ui
 
 import androidx.lifecycle.ProcessLifecycleOwner
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import dev.mohak.scrinium.BuildConfig
+import android.util.Base64
+import dev.mohak.scrinium.data.ImageLoader
+import dev.mohak.scrinium.data.ImageSource
 import dev.mohak.scrinium.data.NotesRepository
+import dev.mohak.scrinium.data.Prefs
+import dev.mohak.scrinium.data.noteRelative
+import dev.mohak.scrinium.data.resolveImage
 import dev.mohak.scrinium.data.SessionRepository
 import dev.mohak.scrinium.data.local.NoteEntity
+import dev.mohak.scrinium.data.remote.ApiTokenDto
 import dev.mohak.scrinium.data.remote.PublicShare
 import dev.mohak.scrinium.data.remote.SearchResult
 import dev.mohak.scrinium.data.remote.TagCount
@@ -21,6 +29,7 @@ import dev.mohak.scrinium.sync.SyncReport
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -40,6 +49,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 sealed interface Screen {
     data object Notes : Screen
@@ -48,6 +58,7 @@ sealed interface Screen {
     data object Settings : Screen
     data object Tags : Screen
     data object Trash : Screen
+    data object Tasks : Screen
 }
 
 // Back history for the editor: note→note (wikilinks), search→note and
@@ -56,6 +67,7 @@ private sealed interface History {
     data class Note(val path: String) : History
     data class Search(val query: String, val origin: Screen) : History
     data class Tags(val tag: String?) : History
+    data object Tasks : History
 }
 
 data class SyncUiState(
@@ -65,12 +77,18 @@ data class SyncUiState(
     val report: SyncReport? = null
 )
 
-data class EditorState(val path: String, val text: String)
+private var nextEditorId = 0L
+
+// [id] names one open-note session: a fresh one per note opened, kept by
+// renames (copy), so the editor field survives its note changing path.
+data class EditorState(val path: String, val text: String, val id: Long = ++nextEditorId)
 
 class MainViewModel(
     private val session: SessionRepository,
     private val notes: NotesRepository,
-    private val syncEngine: SyncEngine
+    private val syncEngine: SyncEngine,
+    private val images: ImageLoader,
+    private val prefs: Prefs
 ) : ViewModel() {
 
     val signedIn: StateFlow<Boolean> = session.signedIn
@@ -100,6 +118,23 @@ class MainViewModel(
     fun toggleFolder(path: String) {
         _collapsedFolders.update { if (path in it) it - path else it + path }
     }
+
+    // Tags for editor autocomplete, from Room so they work offline.
+    val vaultTags: StateFlow<List<String>> = notesFlow
+        .map { list -> vaultTags(list.map { it.content }) }
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Pinned notes and folders sort first at their level of the tree.
+    val pinned: StateFlow<Set<String>> = prefs.pinned
+    val template: StateFlow<String> = prefs.template
+
+    fun togglePin(path: String) {
+        val now = prefs.pinned.value
+        prefs.setPinned(if (path in now) now - path else now + path)
+    }
+
+    fun setTemplate(value: String) = prefs.setTemplate(value)
 
     private val editorEdits = MutableStateFlow<Pair<String, String>?>(null)
 
@@ -144,6 +179,7 @@ class MainViewModel(
             }
             Screen.Search -> pushHistory(History.Search(searchQuery.value, _searchOrigin.value))
             Screen.Tags -> pushHistory(History.Tags(_selectedTag.value))
+            Screen.Tasks -> pushHistory(History.Tasks)
             else -> Unit
         }
     }
@@ -317,11 +353,11 @@ class MainViewModel(
         viewModelScope.launch {
             val existing = notes.observeAll().first().map { it.path }
             try {
-                val path = notes.createNote(existing, folder)
-                _editor.value = EditorState(path, "# ${path.substringAfterLast('/').removeSuffix(".md")}\n\n")
+                val note = notes.createNote(existing, folder, prefs::newNoteBody)
+                _editor.value = EditorState(note.path, note.content)
                 editorEdits.value = null
                 titleSyncEdits.value = null
-                _screen.value = Screen.Editor(path)
+                _screen.value = Screen.Editor(note.path)
                 scheduleAutoSync()
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Create failed: ${e.message}") }
@@ -351,6 +387,7 @@ class MainViewModel(
         if (notes.get(target) != null) return
         try {
             val newPath = notes.renameNote(path, safe) ?: return
+            remapPaths(path, newPath)
             if (_editor.value?.path == path) {
                 _editor.value = _editor.value?.copy(path = newPath)
                 val updatedText = _editor.value?.text ?: text
@@ -389,6 +426,10 @@ class MainViewModel(
                     _screen.value = Screen.Tags
                     selectTag(prev.tag)
                 }
+                History.Tasks -> {
+                    _editor.value = null
+                    _screen.value = Screen.Tasks
+                }
                 null -> {
                     _editor.value = null
                     _screen.value = Screen.Notes
@@ -402,6 +443,10 @@ class MainViewModel(
         _screen.update { Screen.Search }
     }
     fun openSettings() = _screen.update { Screen.Settings }
+
+    fun openTasks() = _screen.update { Screen.Tasks }
+
+    fun closeTasks() = _screen.update { Screen.Notes }
 
     // Tags are server-driven (vault-wide counts the phone can't compute
     // cheaply). Loaded on open, quiet offline failure leaves stale list.
@@ -541,30 +586,16 @@ class MainViewModel(
         val target = targetRaw.substringBefore('#').trim()
         if (target.isEmpty()) return
         viewModelScope.launch {
-            val all = notes.observeAll().first().filter { !it.isDeleted }
-            val current = _editor.value
-            val dir = current?.path?.substringBeforeLast('/', "") ?: ""
-            val candidates = buildList {
-                if (dir.isNotBlank()) add("$dir/$target")
-                if (dir.isNotBlank()) add("$dir/$target.md")
-                add(target)
-                add(if (target.endsWith(".md", ignoreCase = true)) target else "$target.md")
-            }
-            val direct = candidates.firstOrNull { c -> all.any { it.path == c } }
-            if (direct != null) {
-                openNote(direct)
+            val paths = notes.observeAll().first().filter { !it.isDeleted }.map { it.path }
+            val hit = resolveWikilink(target, _editor.value?.path ?: "", paths)
+            if (hit != null) {
+                openNote(hit)
                 return@launch
             }
             val stem = target.substringAfterLast('/').removeSuffix(".md")
-            val matches = all.filter {
-                it.path.substringAfterLast('/').removeSuffix(".md").equals(stem, ignoreCase = true)
-            }
-            if (matches.size == 1) {
-                openNote(matches[0].path)
-            } else {
-                _sync.update {
-                    it.copy(error = if (matches.isEmpty()) "Note not found: $target" else "Multiple notes match: $target")
-                }
+            val matches = paths.count { it.substringAfterLast('/').removeSuffix(".md").equals(stem, ignoreCase = true) }
+            _sync.update {
+                it.copy(error = if (matches == 0) "Note not found: $target" else "Multiple notes match: $target")
             }
         }
     }
@@ -641,6 +672,97 @@ class MainViewModel(
         }
     }
 
+    // Backlinks for the open note, computed from Room when its info panel
+    // opens (not on every keystroke).
+    private val _backlinks = MutableStateFlow<NoteBacklinks?>(null)
+    val backlinks: StateFlow<NoteBacklinks?> = _backlinks.asStateFlow()
+
+    fun loadBacklinks() {
+        val path = _editor.value?.path ?: return
+        _backlinks.value = null
+        viewModelScope.launch {
+            val all = notes.observeAll().first().filter { !it.isDeleted }.map { it.path to it.content }
+            _backlinks.value = withContext(Dispatchers.Default) { findBacklinks(path, all) }
+        }
+    }
+
+    // Turns the first plain mention of the open note in [sourcePath] into a
+    // wikilink. A local edit like any other: saved to Room, pushed on sync.
+    fun linkMention(sourcePath: String) {
+        val target = _editor.value?.path ?: return
+        viewModelScope.launch {
+            val source = notes.get(sourcePath) ?: return@launch
+            val updated = linkFirstMention(source.content, target) ?: return@launch
+            notes.saveLocally(sourcePath, updated)
+            scheduleAutoSync()
+            loadBacklinks()
+        }
+    }
+
+    // Image in the open note's preview. Null (alt text shown) when offline
+    // and not cached, or when the reference doesn't resolve.
+    suspend fun loadImage(notePath: String, raw: String): ImageBitmap? {
+        val source = resolveImage(raw, notePath) ?: return null
+        return try {
+            images.load(source)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Uploads a picked image to the vault's attachments folder (the web
+     * default) and returns the markdown to insert, path relative to the note.
+     * Online only; failures surface in the error banner.
+     */
+    suspend fun uploadImage(notePath: String, bytes: ByteArray, mimeType: String?, name: String): String? {
+        return try {
+            val (body, mime) = withContext(Dispatchers.Default) { ImageLoader.prepareUpload(bytes, mimeType) }
+                ?: throw IllegalArgumentException("Unsupported image")
+            val ext = mime.substringAfter('/').replace("jpeg", "jpg")
+            val stored = notes.uploadAttachment(body, mime, "image.$ext", ATTACHMENTS_FOLDER)
+            "![${name.substringBeforeLast('.').ifBlank { "image" }}](${noteRelative(notePath, stored)})"
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _sync.update { it.copy(error = "Image upload failed: ${e.message}") }
+            null
+        }
+    }
+
+    /**
+     * The open note as a printable HTML page. Vault images are inlined as
+     * data URIs (the print WebView has no API token); external images load
+     * by URL; images that fail to load are left out.
+     */
+    suspend fun printableHtml(notePath: String, text: String): String {
+        val refs = text.lineSequence()
+            .mapNotNull { Regex("""^!\[[^\]]*]\(\s*(<[^>]+>|[^)\s]+)""").find(it.trim())?.groupValues?.get(1) }
+            .map { it.removeSurrounding("<", ">") }
+            .toSet()
+        val sources = refs.associateWith { raw ->
+            when (val src = resolveImage(raw, notePath)) {
+                is ImageSource.External -> src.url
+                is ImageSource.Vault -> try {
+                    val bytes = notes.fetchAsset(src.path)
+                    val mime = when (src.path.substringAfterLast('.').lowercase()) {
+                        "png" -> "image/png"
+                        "gif" -> "image/gif"
+                        "webp" -> "image/webp"
+                        "svg" -> "image/svg+xml"
+                        else -> "image/jpeg"
+                    }
+                    "data:$mime;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
+                } catch (_: Exception) {
+                    null
+                }
+                null -> null
+            }
+        }
+        val title = effectiveTitle(text, notePath.substringAfterLast('/').removeSuffix(".md"))
+        return withContext(Dispatchers.Default) { noteHtml(title, text) { sources[it] } }
+    }
+
     fun deleteCurrentNote() {
         viewModelScope.launch {
             val current = _editor.value ?: return@launch
@@ -656,6 +778,7 @@ class MainViewModel(
             val current = _editor.value ?: return@launch
             try {
                 val newPath = notes.renameNote(current.path, newName) ?: return@launch
+                remapPaths(current.path, newPath)
                 // Filename -> title: keep the H1/frontmatter in step with the
                 // new name, same as the web client. Never injects when the
                 // note has no title source.
@@ -667,7 +790,7 @@ class MainViewModel(
                         notes.saveLocally(newPath, updated)
                     }
                 }
-                _editor.value = EditorState(newPath, text)
+                _editor.value = current.copy(path = newPath, text = text)
                 editorEdits.value = null
                 titleSyncEdits.value = null
                 _screen.value = Screen.Editor(newPath)
@@ -681,7 +804,8 @@ class MainViewModel(
     fun moveNote(path: String, newParent: String) {
         viewModelScope.launch {
             try {
-                notes.moveNote(path, newParent) ?: return@launch
+                val newPath = notes.moveNote(path, newParent) ?: return@launch
+                remapPaths(path, newPath)
                 scheduleAutoSync()
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Move failed: ${e.message}") }
@@ -693,7 +817,7 @@ class MainViewModel(
         viewModelScope.launch {
             try {
                 val newPrefix = notes.renameFolder(folder, newName) ?: return@launch
-                remapCollapsed(folder, newPrefix)
+                remapPaths(folder, newPrefix)
                 scheduleAutoSync()
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Rename failed: ${e.message}") }
@@ -705,7 +829,7 @@ class MainViewModel(
         viewModelScope.launch {
             try {
                 val newPrefix = notes.moveFolder(folder, newParent) ?: return@launch
-                remapCollapsed(folder, newPrefix)
+                remapPaths(folder, newPrefix)
                 scheduleAutoSync()
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Move failed: ${e.message}") }
@@ -713,16 +837,14 @@ class MainViewModel(
         }
     }
 
-    // Follows collapsed state across a folder prefix rewrite so expanded
-    // folders stay expanded after a rename/move.
-    private fun remapCollapsed(oldPrefix: String, newPrefix: String) {
-        _collapsedFolders.update { collapsed ->
-            collapsed.map { path ->
-                if (path == oldPrefix || path.startsWith("$oldPrefix/")) {
-                    newPrefix + path.removePrefix(oldPrefix)
-                } else path
-            }.toSet()
-        }
+    // Follows collapsed and pinned state across a path or folder prefix
+    // rewrite so both survive a rename/move.
+    private fun remapPaths(oldPrefix: String, newPrefix: String) {
+        fun remap(paths: Set<String>) = paths.map { path ->
+            if (path == oldPrefix || path.startsWith("$oldPrefix/")) newPrefix + path.removePrefix(oldPrefix) else path
+        }.toSet()
+        _collapsedFolders.update(::remap)
+        prefs.pinned.value.let { if (it.any { p -> p == oldPrefix || p.startsWith("$oldPrefix/") }) prefs.setPinned(remap(it)) }
     }
 
     fun deleteFolder(folder: String) {
@@ -774,6 +896,34 @@ class MainViewModel(
         syncNow()
     }
 
+    // Settings > Devices: every phone signed in to this account.
+    private val _devices = MutableStateFlow<List<ApiTokenDto>>(emptyList())
+    val devices: StateFlow<List<ApiTokenDto>> = _devices.asStateFlow()
+    val currentDeviceHash: String? get() = session.currentTokenHash()
+
+    fun loadDevices() {
+        viewModelScope.launch {
+            try {
+                _devices.value = session.fetchDevices().sortedByDescending { it.lastUsedAt ?: it.createdAt }
+            } catch (e: Exception) {
+                _sync.update { it.copy(error = "Couldn't load devices: ${e.message}") }
+            }
+        }
+    }
+
+    // Revoking this phone's own token is a sign-out.
+    fun revokeDevice(tokenHash: String) {
+        viewModelScope.launch {
+            try {
+                session.revokeDevice(tokenHash)
+                _devices.update { list -> list.filterNot { it.tokenHash == tokenHash } }
+                if (tokenHash == session.currentTokenHash()) session.forceSignOut()
+            } catch (e: Exception) {
+                _sync.update { it.copy(error = "Couldn't revoke device: ${e.message}") }
+            }
+        }
+    }
+
     fun signOut() {
         viewModelScope.launch { session.forceSignOut() }
     }
@@ -782,16 +932,23 @@ class MainViewModel(
         _sync.update { it.copy(error = null) }
     }
 
+    fun reportError(message: String) {
+        _sync.update { it.copy(error = message) }
+    }
+
     companion object {
         private const val AUTO_PUSH_DELAY_MS = 5_000L
         private const val FOREGROUND_PULL_MS = 60_000L
+        private const val ATTACHMENTS_FOLDER = "attachments"
 
         fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 MainViewModel(
                     session = container.sessionRepository,
                     notes = container.notesRepository,
-                    syncEngine = container.syncEngine
+                    syncEngine = container.syncEngine,
+                    images = container.imageLoader,
+                    prefs = container.prefs
                 )
             }
         }

@@ -1,5 +1,6 @@
 package dev.mohak.scrinium.ui
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,10 +14,16 @@ import androidx.compose.foundation.text.ClickableText
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -31,16 +38,19 @@ import androidx.compose.ui.unit.sp
 private val wikilinkPattern = Regex("""\[\[([^|\]]+)(?:\|([^\]]+))?]]""")
 private val tagPattern = Regex("""(?<!\S)#([A-Za-z][A-Za-z0-9_-]*(?:/[A-Za-z][A-Za-z0-9_-]*)*)""")
 private val calloutPattern = Regex("""\[!([\w-]+)](.*)""")
+// A line that is only an image: `![alt](url)` or `![alt](url "title")`.
+private val imageLinePattern = Regex("""^!\[([^\]]*)]\(\s*(<[^>]+>|[^)\s]+)(?:\s+"[^"]*")?\s*\)$""")
 
 // One parsed block. Text blocks carry a pre-rendered AnnotatedString so tap
 // annotations (tasks, wikilinks, tags) survive the split into composables.
 private sealed interface Block {
     data class Text(val content: AnnotatedString) : Block
-    data class Heading(val level: Int, val content: AnnotatedString) : Block
+    data class Heading(val level: Int, val content: AnnotatedString, val line: Int) : Block
     data class Code(val text: String) : Block
     data class Math(val text: String) : Block
     data class Quote(val content: AnnotatedString) : Block
     data class Callout(val kind: String, val title: String, val content: AnnotatedString?) : Block
+    data class Image(val alt: String, val url: String) : Block
     data object Rule : Block
 }
 
@@ -50,7 +60,12 @@ fun MarkdownText(
     modifier: Modifier = Modifier,
     onWikilinkClick: (String) -> Unit = {},
     onToggleTaskLine: (Int) -> Unit = {},
-    onTagClick: (String) -> Unit = {}
+    onTagClick: (String) -> Unit = {},
+    // [imageBase] is what relative image references resolve against (the
+    // note's path): a new base reloads every image.
+    imageBase: String = "",
+    loadImage: suspend (String) -> ImageBitmap? = { null },
+    onHeadingPositioned: (line: Int, y: Int) -> Unit = { _, _ -> }
 ) {
     val colors = MaterialTheme.colorScheme
     val renderer = remember(colors) {
@@ -106,6 +121,7 @@ fun MarkdownText(
                         text = block.content,
                         modifier = Modifier
                             .fillMaxWidth()
+                            .onGloballyPositioned { onHeadingPositioned(block.line, it.positionInParent().y.toInt()) }
                             .padding(bottom = 12.dp),
                         style = bodyStyle.merge(
                             androidx.compose.ui.text.TextStyle(
@@ -233,6 +249,7 @@ fun MarkdownText(
                         }
                     }
                 }
+                is Block.Image -> MarkdownImage(block, imageBase, loadImage, colors.onSurfaceVariant)
                 is Block.Rule -> HorizontalDivider(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -241,6 +258,37 @@ fun MarkdownText(
                 )
             }
         }
+    }
+}
+
+// Loads through the caller (auth + cache live there). Alt text stands in
+// while loading and when the image can't be fetched.
+@Composable
+private fun MarkdownImage(block: Block.Image, base: String, loadImage: suspend (String) -> ImageBitmap?, muted: Color) {
+    // Same `photo.png` in another note is another file: key on both, and
+    // drop the old bitmap before the new one loads.
+    val bitmap by produceState<ImageBitmap?>(null, base, block.url) {
+        value = null
+        value = loadImage(block.url)
+    }
+    val image = bitmap
+    if (image == null) {
+        androidx.compose.material3.Text(
+            text = "[image: ${block.alt.ifBlank { block.url }}]",
+            color = muted,
+            fontSize = 13.sp,
+            modifier = Modifier.padding(bottom = 12.dp)
+        )
+    } else {
+        Image(
+            bitmap = image,
+            contentDescription = block.alt.ifBlank { null },
+            contentScale = ContentScale.FillWidth,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp)
+                .clip(RoundedCornerShape(6.dp))
+        )
     }
 }
 
@@ -325,9 +373,14 @@ private class MarkdownRenderer(
                         i++
                     }
                 }
+                imageLinePattern.matches(trimmed.trimEnd()) -> {
+                    val m = imageLinePattern.matchEntire(trimmed.trimEnd())!!
+                    out += Block.Image(m.groupValues[1], m.groupValues[2])
+                    i++
+                }
                 headingLevel(trimmed) != null -> {
                     val level = headingLevel(trimmed)!!
-                    out += Block.Heading(level, inline(trimmed.drop(level).trim(), headingStyle(level)))
+                    out += Block.Heading(level, inline(trimmed.drop(level).trim(), headingStyle(level)), i)
                     i++
                 }
                 trimmed.startsWith("---") || trimmed.startsWith("***") || trimmed.startsWith("___") -> {
@@ -410,7 +463,7 @@ private class MarkdownRenderer(
     }
 
     private fun isBlockStart(line: String): Boolean =
-        line.startsWith("```") || line.startsWith("$$") || line.startsWith(">") ||
+        imageLinePattern.matches(line.trimEnd()) || line.startsWith("```") || line.startsWith("$$") || line.startsWith(">") ||
             line.startsWith("---") || line.startsWith("***") || line.startsWith("___") ||
             headingLevel(line) != null || listMarker(line) != null
 
