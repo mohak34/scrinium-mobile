@@ -40,10 +40,11 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.mohak.scrinium.ui.MainViewModel
 import dev.mohak.scrinium.ui.MarkdownText
+import dev.mohak.scrinium.ui.TasksViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun EditorScreen(vm: MainViewModel) {
+fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
     val editor by vm.editor.collectAsStateWithLifecycle()
     val state = editor ?: return
 

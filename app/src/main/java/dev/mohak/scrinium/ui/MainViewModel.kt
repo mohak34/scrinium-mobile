@@ -48,6 +48,7 @@ sealed interface Screen {
     data object Settings : Screen
     data object Tags : Screen
     data object Trash : Screen
+    data object Tasks : Screen
 }
 
 // Back history for the editor: note→note (wikilinks), search→note and
@@ -56,6 +57,7 @@ private sealed interface History {
     data class Note(val path: String) : History
     data class Search(val query: String, val origin: Screen) : History
     data class Tags(val tag: String?) : History
+    data object Tasks : History
 }
 
 data class SyncUiState(
@@ -144,6 +146,7 @@ class MainViewModel(
             }
             Screen.Search -> pushHistory(History.Search(searchQuery.value, _searchOrigin.value))
             Screen.Tags -> pushHistory(History.Tags(_selectedTag.value))
+            Screen.Tasks -> pushHistory(History.Tasks)
             else -> Unit
         }
     }
@@ -389,6 +392,10 @@ class MainViewModel(
                     _screen.value = Screen.Tags
                     selectTag(prev.tag)
                 }
+                History.Tasks -> {
+                    _editor.value = null
+                    _screen.value = Screen.Tasks
+                }
                 null -> {
                     _editor.value = null
                     _screen.value = Screen.Notes
@@ -402,6 +409,10 @@ class MainViewModel(
         _screen.update { Screen.Search }
     }
     fun openSettings() = _screen.update { Screen.Settings }
+
+    fun openTasks() = _screen.update { Screen.Tasks }
+
+    fun closeTasks() = _screen.update { Screen.Notes }
 
     // Tags are server-driven (vault-wide counts the phone can't compute
     // cheaply). Loaded on open, quiet offline failure leaves stale list.

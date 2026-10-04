@@ -32,7 +32,8 @@ class AppContainer(context: Context) {
             tokenProvider = { tokenStore.token.value },
             onUnauthorized = {
                 scope.launch { sessionRepository.forceSignOut() }
-            }
+            },
+            cacheDir = appContext.cacheDir
         )
         sessionRepository = SessionRepository(appContext, tokenStore, api)
         notesRepository = NotesRepository(database.noteDao(), api)
