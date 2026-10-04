@@ -48,8 +48,6 @@ enum class TaskPriority(val key: String, val label: String) {
 // Soft cap on the Doing column; the board warns past it, never blocks.
 const val DOING_LIMIT = 3
 
-private const val DAY_MS = 86_400_000L
-
 val TaskDto.statusEnum: TaskStatus get() = TaskStatus.of(status)
 val TaskDto.isDone: Boolean get() = status == TaskStatus.Done.key
 
@@ -63,12 +61,19 @@ fun startOfDay(ms: Long): Long = Calendar.getInstance().apply {
     set(Calendar.MILLISECOND, 0)
 }.timeInMillis
 
+// Local midnight [n] calendar days after the day [ms] falls on. Not n * 24h:
+// days across a daylight-saving change are 23 or 25 hours long.
+fun addDays(ms: Long, n: Int): Long = Calendar.getInstance().apply {
+    timeInMillis = startOfDay(ms)
+    add(Calendar.DAY_OF_MONTH, n)
+}.timeInMillis
+
 fun TaskDto.isOverdue(): Boolean = !isDone && dueAt != null && dueAt < startOfToday()
 
 fun TaskDto.isDueToday(): Boolean {
     val due = dueAt ?: return false
     val today = startOfToday()
-    return due >= today && due < today + DAY_MS
+    return due >= today && due < addDays(today, 1)
 }
 
 // "Sep 26", or "Sep 26, 9:00 AM" when the due time isn't midnight.
@@ -90,8 +95,8 @@ fun shortDue(dueAt: Long, now: Long = System.currentTimeMillis()): String {
     val day = startOfDay(dueAt)
     val date = when {
         day == today -> "Today"
-        day == today + DAY_MS -> "Tomorrow"
-        day > today && day < today + 7 * DAY_MS -> java.text.SimpleDateFormat("EEE", java.util.Locale.getDefault()).format(Date(dueAt))
+        day == addDays(today, 1) -> "Tomorrow"
+        day > today && day < addDays(today, 7) -> java.text.SimpleDateFormat("EEE", java.util.Locale.getDefault()).format(Date(dueAt))
         else -> java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault()).format(Date(dueAt))
     }
     val cal = Calendar.getInstance().apply { timeInMillis = dueAt }
