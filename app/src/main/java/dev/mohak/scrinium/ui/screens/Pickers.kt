@@ -10,10 +10,12 @@ import android.content.pm.PackageManager
 import android.Manifest
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDefaults
 import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.TimePickerDefaults
+import dev.mohak.scrinium.ui.Sc
+import dev.mohak.scrinium.ui.TextAction
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimePicker
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberTimePickerState
@@ -46,14 +48,24 @@ fun LocalDatePickerDialog(initial: Long?, onDismiss: () -> Unit, onPick: (Long) 
     val state = rememberDatePickerState(
         initialSelectedDateMillis = localToUtcDate(initial ?: System.currentTimeMillis())
     )
+    val colors = DatePickerDefaults.colors(
+        containerColor = Sc.raise,
+        todayContentColor = Sc.accent,
+        todayDateBorderColor = Sc.accent,
+        selectedDayContainerColor = Sc.fill,
+        selectedDayContentColor = Sc.onFill,
+        selectedYearContainerColor = Sc.fill,
+        selectedYearContentColor = Sc.onFill
+    )
     DatePickerDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
-            TextButton(onClick = { state.selectedDateMillis?.let { onPick(utcDateToLocal(it)) } }) { Text("OK") }
+            TextAction("OK", { state.selectedDateMillis?.let { onPick(utcDateToLocal(it)) } })
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+        dismissButton = { TextAction("Cancel", onDismiss) },
+        colors = colors
     ) {
-        DatePicker(state = state)
+        DatePicker(state = state, colors = colors)
     }
 }
 
@@ -67,11 +79,23 @@ fun TimePickerDialog(initialMinutes: Int, onDismiss: () -> Unit, onPick: (Int) -
     )
     AlertDialog(
         onDismissRequest = onDismiss,
-        text = { TimePicker(state = state) },
-        confirmButton = {
-            TextButton(onClick = { onPick(state.hour * 60 + state.minute) }) { Text("OK") }
+        containerColor = Sc.raise,
+        text = {
+            TimePicker(
+                state = state,
+                colors = TimePickerDefaults.colors(
+                    clockDialColor = Sc.press,
+                    selectorColor = Sc.fill,
+                    timeSelectorSelectedContainerColor = Sc.fill,
+                    timeSelectorSelectedContentColor = Sc.onFill,
+                    timeSelectorUnselectedContainerColor = Sc.press,
+                    periodSelectorSelectedContainerColor = Sc.fill,
+                    periodSelectorSelectedContentColor = Sc.onFill
+                )
+            )
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+        confirmButton = { TextAction("OK", { onPick(state.hour * 60 + state.minute) }) },
+        dismissButton = { TextAction("Cancel", onDismiss) }
     )
 }
 

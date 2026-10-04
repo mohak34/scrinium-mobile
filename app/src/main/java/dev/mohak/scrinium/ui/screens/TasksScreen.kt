@@ -1,315 +1,256 @@
 package dev.mohak.scrinium.ui.screens
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SecondaryTabRow
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.mohak.scrinium.R
 import dev.mohak.scrinium.data.remote.CalendarEvent
-import dev.mohak.scrinium.ui.eventDays
-import dev.mohak.scrinium.ui.eventTimeLabel
 import dev.mohak.scrinium.data.remote.TaskDto
 import dev.mohak.scrinium.ui.DOING_LIMIT
-import dev.mohak.scrinium.ui.MainViewModel
+import dev.mohak.scrinium.ui.Divider
+import dev.mohak.scrinium.ui.Dot
+import dev.mohak.scrinium.ui.EmptyState
+import dev.mohak.scrinium.ui.ErrorStrip
+import dev.mohak.scrinium.ui.Fab
+import dev.mohak.scrinium.ui.GroupHeader
+import dev.mohak.scrinium.ui.IconBtn
+import dev.mohak.scrinium.ui.InputBox
+import dev.mohak.scrinium.ui.Menu
+import dev.mohak.scrinium.ui.MenuRow
+import dev.mohak.scrinium.ui.Sc
+import dev.mohak.scrinium.ui.Segments
+import dev.mohak.scrinium.ui.Sheet
+import dev.mohak.scrinium.ui.SheetTitle
+import dev.mohak.scrinium.ui.Sym
 import dev.mohak.scrinium.ui.TaskArea
+import dev.mohak.scrinium.ui.TaskCheck
 import dev.mohak.scrinium.ui.TaskPriority
 import dev.mohak.scrinium.ui.TaskStatus
 import dev.mohak.scrinium.ui.TasksViewModel
-import dev.mohak.scrinium.ui.dueLabel
-import dev.mohak.scrinium.ui.dueText
-import dev.mohak.scrinium.ui.groupByDue
+import dev.mohak.scrinium.ui.TextAction
+import dev.mohak.scrinium.ui.TextTabs
+import dev.mohak.scrinium.ui.TopBar
+import dev.mohak.scrinium.ui.Type
+import dev.mohak.scrinium.ui.eventDays
+import dev.mohak.scrinium.ui.groupByStatus
 import dev.mohak.scrinium.ui.isDone
 import dev.mohak.scrinium.ui.isOverdue
+import dev.mohak.scrinium.ui.isDueToday
+import dev.mohak.scrinium.ui.shortDue
 import dev.mohak.scrinium.ui.startOfDay
 import dev.mohak.scrinium.ui.startOfToday
+import kotlinx.coroutines.launch
+import java.text.DateFormat
 import java.text.DateFormatSymbols
 import java.text.SimpleDateFormat
 import java.util.Calendar
+import java.util.Date
 import java.util.Locale
 
-private enum class TasksView(val label: String) { List("List"), Board("Board"), Calendar("Calendar") }
+// The Tasks, Board and Calendar tabs. All three read TasksViewModel's list
+// and share its area filter. Subtasks live inside their parent's detail
+// screen, as on the web, so only top-level tasks show here.
+
+private fun topLevel(all: List<TaskDto>, area: String?) =
+    all.filter { it.parentId == null && (area == null || it.area == area) }
+
+// parentId -> (done, total) for the "1/3" subtask label.
+private fun subtaskProgress(all: List<TaskDto>): Map<String, Pair<Int, Int>> =
+    all.filter { it.parentId != null }.groupBy { it.parentId!! }
+        .mapValues { (_, kids) -> kids.count { it.isDone } to kids.size }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TasksScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
+fun TasksScreen(tasksVm: TasksViewModel) {
     val all by tasksVm.tasks.collectAsStateWithLifecycle()
     val loading by tasksVm.loading.collectAsStateWithLifecycle()
     val error by tasksVm.error.collectAsStateWithLifecycle()
+    val area by tasksVm.areaFilter.collectAsStateWithLifecycle()
     val askNotify = rememberNotificationAsk()
-    LaunchedEffect(Unit) { askNotify() }
-
-    var view by rememberSaveable { mutableStateOf(TasksView.List) }
-    var areaKey by rememberSaveable { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        askNotify()
+        tasksVm.refresh()
+    }
     var showAdd by remember { mutableStateOf(false) }
-    // Calendar's selected day; new tasks added from the calendar land on it.
-    var selectedDay by rememberSaveable { mutableStateOf(startOfToday()) }
+    var showDone by rememberSaveable { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) { tasksVm.refresh() }
+    val groups = groupByStatus(topLevel(all, area))
+    val progress = subtaskProgress(all)
+    val areaTabs = listOf<TaskArea?>(null) + TaskArea.entries
 
-    // Subtasks live inside their parent's detail screen, as on the web.
-    val visible = all.filter { it.parentId == null && (areaKey == null || it.area == areaKey) }
-    val subtaskCounts = all.filter { it.parentId != null }.groupingBy { it.parentId!! }.eachCount()
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Tasks") },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background
-                ),
-                navigationIcon = {
-                    IconButton(onClick = { vm.closeTasks() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+    Column(Modifier.fillMaxSize()) {
+        TopBar("Tasks")
+        TextTabs(areaTabs.map { it?.label ?: "All" }, areaTabs.indexOf(TaskArea.of(area))) {
+            tasksVm.setAreaFilter(areaTabs[it]?.key)
+        }
+        error?.let { ErrorStrip(it) { tasksVm.dismissError() } }
+        Box(Modifier.weight(1f)) {
+            PullToRefreshBox(isRefreshing = loading, onRefresh = { tasksVm.refresh() }, modifier = Modifier.fillMaxSize()) {
+                LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 96.dp)) {
+                    if (groups.isEmpty() && !loading) item { EmptyState(R.drawable.ms_task_alt, "No tasks", "Tap + to add one.") }
+                    groups.forEach { g ->
+                        val done = g.status == TaskStatus.Done
+                        item(key = "h-${g.status.key}") {
+                            GroupHeader(
+                                g.status.label,
+                                if (g.status == TaskStatus.Doing) "${g.rows.size}/$DOING_LIMIT" else "${g.rows.size}",
+                                color = if (done) Sc.text3 else if (g.status == TaskStatus.Doing && g.rows.size > DOING_LIMIT) Sc.red else Sc.text,
+                                onClick = if (done) ({ showDone = !showDone }) else null
+                            )
+                        }
+                        if (!done || showDone) {
+                            items(g.rows, key = { it.id }) { t ->
+                                TaskRow(t, progress[t.id], onToggle = { tasksVm.toggleDone(t) }, onOpen = { tasksVm.openTask(t.id) })
+                            }
+                        }
                     }
                 }
-            )
-        },
-        floatingActionButton = {
-            FloatingActionButton(onClick = { showAdd = true }) {
-                Icon(Icons.Default.Add, contentDescription = "New task")
             }
-        }
-    ) { padding ->
-        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            error?.let { ErrorBanner(it) { tasksVm.dismissError() } }
-            SecondaryTabRow(
-                selectedTabIndex = view.ordinal,
-                containerColor = MaterialTheme.colorScheme.background
-            ) {
-                TasksView.entries.forEach { v ->
-                    Tab(selected = view == v, onClick = { view = v }, text = { Text(v.label) })
-                }
-            }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 12.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilterChip(selected = areaKey == null, onClick = { areaKey = null }, label = { Text("All") })
-                TaskArea.entries.forEach { a ->
-                    FilterChip(
-                        selected = areaKey == a.key,
-                        onClick = { areaKey = if (areaKey == a.key) null else a.key },
-                        label = { Text(a.label) },
-                        leadingIcon = { AreaDot(a) }
-                    )
-                }
-            }
-            PullToRefreshBox(
-                isRefreshing = loading,
-                onRefresh = { tasksVm.refresh() },
-                modifier = Modifier.fillMaxSize()
-            ) {
-                when (view) {
-                    TasksView.List -> TaskList(visible, subtaskCounts, tasksVm)
-                    TasksView.Board -> TaskBoard(visible, subtaskCounts, tasksVm)
-                    TasksView.Calendar -> TaskCalendar(
-                        tasks = visible,
-                        selectedDay = selectedDay,
-                        onSelectDay = { selectedDay = it },
-                        subtaskCounts = subtaskCounts,
-                        tasksVm = tasksVm
-                    )
-                }
-            }
+            Fab(R.drawable.ms_add, "New task", { showAdd = true }, Modifier.align(Alignment.BottomEnd))
         }
     }
 
     if (showAdd) {
-        AddTaskDialog(
-            initialArea = TaskArea.of(areaKey),
-            initialDue = if (view == TasksView.Calendar) selectedDay else null,
-            onDismiss = { showAdd = false },
-            onAdd = { title, area, due ->
-                showAdd = false
-                tasksVm.create(title, area = area, dueAt = due)
-            }
-        )
-    }
-}
-
-@Composable
-private fun TaskList(tasks: List<TaskDto>, subtaskCounts: Map<String, Int>, tasksVm: TasksViewModel) {
-    val groups = groupByDue(tasks)
-    LazyColumn(modifier = Modifier.fillMaxSize()) {
-        if (groups.isEmpty()) {
-            item { EmptyHint("No tasks") }
-        }
-        groups.forEach { group ->
-            item(key = "h-${group.label}") { SectionHeader("${group.label}  ${group.rows.size}") }
-            items(group.rows, key = { it.id }) { t ->
-                TaskRow(
-                    task = t,
-                    subtasks = subtaskCounts[t.id] ?: 0,
-                    onToggle = { tasksVm.toggleDone(t) },
-                    onOpen = { tasksVm.openTask(t.id) }
-                )
-            }
+        QuickAddSheet(TaskArea.of(area), null, onDismiss = { showAdd = false }) { title, a, due ->
+            tasksVm.create(title, area = a, dueAt = due)
         }
     }
 }
 
-// One column per status, scrolled sideways. Cards move with a long press;
-// drag and drop across columns isn't worth it on a phone.
+// Board: one status column per page, column names as tabs. Long-press a
+// task to move it to another column.
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TaskBoard(tasks: List<TaskDto>, subtaskCounts: Map<String, Int>, tasksVm: TasksViewModel) {
-    LazyRow(
-        modifier = Modifier.fillMaxSize(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-    ) {
-        items(TaskStatus.entries.toList(), key = { it.key }) { status ->
-            val rows = tasks.filter { it.status == status.key }
-                .let { list -> if (status == TaskStatus.Done) list.sortedByDescending { it.updatedAt } else list }
-            Column(
-                modifier = Modifier
-                    .width(280.dp)
-                    .fillMaxHeight()
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(status.label, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                    val over = status == TaskStatus.Doing && rows.size > DOING_LIMIT
-                    Text(
-                        if (status == TaskStatus.Doing) "${rows.size}/$DOING_LIMIT" else "${rows.size}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (over) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 8.dp, end = 8.dp, bottom = 88.dp)
-                ) {
-                    items(rows, key = { it.id }) { t ->
-                        BoardCard(t, subtaskCounts[t.id] ?: 0, tasksVm)
+fun BoardScreen(tasksVm: TasksViewModel) {
+    val all by tasksVm.tasks.collectAsStateWithLifecycle()
+    val loading by tasksVm.loading.collectAsStateWithLifecycle()
+    val error by tasksVm.error.collectAsStateWithLifecycle()
+    val area by tasksVm.areaFilter.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { tasksVm.refresh() }
+    var showAdd by remember { mutableStateOf(false) }
+    var moving by remember { mutableStateOf<TaskDto?>(null) }
+
+    val statuses = TaskStatus.entries
+    val pager = rememberPagerState { statuses.size }
+    val scope = rememberCoroutineScope()
+    val tasks = topLevel(all, area)
+    val progress = subtaskProgress(all)
+    val columns = statuses.map { s ->
+        tasks.filter { it.status == s.key }.let { rows ->
+            if (s == TaskStatus.Done) rows.sortedByDescending { it.updatedAt }
+            else rows.sortedWith(compareBy({ it.position }, { it.createdAt }))
+        }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        TopBar("Board") { AreaFilterButton(area) { tasksVm.setAreaFilter(it) } }
+        TextTabs(
+            statuses.mapIndexed { i, s ->
+                val n = columns[i].size
+                if (s == TaskStatus.Doing) "${s.label} $n/$DOING_LIMIT" else "${s.label} $n"
+            },
+            pager.currentPage
+        ) { scope.launch { pager.animateScrollToPage(it) } }
+        error?.let { ErrorStrip(it) { tasksVm.dismissError() } }
+        Box(Modifier.weight(1f)) {
+            PullToRefreshBox(isRefreshing = loading, onRefresh = { tasksVm.refresh() }, modifier = Modifier.fillMaxSize()) {
+                HorizontalPager(pager, Modifier.fillMaxSize()) { page ->
+                    val rows = columns[page]
+                    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = 4.dp, bottom = 96.dp)) {
+                        if (rows.isEmpty()) item { EmptyState(R.drawable.ms_view_kanban, "Nothing in ${statuses[page].label}", "Long-press a task to move it.") }
+                        items(rows, key = { it.id }) { t ->
+                            TaskRow(
+                                t,
+                                progress[t.id],
+                                onToggle = { tasksVm.toggleDone(t) },
+                                onOpen = { tasksVm.openTask(t.id) },
+                                onLongPress = { moving = t },
+                                showStatus = false
+                            )
+                        }
                     }
                 }
             }
+            Fab(R.drawable.ms_add, "New task", { showAdd = true }, Modifier.align(Alignment.BottomEnd))
         }
     }
-}
 
-@Composable
-private fun BoardCard(task: TaskDto, subtasks: Int, tasksVm: TasksViewModel) {
-    var menu by remember { mutableStateOf(false) }
-    Box {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(6.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                .combinedClickable(
-                    onClick = { tasksVm.openTask(task.id) },
-                    onLongClick = { menu = true }
-                )
-                .padding(10.dp)
-        ) {
-            Text(
-                task.title,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-                textDecoration = if (task.isDone) TextDecoration.LineThrough else null
-            )
-            TaskMeta(task, subtasks)
-        }
-        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            TaskStatus.entries.filter { it.key != task.status }.forEach { s ->
-                DropdownMenuItem(
-                    text = { Text("Move to ${s.label}") },
-                    onClick = {
-                        menu = false
-                        tasksVm.setStatus(task.id, s)
-                    }
-                )
+    moving?.let { t ->
+        Sheet(onDismiss = { moving = null }) {
+            SheetTitle(t.title, "Move to")
+            Divider()
+            statuses.filter { it.key != t.status }.forEach { s ->
+                MenuRow(null, s.label, {
+                    moving = null
+                    tasksVm.setStatus(t.id, s)
+                })
             }
         }
     }
+    if (showAdd) {
+        val status = statuses[pager.currentPage]
+        QuickAddSheet(TaskArea.of(area), null, onDismiss = { showAdd = false }) { title, a, due ->
+            tasksVm.create(title, area = a, dueAt = due, status = status)
+        }
+    }
 }
 
-// Month grid of due dates with the linked Google Calendar's events on top,
-// read-only like the web.
+// Month grid of due dates with the linked Google Calendar's events, and the
+// selected day's agenda below. Events are read-only, like the web.
 @Composable
-private fun TaskCalendar(
-    tasks: List<TaskDto>,
-    selectedDay: Long,
-    onSelectDay: (Long) -> Unit,
-    subtaskCounts: Map<String, Int>,
-    tasksVm: TasksViewModel
-) {
-    var month by rememberSaveable {
-        mutableStateOf(Calendar.getInstance().apply {
-            timeInMillis = selectedDay
-            set(Calendar.DAY_OF_MONTH, 1)
-        }.let { startOfDay(it.timeInMillis) })
-    }
-    val byDay = tasks.filter { it.dueAt != null }.groupBy { startOfDay(it.dueAt!!) }
+fun CalendarScreen(tasksVm: TasksViewModel) {
+    val all by tasksVm.tasks.collectAsStateWithLifecycle()
+    val area by tasksVm.areaFilter.collectAsStateWithLifecycle()
+    val error by tasksVm.error.collectAsStateWithLifecycle()
     val calendar by tasksVm.calendar.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { tasksVm.refresh() }
+    var selectedDay by rememberSaveable { mutableStateOf(startOfToday()) }
+    var month by rememberSaveable { mutableStateOf(monthStart(startOfToday())) }
+    var showAdd by remember { mutableStateOf(false) }
+
     LaunchedEffect(month) {
         val next = Calendar.getInstance().apply {
             timeInMillis = month
@@ -317,18 +258,15 @@ private fun TaskCalendar(
         }.timeInMillis
         tasksVm.loadEvents(month, next)
     }
+    val tasks = topLevel(all, area)
+    val progress = subtaskProgress(all)
+    val byDay = tasks.filter { it.dueAt != null }.groupBy { startOfDay(it.dueAt!!) }
     val eventsByDay = remember(calendar) {
         buildMap<Long, MutableList<CalendarEvent>> {
             for (e in calendar.events) for (d in eventDays(e)) getOrPut(d) { mutableListOf() } += e
         }
     }
-    val cal = Calendar.getInstance().apply { timeInMillis = month }
-    val title = SimpleDateFormat("MMMM yyyy", Locale.getDefault()).format(cal.time)
-    val firstDow = cal.firstDayOfWeek
-    val lead = (cal.get(Calendar.DAY_OF_WEEK) - firstDow + 7) % 7
-    val daysInMonth = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
     val today = startOfToday()
-    val weekdays = DateFormatSymbols.getInstance().shortWeekdays
 
     fun shiftMonth(by: Int) {
         month = Calendar.getInstance().apply {
@@ -337,313 +275,328 @@ private fun TaskCalendar(
         }.timeInMillis
     }
 
-    LazyColumn(modifier = Modifier.fillMaxSize()) {
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = { shiftMonth(-1) }) {
-                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Previous month")
-                }
-                Text(title, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                TextButton(onClick = {
-                    month = Calendar.getInstance().apply {
-                        timeInMillis = today
-                        set(Calendar.DAY_OF_MONTH, 1)
-                    }.timeInMillis
-                    onSelectDay(today)
-                }) { Text("Today") }
-                IconButton(onClick = { shiftMonth(1) }) {
-                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Next month")
-                }
-            }
+    Column(Modifier.fillMaxSize()) {
+        TopBar(SimpleDateFormat("MMMM yyyy", Locale.getDefault()).format(Date(month))) {
+            AreaFilterButton(area) { tasksVm.setAreaFilter(it) }
+            IconBtn(R.drawable.ms_today, "Today", {
+                month = monthStart(today)
+                selectedDay = today
+            })
+            IconBtn(R.drawable.ms_chevron_left, "Previous month", { shiftMonth(-1) })
+            IconBtn(R.drawable.ms_chevron_right, "Next month", { shiftMonth(1) })
         }
-        item {
-            Column(modifier = Modifier.padding(horizontal = 8.dp)) {
-                Row(modifier = Modifier.fillMaxWidth()) {
-                    for (i in 0 until 7) {
-                        val dow = (firstDow - 1 + i) % 7 + 1
+        error?.let { ErrorStrip(it) { tasksVm.dismissError() } }
+        Box(Modifier.weight(1f)) {
+            val dayTasks = byDay[selectedDay].orEmpty().sortedBy { it.dueAt }
+            val dayEvents = eventsByDay[selectedDay].orEmpty().sortedWith(compareBy({ !it.allDay }, { it.start }))
+            // The grid scrolls with the agenda: a six-week month in landscape
+            // would otherwise leave the agenda no height.
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 96.dp)) {
+                item(key = "grid") {
+                    MonthGrid(month, selectedDay, today, byDay, eventsByDay) { selectedDay = it }
+                    Divider()
+                }
+                item {
+                    GroupHeader(
+                        SimpleDateFormat("EEE d MMM", Locale.getDefault()).format(Date(selectedDay)),
+                        "${dayTasks.size + dayEvents.size}"
+                    )
+                }
+                items(dayEvents, key = { "e-${it.id}" }) { e -> EventRow(e) }
+                items(dayTasks, key = { it.id }) { t ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            weekdays[dow].take(2),
-                            modifier = Modifier.weight(1f),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            timeOrAllDay(t.dueAt!!),
+                            style = Type.mono,
+                            modifier = Modifier.padding(start = 16.dp).width(52.dp)
                         )
+                        Box(Modifier.weight(1f)) {
+                            TaskRow(t, progress[t.id], onToggle = { tasksVm.toggleDone(t) }, onOpen = { tasksVm.openTask(t.id) }, showDue = false, inset = 0.dp)
+                        }
                     }
                 }
-                val cells = lead + daysInMonth
-                val rows = (cells + 6) / 7
-                for (r in 0 until rows) {
-                    Row(modifier = Modifier.fillMaxWidth()) {
-                        for (c in 0 until 7) {
-                            val dayNum = r * 7 + c - lead + 1
-                            Box(modifier = Modifier.weight(1f).aspectRatio(1f).padding(2.dp)) {
-                                if (dayNum in 1..daysInMonth) {
-                                    val dayMs = Calendar.getInstance().apply {
-                                        timeInMillis = month
-                                        set(Calendar.DAY_OF_MONTH, dayNum)
-                                    }.timeInMillis
-                                    DayCell(
-                                        day = dayNum,
-                                        tasks = byDay[dayMs].orEmpty(),
-                                        events = eventsByDay[dayMs]?.size ?: 0,
-                                        isToday = dayMs == today,
-                                        selected = dayMs == selectedDay,
-                                        onClick = { onSelectDay(dayMs) }
-                                    )
-                                }
-                            }
+                if (dayTasks.isEmpty() && dayEvents.isEmpty()) {
+                    item { Text("Nothing on this day", style = Type.meta, modifier = Modifier.padding(16.dp)) }
+                }
+                if (calendar.needsConnect) {
+                    item { Text("Connect Google Calendar on the web to see events here.", style = Type.meta, modifier = Modifier.padding(16.dp)) }
+                }
+            }
+            Fab(R.drawable.ms_add, "New task", { showAdd = true }, Modifier.align(Alignment.BottomEnd))
+        }
+    }
+
+    if (showAdd) {
+        QuickAddSheet(TaskArea.of(area), selectedDay, onDismiss = { showAdd = false }) { title, a, due ->
+            tasksVm.create(title, area = a, dueAt = due)
+        }
+    }
+}
+
+private fun monthStart(ms: Long): Long = Calendar.getInstance().apply {
+    timeInMillis = ms
+    set(Calendar.DAY_OF_MONTH, 1)
+}.let { startOfDay(it.timeInMillis) }
+
+private fun timeOrAllDay(ms: Long): String =
+    if (minutesOfDay(ms) == 0) "all day" else DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(ms))
+
+@Composable
+private fun MonthGrid(
+    month: Long,
+    selectedDay: Long,
+    today: Long,
+    byDay: Map<Long, List<TaskDto>>,
+    eventsByDay: Map<Long, List<CalendarEvent>>,
+    onSelect: (Long) -> Unit
+) {
+    val cal = Calendar.getInstance().apply { timeInMillis = month }
+    val firstDow = cal.firstDayOfWeek
+    val lead = (cal.get(Calendar.DAY_OF_WEEK) - firstDow + 7) % 7
+    val daysInMonth = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
+    val weekdays = DateFormatSymbols.getInstance().shortWeekdays
+    Column(Modifier.padding(horizontal = 6.dp)) {
+        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+            for (i in 0 until 7) {
+                val dow = (firstDow - 1 + i) % 7 + 1
+                Text(weekdays[dow].take(1), style = Type.meta, textAlign = TextAlign.Center, modifier = Modifier.weight(1f))
+            }
+        }
+        val rows = (lead + daysInMonth + 6) / 7
+        for (r in 0 until rows) {
+            Row(Modifier.fillMaxWidth()) {
+                for (c in 0 until 7) {
+                    val dayNum = r * 7 + c - lead + 1
+                    Box(Modifier.weight(1f).height(46.dp), contentAlignment = Alignment.TopCenter) {
+                        if (dayNum in 1..daysInMonth) {
+                            val dayMs = Calendar.getInstance().apply {
+                                timeInMillis = month
+                                set(Calendar.DAY_OF_MONTH, dayNum)
+                            }.timeInMillis
+                            DayCell(dayNum, byDay[dayMs].orEmpty(), eventsByDay[dayMs].orEmpty().size, dayMs == today, dayMs == selectedDay) { onSelect(dayMs) }
                         }
                     }
                 }
             }
         }
-        val dayTasks = byDay[selectedDay].orEmpty()
-        item {
-            SectionHeader(SimpleDateFormat("EEEE, MMM d", Locale.getDefault()).format(selectedDay))
-        }
-        val dayEvents = eventsByDay[selectedDay].orEmpty()
-        items(dayEvents, key = { "e-${it.id}" }) { e ->
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    eventTimeLabel(e),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.width(120.dp)
-                )
-                Text(e.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        }
-        if (dayTasks.isEmpty() && dayEvents.isEmpty()) item { EmptyHint("Nothing due") }
-        if (calendar.needsConnect) item { EmptyHint("Connect Google Calendar on the web to see events here") }
-        items(dayTasks, key = { it.id }) { t ->
-            TaskRow(
-                task = t,
-                subtasks = subtaskCounts[t.id] ?: 0,
-                onToggle = { tasksVm.toggleDone(t) },
-                onOpen = { tasksVm.openTask(t.id) }
-            )
-        }
-        item { Spacer(Modifier.height(88.dp)) }
     }
 }
 
 @Composable
 private fun DayCell(day: Int, tasks: List<TaskDto>, events: Int, isToday: Boolean, selected: Boolean, onClick: () -> Unit) {
-    val colors = MaterialTheme.colorScheme
-    val open = tasks.filter { !it.isDone }
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .clip(RoundedCornerShape(6.dp))
-            .background(if (selected) colors.surfaceContainerHighest else colors.surfaceContainerLow)
-            .then(if (isToday) Modifier.border(1.dp, colors.primary, RoundedCornerShape(6.dp)) else Modifier)
+            .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
-            .padding(4.dp),
+            .padding(top = 5.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text(
-            "$day",
-            style = MaterialTheme.typography.labelMedium,
-            color = if (isToday) colors.primary else colors.onSurface
-        )
-        if (tasks.isNotEmpty()) {
-            Spacer(Modifier.height(2.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                open.take(3).forEach { t ->
-                    Box(
-                        Modifier
-                            .size(5.dp)
-                            .clip(CircleShape)
-                            .background(TaskArea.of(t.area)?.color ?: colors.primary)
-                    )
-                }
-            }
-            if (open.size > 3) {
-                Text("+${open.size - 3}", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
-            }
-        }
-        // Events: a thin neutral bar, kept apart from the area-colored task dots.
-        if (events > 0) {
-            Spacer(Modifier.height(2.dp))
-            Box(
-                Modifier
-                    .fillMaxWidth(0.6f)
-                    .height(2.dp)
-                    .clip(RoundedCornerShape(1.dp))
-                    .background(colors.outline)
+        Box(
+            Modifier
+                .size(28.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(if (selected) Sc.fill else androidx.compose.ui.graphics.Color.Transparent),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                "$day",
+                style = Type.body.copy(
+                    color = when {
+                        selected -> Sc.onFill
+                        isToday -> Sc.accent
+                        else -> Sc.text
+                    },
+                    fontWeight = if (selected || isToday) FontWeight.SemiBold else FontWeight.Normal
+                )
             )
+        }
+        Spacer(Modifier.height(3.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            tasks.filter { !it.isDone }.take(3).forEach { Dot(TaskArea.of(it.area)?.color ?: Sc.accent, 4.dp) }
+            if (events > 0) Dot(Sc.text3, 4.dp)
         }
     }
 }
 
 @Composable
-fun TaskRow(task: TaskDto, subtasks: Int, onToggle: () -> Unit, onOpen: () -> Unit) {
+private fun EventRow(e: CalendarEvent) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            if (e.allDay) "all day" else DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(e.start)),
+            style = Type.mono,
+            modifier = Modifier.width(52.dp)
+        )
+        Box(Modifier.width(3.dp).height(32.dp).clip(RoundedCornerShape(2.dp)).background(Sc.blue))
+        Column(Modifier.padding(start = 12.dp).weight(1f)) {
+            Text(e.title, style = Type.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("Google Calendar", style = Type.meta)
+        }
+    }
+}
+
+/** Top-bar area filter for Board and Calendar (Tasks has area tabs instead). */
+@Composable
+private fun AreaFilterButton(area: String?, onPick: (String?) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconBtn(R.drawable.ms_tune, "Filter by area", { open = true }, tint = if (area != null) Sc.accent else Sc.text2, active = open)
+        Menu(open, { open = false }) {
+            MenuRow(null, "All areas", { open = false; onPick(null) }, trailing = { if (area == null) Sym(R.drawable.ms_check, tint = Sc.accent, size = 18.dp) })
+            TaskArea.entries.forEach { a ->
+                MenuRow(null, a.label, { open = false; onPick(a.key) }, trailing = {
+                    if (area == a.key) Sym(R.drawable.ms_check, tint = Sc.accent, size = 18.dp) else Dot(a.color)
+                })
+            }
+        }
+    }
+}
+
+/**
+ * One task: round checkbox, title, and a meta line (area, due, priority,
+ * subtasks, reminder, linked notes). [progress] is (done, total) subtasks.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun TaskRow(
+    task: TaskDto,
+    progress: Pair<Int, Int>?,
+    onToggle: () -> Unit,
+    onOpen: () -> Unit,
+    onLongPress: (() -> Unit)? = null,
+    showDue: Boolean = true,
+    showStatus: Boolean = false,
+    inset: androidx.compose.ui.unit.Dp = 4.dp
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onOpen)
-            .padding(end = 16.dp),
+            .combinedClickable(onClick = onOpen, onLongClick = onLongPress)
+            .heightIn(min = 48.dp)
+            .padding(start = inset, end = 16.dp, top = 2.dp, bottom = 2.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Checkbox(checked = task.isDone, onCheckedChange = { onToggle() })
-        Column(modifier = Modifier.weight(1f).padding(vertical = 8.dp)) {
+        TaskCheck(task.isDone, onToggle)
+        Column(Modifier.weight(1f).padding(start = 4.dp, top = 4.dp, bottom = 4.dp)) {
             Text(
                 task.title,
+                style = Type.body.copy(
+                    color = if (task.isDone) Sc.text3 else Sc.text,
+                    textDecoration = if (task.isDone) TextDecoration.LineThrough else null
+                ),
                 maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                textDecoration = if (task.isDone) TextDecoration.LineThrough else null,
-                color = if (task.isDone) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
+                overflow = TextOverflow.Ellipsis
             )
-            TaskMeta(task, subtasks)
+            TaskMeta(task, progress, showDue, showStatus)
         }
     }
 }
 
-// Area, due date, status, priority, subtask and link counts on one line.
 @Composable
-private fun TaskMeta(task: TaskDto, subtasks: Int) {
-    val colors = MaterialTheme.colorScheme
-    val parts = buildList {
-        if (task.dueAt != null) add(task.dueText() to if (task.isOverdue()) colors.error else colors.onSurfaceVariant)
-        if (task.status != TaskStatus.Done.key) add(TaskStatus.of(task.status).label to colors.onSurfaceVariant)
-        val p = TaskPriority.of(task.priority)
-        if (p != TaskPriority.None) {
-            add(p.label to if (p == TaskPriority.Urgent || p == TaskPriority.High) colors.tertiary else colors.onSurfaceVariant)
-        }
-        if (subtasks > 0) add("$subtasks subtasks" to colors.onSurfaceVariant)
-        if (task.linkCount > 0) add("${task.linkCount} notes" to colors.onSurfaceVariant)
-        if (task.remindAt != null) add("reminder" to colors.onSurfaceVariant)
-    }
+private fun TaskMeta(task: TaskDto, progress: Pair<Int, Int>?, showDue: Boolean, showStatus: Boolean) {
     val area = TaskArea.of(task.area)
-    if (parts.isEmpty() && area == null) return
+    val priority = TaskPriority.of(task.priority)
+    val due = task.dueAt?.takeIf { showDue }
+    val waitingDays = task.waitingSince?.takeIf { task.status == TaskStatus.Waiting.key }
+        ?.let { ((System.currentTimeMillis() - it) / 86_400_000L).toInt() }
+    val any = area != null || due != null || priority == TaskPriority.High || priority == TaskPriority.Urgent ||
+        progress != null || task.remindAt != null || task.linkCount > 0 || waitingDays != null || showStatus
+    if (!any) return
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
         modifier = Modifier.padding(top = 2.dp)
     ) {
         if (area != null) {
-            AreaDot(area)
-            Text(area.label, style = MaterialTheme.typography.labelSmall, color = area.color)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                Dot(area.color)
+                Text(area.label, style = Type.meta)
+            }
         }
-        parts.forEach { (text, color) ->
-            Text(text, style = MaterialTheme.typography.labelSmall, color = color, maxLines = 1)
+        if (showStatus) Text(TaskStatus.of(task.status).label, style = Type.meta)
+        if (due != null) {
+            val color = when {
+                task.isOverdue() -> Sc.red
+                task.isDueToday() && !task.isDone -> Sc.orange
+                else -> Sc.text3
+            }
+            Text(shortDue(due), style = Type.meta.copy(color = color), maxLines = 1)
         }
+        if (priority == TaskPriority.Urgent || priority == TaskPriority.High) {
+            Sym(R.drawable.ms_flag_fill, tint = if (priority == TaskPriority.Urgent) Sc.red else Sc.orange, size = 14.dp, desc = priority.label)
+        }
+        if (progress != null) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Sym(R.drawable.ms_subdirectory_arrow_right, tint = Sc.text3, size = 14.dp)
+                Text("${progress.first}/${progress.second}", style = Type.meta)
+            }
+        }
+        task.remindAt?.let {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Sym(R.drawable.ms_alarm, tint = Sc.text3, size = 14.dp, desc = "Reminder")
+                if (it > System.currentTimeMillis()) Text(" " + DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(it)), style = Type.meta)
+            }
+        }
+        if (task.linkCount > 0) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Sym(R.drawable.ms_notes, tint = Sc.text3, size = 14.dp, desc = "Linked notes")
+                Text(" ${task.linkCount}", style = Type.meta)
+            }
+        }
+        if (waitingDays != null) Text("${waitingDays}d waiting", style = Type.meta)
     }
 }
 
+/** New task: title, area and an optional due day. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AreaDot(area: TaskArea) {
-    Box(Modifier.size(8.dp).clip(CircleShape).background(area.color))
-}
-
-@Composable
-fun SectionHeader(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 4.dp)
-    )
-}
-
-@Composable
-fun EmptyHint(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(16.dp)
-    )
-}
-
-@Composable
-fun ErrorBanner(message: String, onDismiss: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.errorContainer)
-            .padding(start = 16.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            message,
-            color = MaterialTheme.colorScheme.onErrorContainer,
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.weight(1f)
-        )
-        IconButton(onClick = onDismiss) {
-            Icon(Icons.Default.Close, contentDescription = "Dismiss", tint = MaterialTheme.colorScheme.onErrorContainer)
-        }
-    }
-}
-
-@Composable
-private fun AddTaskDialog(
-    initialArea: TaskArea?,
-    initialDue: Long?,
-    onDismiss: () -> Unit,
-    onAdd: (String, TaskArea?, Long?) -> Unit
-) {
+fun QuickAddSheet(initialArea: TaskArea?, initialDue: Long?, onDismiss: () -> Unit, onAdd: (String, TaskArea?, Long?) -> Unit) {
     var title by remember { mutableStateOf("") }
     var area by remember { mutableStateOf(initialArea) }
     var due by remember { mutableStateOf(initialDue) }
     var pickDate by remember { mutableStateOf(false) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("New task") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
-                    singleLine = true,
-                    placeholder = { Text("Title") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    TaskArea.entries.forEach { a ->
-                        FilterChip(
-                            selected = area == a,
-                            onClick = { area = if (area == a) null else a },
-                            label = { Text(a.label) },
-                            leadingIcon = { AreaDot(a) }
-                        )
-                    }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = { pickDate = true }) {
-                        Text(if (due == null) "Add due date" else dueLabel(due))
-                    }
-                    if (due != null) {
-                        IconButton(onClick = { due = null }) {
-                            Icon(Icons.Default.Close, contentDescription = "Clear due date")
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onAdd(title, area, due) }, enabled = title.isNotBlank()) { Text("Add") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
-    if (pickDate) {
-        LocalDatePickerDialog(
-            initial = due,
-            onDismiss = { pickDate = false },
-            onPick = {
-                pickDate = false
-                due = it
-            }
+    val focus = remember { FocusRequester() }
+    fun submit() {
+        if (title.isBlank()) return
+        onAdd(title, area, due)
+        onDismiss()
+    }
+    Sheet(onDismiss) {
+        InputBox(
+            title,
+            { title = it },
+            "New task",
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            focusRequester = focus,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { submit() })
         )
+        Spacer(Modifier.height(8.dp))
+        Segments(TaskArea.entries, area, { it.label }, { area = if (area == it) null else it }, lead = { Dot(it.color) })
+        Row(
+            Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                Modifier.clip(RoundedCornerShape(8.dp)).clickable { pickDate = true }.padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Sym(R.drawable.ms_event, tint = if (due != null) Sc.accent else Sc.text2, size = 18.dp)
+                Text(due?.let { shortDue(it) } ?: "No date", style = Type.body.copy(color = Sc.text2), modifier = Modifier.padding(start = 8.dp))
+            }
+            if (due != null) IconBtn(R.drawable.ms_close, "Clear date", { due = null }, tint = Sc.text3)
+            Spacer(Modifier.weight(1f))
+            TextAction("Add", { submit() }, enabled = title.isNotBlank())
+        }
+    }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    if (pickDate) {
+        LocalDatePickerDialog(initial = due, onDismiss = { pickDate = false }, onPick = {
+            pickDate = false
+            due = it
+        })
     }
 }

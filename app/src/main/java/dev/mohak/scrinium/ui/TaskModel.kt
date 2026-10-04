@@ -48,8 +48,6 @@ enum class TaskPriority(val key: String, val label: String) {
 // Soft cap on the Doing column; the board warns past it, never blocks.
 const val DOING_LIMIT = 3
 
-private const val DAY_MS = 86_400_000L
-
 val TaskDto.statusEnum: TaskStatus get() = TaskStatus.of(status)
 val TaskDto.isDone: Boolean get() = status == TaskStatus.Done.key
 
@@ -63,12 +61,19 @@ fun startOfDay(ms: Long): Long = Calendar.getInstance().apply {
     set(Calendar.MILLISECOND, 0)
 }.timeInMillis
 
+// Local midnight [n] calendar days after the day [ms] falls on. Not n * 24h:
+// days across a daylight-saving change are 23 or 25 hours long.
+fun addDays(ms: Long, n: Int): Long = Calendar.getInstance().apply {
+    timeInMillis = startOfDay(ms)
+    add(Calendar.DAY_OF_MONTH, n)
+}.timeInMillis
+
 fun TaskDto.isOverdue(): Boolean = !isDone && dueAt != null && dueAt < startOfToday()
 
 fun TaskDto.isDueToday(): Boolean {
     val due = dueAt ?: return false
     val today = startOfToday()
-    return due >= today && due < today + DAY_MS
+    return due >= today && due < addDays(today, 1)
 }
 
 // "Sep 26", or "Sep 26, 9:00 AM" when the due time isn't midnight.
@@ -83,24 +88,36 @@ fun dueLabel(dueAt: Long?): String {
 fun stampLabel(ms: Long): String =
     DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(ms))
 
-fun TaskDto.dueText(): String =
-    if (isDueToday() && !isDone) "Today" else dueLabel(dueAt)
-
-// List view grouping, same buckets and order as the web task list.
-data class TaskGroup(val label: String, val rows: List<TaskDto>)
-
-fun groupByDue(tasks: List<TaskDto>): List<TaskGroup> {
-    val tomorrow = startOfToday() + DAY_MS
-    val open = tasks.filter { !it.isDone }.sortedBy { it.dueAt ?: Long.MAX_VALUE }
-    val done = tasks.filter { it.isDone }.sortedByDescending { it.updatedAt }
-    return listOf(
-        TaskGroup("Overdue", open.filter { it.isOverdue() }),
-        TaskGroup("Today", open.filter { !it.isOverdue() && it.isDueToday() }),
-        TaskGroup("Upcoming", open.filter { it.dueAt != null && it.dueAt >= tomorrow }),
-        TaskGroup("No date", open.filter { it.dueAt == null }),
-        TaskGroup("Done", done)
-    ).filter { it.rows.isNotEmpty() }
+// Compact due label for task rows: "Today", "Tomorrow", a weekday within
+// the coming week, else "Sep 26"; a set time is appended ("Thu 9:00 AM").
+fun shortDue(dueAt: Long, now: Long = System.currentTimeMillis()): String {
+    val today = startOfDay(now)
+    val day = startOfDay(dueAt)
+    val date = when {
+        day == today -> "Today"
+        day == addDays(today, 1) -> "Tomorrow"
+        day > today && day < addDays(today, 7) -> java.text.SimpleDateFormat("EEE", java.util.Locale.getDefault()).format(Date(dueAt))
+        else -> java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault()).format(Date(dueAt))
+    }
+    val cal = Calendar.getInstance().apply { timeInMillis = dueAt }
+    if (cal.get(Calendar.HOUR_OF_DAY) == 0 && cal.get(Calendar.MINUTE) == 0) return date
+    return "$date ${DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(dueAt))}"
 }
+
+// List view grouping: one group per status in working order (what's new,
+// what's in hand, the week, what's blocked, done), open tasks by due date.
+data class TaskGroup(val status: TaskStatus, val rows: List<TaskDto>)
+
+val ListOrder = listOf(TaskStatus.Inbox, TaskStatus.Doing, TaskStatus.Todo, TaskStatus.Waiting, TaskStatus.Done)
+
+fun groupByStatus(tasks: List<TaskDto>): List<TaskGroup> = ListOrder.map { s ->
+    val rows = tasks.filter { it.status == s.key }
+    TaskGroup(
+        s,
+        if (s == TaskStatus.Done) rows.sortedByDescending { it.updatedAt }
+        else rows.sortedWith(compareBy({ it.dueAt ?: Long.MAX_VALUE }, { it.createdAt }))
+    )
+}.filter { it.rows.isNotEmpty() }
 
 /**
  * Local-midnight days an event covers. All-day events come from Google as

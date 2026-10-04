@@ -4,89 +4,85 @@ import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import dev.mohak.scrinium.ui.MainViewModel
-import dev.mohak.scrinium.ui.MarkdownText
-import dev.mohak.scrinium.ui.TasksViewModel
-import dev.mohak.scrinium.ui.lineStartOffset
+import dev.mohak.scrinium.R
+import dev.mohak.scrinium.ui.Divider
+import dev.mohak.scrinium.ui.ErrorStrip
+import dev.mohak.scrinium.ui.IconBtn
 import dev.mohak.scrinium.ui.LiveMarkdownTransformation
 import dev.mohak.scrinium.ui.LivePalette
+import dev.mohak.scrinium.ui.MainViewModel
+import dev.mohak.scrinium.ui.MarkdownText
+import dev.mohak.scrinium.ui.Menu
+import dev.mohak.scrinium.ui.MenuRow
+import dev.mohak.scrinium.ui.Sc
+import dev.mohak.scrinium.ui.TasksViewModel
+import dev.mohak.scrinium.ui.TopBar
+import dev.mohak.scrinium.ui.Type
 import dev.mohak.scrinium.ui.completions
-import dev.mohak.scrinium.ui.printHtml
+import dev.mohak.scrinium.ui.insertText
+import dev.mohak.scrinium.ui.toggleLinePrefix
+import dev.mohak.scrinium.ui.wrapSelection
+import dev.mohak.scrinium.ui.folderPaths
+import dev.mohak.scrinium.ui.lineStartOffset
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
     val editor by vm.editor.collectAsStateWithLifecycle()
     val state = editor ?: return
 
     var preview by remember { mutableStateOf(false) }
-    var showRename by remember { mutableStateOf(false) }
-    var showDelete by remember { mutableStateOf(false) }
-    var showShare by remember { mutableStateOf(false) }
-    var showInfo by remember { mutableStateOf(false) }
+    var showPanel by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
+    val actions = rememberNoteActions()
 
-    val fileName = state.path.substringAfterLast('/').removeSuffix(".md")
     val sync by vm.sync.collectAsStateWithLifecycle()
+    val pinned by vm.pinned.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var uploading by remember { mutableStateOf(false) }
@@ -109,13 +105,28 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
         )
     }
 
+    // Undo: a snapshot before each burst of typing (a pause of a second
+    // starts a new one), so one tap undoes a phrase, not a letter.
+    val undo = remember(state.id) { ArrayDeque<TextFieldValue>() }
+    var lastEdit by remember(state.id) { mutableLongStateOf(0L) }
+
+    fun apply(next: TextFieldValue) {
+        if (next.text != field.text) {
+            val now = System.currentTimeMillis()
+            if (undo.isEmpty() || now - lastEdit > 1000) {
+                undo.addLast(field)
+                if (undo.size > 100) undo.removeFirst()
+            }
+            lastEdit = now
+        }
+        field = next
+        if (next.text != state.text) vm.updateEditorText(next.text)
+    }
+
     var focused by remember { mutableStateOf(false) }
     val notes by vm.notesFlow.collectAsStateWithLifecycle()
     val tags by vm.vaultTags.collectAsStateWithLifecycle()
-    val colors = MaterialTheme.colorScheme
-    val palette = remember(colors) {
-        LivePalette(colors.primary, colors.outline, colors.surfaceContainerHigh, colors.tertiary.copy(alpha = 0.3f))
-    }
+    val palette = remember { LivePalette(Sc.accent, Sc.text4, Sc.press, Sc.yellow.copy(alpha = 0.25f)) }
     // Marks show on the cursor's lines only while the field has focus.
     val live = if (focused) {
         LiveMarkdownTransformation(field.selection.min, field.selection.max, palette)
@@ -157,160 +168,125 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
             val at = field.selection.start
             val needsBreak = at > 0 && field.text[at - 1] != '\n'
             val insert = (if (needsBreak) "\n" else "") + markdown + "\n"
-            val text = field.text.substring(0, at) + insert + field.text.substring(at)
-            field = TextFieldValue(text, TextRange(at + insert.length))
-            vm.updateEditorText(text)
+            apply(TextFieldValue(field.text.substring(0, at) + insert + field.text.substring(at), TextRange(at + insert.length)))
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(fileName, maxLines = 1) },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background
-                ),
-                navigationIcon = {
-                    IconButton(onClick = { vm.closeEditor() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                actions = {
-                    TextButton(onClick = { preview = !preview }) {
-                        Text(if (preview) "Edit" else "Preview")
-                    }
-                    IconButton(onClick = {
-                        vm.loadBacklinks()
-                        tasksVm.loadNoteTasks(state.path)
-                        showInfo = true
-                    }) {
-                        Icon(Icons.Default.Info, contentDescription = "Links and tasks")
-                    }
-                    IconButton(onClick = {
-                        vm.loadShares(state.path)
-                        showShare = true
-                    }) {
-                        Icon(Icons.Default.Share, contentDescription = "Share")
-                    }
-                    Box {
-                        IconButton(onClick = { showMenu = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "More")
-                        }
-                        DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                            DropdownMenuItem(
-                                text = { Text("Rename") },
-                                leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
-                                onClick = {
-                                    showMenu = false
-                                    showRename = true
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(if (uploading) "Uploading image" else "Insert image") },
-                                enabled = !uploading,
-                                onClick = {
-                                    showMenu = false
-                                    pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Export PDF") },
-                                onClick = {
-                                    showMenu = false
-                                    scope.launch {
-                                        val html = vm.printableHtml(state.path, field.text)
-                                        printHtml(context, fileName, html)
-                                    }
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Delete") },
-                                leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
-                                onClick = {
-                                    showMenu = false
-                                    showDelete = true
-                                }
-                            )
-                        }
-                    }
+    Column(Modifier.fillMaxSize()) {
+        TopBar(
+            onBack = { vm.closeEditor() },
+            titleContent = { Crumbs(state.path) }
+        ) {
+            IconBtn(
+                if (preview) R.drawable.ms_visibility_fill else R.drawable.ms_visibility,
+                if (preview) "Edit" else "Reading view",
+                { preview = !preview },
+                tint = if (preview) Sc.accent else Sc.text2
+            )
+            IconBtn(R.drawable.ms_right_panel_open, "Outline, links and tasks", {
+                vm.loadBacklinks()
+                tasksVm.loadNoteTasks(state.path)
+                showPanel = true
+            })
+            Box {
+                IconBtn(R.drawable.ms_more_vert, "More", { showMenu = true }, active = showMenu)
+                Menu(showMenu, { showMenu = false }) {
+                    val isPinned = state.path in pinned
+                    fun act(f: () -> Unit) = { showMenu = false; f() }
+                    MenuRow(if (isPinned) R.drawable.ms_star_fill else R.drawable.ms_star, if (isPinned) "Unpin" else "Pin", act { vm.togglePin(state.path) }, tint = if (isPinned) Sc.accent else null)
+                    MenuRow(R.drawable.ms_edit, "Rename", act { actions.rename = state.path })
+                    MenuRow(R.drawable.ms_drive_file_move, "Move", act { actions.move = state.path })
+                    MenuRow(R.drawable.ms_link, "Share link", act { actions.share = state.path })
+                    MenuRow(R.drawable.ms_picture_as_pdf, "Export PDF", act { exportPdf(context, scope, vm, state.path, field.text) })
+                    Divider()
+                    MenuRow(R.drawable.ms_delete, "Delete", act { actions.delete = state.path }, danger = true)
+                }
+            }
+        }
+        sync.error?.let { ErrorStrip(it) { vm.dismissSyncError() } }
+        if (preview) {
+            MarkdownText(
+                markdown = state.text,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(previewScroll)
+                    .padding(horizontal = 18.dp, vertical = 8.dp),
+                onWikilinkClick = { vm.openWikilink(it) },
+                onToggleTaskLine = { vm.toggleTaskLine(it) },
+                onTagClick = { vm.searchTag(it) },
+                imageBase = state.path,
+                loadImage = { vm.loadImage(state.path, it) },
+                onHeadingPositioned = { line, y -> headingY[line] = y }
+            )
+        } else Column(Modifier.fillMaxSize().imePadding()) {
+            BasicTextField(
+                value = field,
+                onValueChange = { apply(it) },
+                visualTransformation = live,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .focusRequester(focus)
+                    .onFocusChanged { focused = it.isFocused }
+                    .padding(horizontal = 18.dp, vertical = 8.dp),
+                textStyle = Type.read,
+                cursorBrush = SolidColor(Sc.accent),
+                decorationBox = { inner ->
+                    if (state.text.isEmpty()) Text("Start writing", style = Type.read.copy(color = Sc.text3))
+                    inner()
                 }
             )
-        }
-    ) { padding ->
-        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            sync.error?.let { ErrorBanner(it) { vm.dismissSyncError() } }
-            if (preview) {
-                MarkdownText(
-                    markdown = state.text,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .verticalScroll(previewScroll)
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    onWikilinkClick = { vm.openWikilink(it) },
-                    onToggleTaskLine = { vm.toggleTaskLine(it) },
-                    onTagClick = { vm.searchTag(it) },
-                    imageBase = state.path,
-                    loadImage = { vm.loadImage(state.path, it) },
-                    onHeadingPositioned = { line, y -> headingY[line] = y }
-                )
-            } else Column(modifier = Modifier.fillMaxSize().imePadding()) {
-                BasicTextField(
-                    value = field,
-                    onValueChange = {
-                        field = it
-                        if (it.text != state.text) vm.updateEditorText(it.text)
-                    },
-                    visualTransformation = live,
-                    modifier = Modifier
+            if (focused && suggestions.isNotEmpty()) {
+                Row(
+                    Modifier
                         .fillMaxWidth()
-                        .weight(1f)
-                        .focusRequester(focus)
-                        .onFocusChanged { focused = it.isFocused }
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    textStyle = TextStyle(
-                        fontSize = 15.sp,
-                        lineHeight = 25.5.sp,
-                        color = MaterialTheme.colorScheme.onSurface
-                    ),
-                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                    decorationBox = { innerTextField ->
-                        if (state.text.isEmpty()) {
-                            Text(
-                                text = "Start writing\u2026",
-                                style = TextStyle(
-                                    fontSize = 15.sp,
-                                    lineHeight = 25.5.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            )
-                        }
-                        innerTextField()
-                    }
-                )
-                if (suggestions.isNotEmpty()) {
-                    LazyRow(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(colors.surfaceContainer),
-                        contentPadding = PaddingValues(horizontal = 8.dp)
-                    ) {
-                        items(suggestions, key = { it.label + it.detail }) { s ->
-                            TextButton(onClick = {
-                                val cursor = field.selection.start
-                                val text = field.text.substring(0, s.from) + s.insert + field.text.substring(cursor)
-                                field = TextFieldValue(text, TextRange(s.from + s.insert.length))
-                                vm.updateEditorText(text)
-                            }) {
-                                Text(s.label, maxLines = 1)
-                            }
-                        }
+                        .height(40.dp)
+                        .topLine()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    suggestions.forEachIndexed { i, s ->
+                        Text(
+                            s.label,
+                            style = Type.body.copy(color = if (i == 0) Sc.accent else Sc.text2, fontWeight = if (i == 0) FontWeight.Medium else FontWeight.Normal),
+                            maxLines = 1,
+                            modifier = Modifier
+                                .clickable {
+                                    val cursor = field.selection.start
+                                    val text = field.text.substring(0, s.from) + s.insert + field.text.substring(cursor)
+                                    apply(TextFieldValue(text, TextRange(s.from + s.insert.length)))
+                                }
+                                .padding(horizontal = 10.dp, vertical = 10.dp)
+                        )
                     }
                 }
+            }
+            if (focused) {
+                FormatBar(
+                    canUndo = undo.isNotEmpty(),
+                    uploading = uploading,
+                    onBold = { apply(wrapSelection(field, "**")) },
+                    onItalic = { apply(wrapSelection(field, "*")) },
+                    onLink = { apply(wrapSelection(field, "[[", "]]")) },
+                    onTag = { apply(insertText(field, "#")) },
+                    onCheckbox = { apply(toggleLinePrefix(field, "- [ ] ")) },
+                    onList = { apply(toggleLinePrefix(field, "- ")) },
+                    onImage = { pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                    onUndo = {
+                        undo.removeLastOrNull()?.let { prev ->
+                            field = prev
+                            vm.updateEditorText(prev.text)
+                        }
+                    }
+                )
             }
         }
     }
 
-    if (showInfo) {
+    actions.Host(vm, remember(notes) { folderPaths(notes) })
+
+    if (showPanel) {
         NotePanel(
             vm,
             tasksVm,
@@ -320,118 +296,57 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                 if (preview) {
                     headingY[line]?.let { y -> scope.launch { previewScroll.animateScrollTo(y) } }
                 } else {
-                    val at = lineStartOffset(field.text, line)
-                    field = field.copy(selection = TextRange(at))
+                    field = field.copy(selection = TextRange(lineStartOffset(field.text, line)))
                     focus.requestFocus()
                 }
             },
-            onDismiss = { showInfo = false }
+            onDismiss = { showPanel = false }
         )
     }
+}
 
-    if (showRename) {
-        var name by remember(state.path) { mutableStateOf(fileName) }
-        AlertDialog(
-            onDismissRequest = { showRename = false },
-            title = { Text("Rename note") },
-            text = {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    singleLine = true
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    showRename = false
-                    vm.renameCurrentNote(name)
-                }) { Text("Rename") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showRename = false }) { Text("Cancel") }
-            }
-        )
-    }
+private fun Modifier.topLine() = drawBehind { drawLine(Sc.line, Offset(0f, 0f), Offset(size.width, 0f), 1.dp.toPx()) }
 
-    if (showDelete) {
-        AlertDialog(
-            onDismissRequest = { showDelete = false },
-            title = { Text("Delete note?") },
-            text = { Text("The note is moved to the server trash on the next sync.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    showDelete = false
-                    vm.deleteCurrentNote()
-                }) { Text("Delete") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showDelete = false }) { Text("Cancel") }
-            }
-        )
-    }
+// "projects / scrinium / " dimmed, then the file name.
+@Composable
+private fun Crumbs(path: String) {
+    val dir = path.substringBeforeLast('/', "")
+    Text(
+        buildAnnotatedString {
+            if (dir.isNotBlank()) withStyle(SpanStyle(color = Sc.text3)) { append(dir.replace("/", " / ") + " / ") }
+            withStyle(SpanStyle(color = Sc.text2)) { append(path.substringAfterLast('/').removeSuffix(".md")) }
+        },
+        style = Type.body.copy(fontWeight = FontWeight.Medium, fontSize = Type.meta.fontSize * 1.1f),
+        maxLines = 1,
+        overflow = TextOverflow.StartEllipsis
+    )
+}
 
-    if (showShare) {
-        val shares by vm.shares.collectAsStateWithLifecycle()
-        val clipboard = LocalClipboardManager.current
-        var password by remember(state.path) { mutableStateOf("") }
-        AlertDialog(
-            onDismissRequest = { showShare = false },
-            title = { Text("Share links") },
-            text = {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    if (shares.isEmpty()) {
-                        Text(
-                            text = "No links yet. Anyone with the link can read this note.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    for (share in shares) {
-                        val url = vm.shareUrl(share.id)
-                        Column(modifier = Modifier.padding(vertical = 6.dp)) {
-                            Text(
-                                text = url,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Row {
-                                if (share.hasPassword) {
-                                    Text(
-                                        text = "locked",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.padding(end = 8.dp)
-                                    )
-                                }
-                                TextButton(onClick = {
-                                    clipboard.setText(AnnotatedString(url))
-                                }) { Text("Copy") }
-                                TextButton(onClick = { vm.deleteShareLink(share.id) }) {
-                                    Text("Remove")
-                                }
-                            }
-                        }
-                    }
-                    OutlinedTextField(
-                        value = password,
-                        onValueChange = { password = it },
-                        singleLine = true,
-                        placeholder = { Text("Password (optional)") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 8.dp)
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    vm.createShareLink(password)
-                    password = ""
-                }) { Text("New link") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showShare = false }) { Text("Done") }
-            }
-        )
+@Composable
+private fun FormatBar(
+    canUndo: Boolean,
+    uploading: Boolean,
+    onBold: () -> Unit,
+    onItalic: () -> Unit,
+    onLink: () -> Unit,
+    onTag: () -> Unit,
+    onCheckbox: () -> Unit,
+    onList: () -> Unit,
+    onImage: () -> Unit,
+    onUndo: () -> Unit
+) {
+    Row(
+        Modifier.fillMaxWidth().height(46.dp).topLine().background(Sc.bg),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        IconBtn(R.drawable.ms_format_bold, "Bold", onBold)
+        IconBtn(R.drawable.ms_format_italic, "Italic", onItalic)
+        IconBtn(R.drawable.ms_data_array, "Link a note", onLink)
+        IconBtn(R.drawable.ms_tag, "Tag", onTag)
+        IconBtn(R.drawable.ms_check_box, "Checkbox", onCheckbox)
+        IconBtn(R.drawable.ms_format_list_bulleted, "List", onList)
+        IconBtn(R.drawable.ms_image, if (uploading) "Uploading image" else "Insert image", { if (!uploading) onImage() }, tint = if (uploading) Sc.accent else Sc.text2)
+        IconBtn(R.drawable.ms_undo, "Undo", { if (canUndo) onUndo() }, tint = if (canUndo) Sc.text2 else Sc.text4)
     }
 }

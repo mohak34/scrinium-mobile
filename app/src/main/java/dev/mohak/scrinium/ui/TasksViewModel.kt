@@ -41,6 +41,14 @@ class TasksViewModel(
     private val _tasks = MutableStateFlow<List<TaskDto>>(emptyList())
     val tasks: StateFlow<List<TaskDto>> = _tasks.asStateFlow()
 
+    // Area filter shared by the Tasks, Board and Calendar tabs. Null is all.
+    private val _areaFilter = MutableStateFlow<String?>(null)
+    val areaFilter: StateFlow<String?> = _areaFilter.asStateFlow()
+
+    fun setAreaFilter(key: String?) {
+        _areaFilter.value = key
+    }
+
     private val _loading = MutableStateFlow(false)
     val loading: StateFlow<Boolean> = _loading.asStateFlow()
 
@@ -103,7 +111,10 @@ class TasksViewModel(
     // offline then is not an error worth showing.
     fun refresh(quiet: Boolean = false) {
         viewModelScope.launch {
-            if (!quiet) _loading.value = true
+            if (!quiet) {
+                _loading.value = true
+                _error.value = null
+            }
             try {
                 load()
             } catch (e: Exception) {

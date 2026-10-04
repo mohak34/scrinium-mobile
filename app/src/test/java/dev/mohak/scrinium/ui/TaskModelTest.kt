@@ -26,4 +26,13 @@ class TaskModelTest {
         val oneHour = CalendarEvent("c", "Call", local(2026, 10, 4, 9), local(2026, 10, 4, 10), allDay = false)
         assertEquals(listOf(local(2026, 10, 4)), eventDays(oneHour))
     }
+
+    @Test
+    fun tomorrowSurvivesDaylightSavingChanges() {
+        TimeZone.setDefault(TimeZone.getTimeZone("America/New_York"))
+        // Fall back (25h day), spring forward (23h day), and an ordinary day.
+        assertEquals("Tomorrow", shortDue(local(2026, 11, 2), now = local(2026, 11, 1, 12)))
+        assertEquals("Tomorrow", shortDue(local(2027, 3, 15), now = local(2027, 3, 14, 12)))
+        assertEquals("Tomorrow", shortDue(local(2026, 10, 6), now = local(2026, 10, 5, 12)))
+    }
 }

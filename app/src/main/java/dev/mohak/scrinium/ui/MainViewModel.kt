@@ -24,6 +24,7 @@ import dev.mohak.scrinium.data.remote.TagCount
 import dev.mohak.scrinium.data.remote.TaggedHit
 import dev.mohak.scrinium.data.remote.TrashEntry
 import dev.mohak.scrinium.di.AppContainer
+import dev.mohak.scrinium.reminders.Reminders
 import dev.mohak.scrinium.sync.SyncEngine
 import dev.mohak.scrinium.sync.SyncReport
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -59,7 +60,12 @@ sealed interface Screen {
     data object Tags : Screen
     data object Trash : Screen
     data object Tasks : Screen
+    data object Board : Screen
+    data object Calendar : Screen
 }
+
+/** The five screens behind the bottom tabs, in tab order. */
+val TabScreens: List<Screen> = listOf(Screen.Notes, Screen.Tasks, Screen.Search, Screen.Board, Screen.Calendar)
 
 // Back history for the editor: note→note (wikilinks), search→note and
 // tags→note all return where they came from instead of home.
@@ -67,7 +73,7 @@ private sealed interface History {
     data class Note(val path: String) : History
     data class Search(val query: String, val origin: Screen) : History
     data class Tags(val tag: String?) : History
-    data object Tasks : History
+    data class Tab(val screen: Screen) : History
 }
 
 data class SyncUiState(
@@ -88,7 +94,8 @@ class MainViewModel(
     private val notes: NotesRepository,
     private val syncEngine: SyncEngine,
     private val images: ImageLoader,
-    private val prefs: Prefs
+    private val prefs: Prefs,
+    private val reminders: Reminders
 ) : ViewModel() {
 
     val signedIn: StateFlow<Boolean> = session.signedIn
@@ -102,6 +109,12 @@ class MainViewModel(
     val notesFlow: StateFlow<List<NoteEntity>> = notes.observeAll()
         .map { list -> list.filter { !it.isDeleted } }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    // Everything waiting to upload, deletion markers included (a rename or
+    // move is a marker at the old path plus an edit at the new one).
+    val pendingNotes: StateFlow<List<NoteEntity>> = notes.observeAll()
+        .map { list -> list.filter { it.localModifiedAt != null }.sortedByDescending { it.localModifiedAt } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _unsyncedCount = MutableStateFlow(0)
     val unsyncedCount: StateFlow<Int> = _unsyncedCount.asStateFlow()
@@ -117,6 +130,10 @@ class MainViewModel(
 
     fun toggleFolder(path: String) {
         _collapsedFolders.update { if (path in it) it - path else it + path }
+    }
+
+    fun collapseAll() {
+        _collapsedFolders.value = folderPaths(notesFlow.value).toSet()
     }
 
     // Tags for editor autocomplete, from Room so they work offline.
@@ -135,6 +152,19 @@ class MainViewModel(
     }
 
     fun setTemplate(value: String) = prefs.setTemplate(value)
+
+    // Settings > Reminders: the switch and what is scheduled right now.
+    // Turning it on re-arms the stored schedule; task loads keep it current.
+    private val _remindersOn = MutableStateFlow(reminders.enabled)
+    val remindersOn: StateFlow<Boolean> = _remindersOn.asStateFlow()
+
+    val scheduledReminders: StateFlow<List<Reminders.Entry>> = reminders.observeScheduled()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), reminders.scheduled())
+
+    fun setRemindersOn(on: Boolean) {
+        reminders.enabled = on
+        _remindersOn.value = on
+    }
 
     private val editorEdits = MutableStateFlow<Pair<String, String>?>(null)
 
@@ -179,7 +209,7 @@ class MainViewModel(
             }
             Screen.Search -> pushHistory(History.Search(searchQuery.value, _searchOrigin.value))
             Screen.Tags -> pushHistory(History.Tags(_selectedTag.value))
-            Screen.Tasks -> pushHistory(History.Tasks)
+            Screen.Tasks, Screen.Board, Screen.Calendar -> pushHistory(History.Tab(s))
             else -> Unit
         }
     }
@@ -247,13 +277,21 @@ class MainViewModel(
         viewModelScope.launch {
             notes.observeUnsyncedCount().collect { _unsyncedCount.value = it }
         }
+        // Both debounced writers re-resolve their path and prefer the open
+        // editor's latest text: a rename or move can land while an edit is
+        // still pending, and writing to the old path would revive it.
         viewModelScope.launch {
             editorEdits
                 .filterNotNull()
                 .debounce(500)
                 .distinctUntilChanged()
                 .collect { (path, text) ->
-                    notes.saveLocally(path, text)
+                    val target = currentPath(path)
+                    val stored = notes.get(target)
+                    if (stored?.isDeleted == true) return@collect
+                    val latest = _editor.value?.takeIf { it.path == target }?.text ?: text
+                    if (stored?.content == latest) return@collect
+                    notes.saveLocally(target, latest)
                     scheduleAutoSync()
                 }
         }
@@ -263,7 +301,8 @@ class MainViewModel(
                 .debounce(1500)
                 .distinctUntilChanged()
                 .collect { (path, text) ->
-                    maybeSyncTitleToFilename(path, text)
+                    val target = currentPath(path)
+                    maybeSyncTitleToFilename(target, _editor.value?.takeIf { it.path == target }?.text ?: text)
                 }
         }
         viewModelScope.launch {
@@ -387,13 +426,7 @@ class MainViewModel(
         if (notes.get(target) != null) return
         try {
             val newPath = notes.renameNote(path, safe) ?: return
-            remapPaths(path, newPath)
-            if (_editor.value?.path == path) {
-                _editor.value = _editor.value?.copy(path = newPath)
-                val updatedText = _editor.value?.text ?: text
-                editorEdits.value = newPath to updatedText
-                _screen.value = Screen.Editor(newPath)
-            }
+            followMove(path, newPath)
             scheduleAutoSync()
         } catch (_: Exception) {
         }
@@ -406,7 +439,7 @@ class MainViewModel(
             titleSyncEdits.value = null
             when (val prev = history.removeLastOrNull()) {
                 is History.Note -> {
-                    val note = notes.get(prev.path)
+                    val note = notes.get(currentPath(prev.path))
                     if (note != null && !note.isDeleted) {
                         _editor.value = EditorState(note.path, note.content)
                         _screen.value = Screen.Editor(note.path)
@@ -426,9 +459,9 @@ class MainViewModel(
                     _screen.value = Screen.Tags
                     selectTag(prev.tag)
                 }
-                History.Tasks -> {
+                is History.Tab -> {
                     _editor.value = null
-                    _screen.value = Screen.Tasks
+                    _screen.value = prev.screen
                 }
                 null -> {
                     _editor.value = null
@@ -444,9 +477,11 @@ class MainViewModel(
     }
     fun openSettings() = _screen.update { Screen.Settings }
 
-    fun openTasks() = _screen.update { Screen.Tasks }
-
-    fun closeTasks() = _screen.update { Screen.Notes }
+    /** Bottom-tab switch. Search remembers the tab it was opened from. */
+    fun openTab(tab: Screen) {
+        if (tab == Screen.Search && _screen.value != Screen.Search) _searchOrigin.value = _screen.value
+        _screen.value = tab
+    }
 
     // Tags are server-driven (vault-wide counts the phone can't compute
     // cheaply). Loaded on open, quiet offline failure leaves stale list.
@@ -490,12 +525,16 @@ class MainViewModel(
     private val _trashLoading = MutableStateFlow(false)
     val trashLoading: StateFlow<Boolean> = _trashLoading.asStateFlow()
 
+    // Trash opens from Notes and from Settings; back returns there.
+    private var trashOrigin: Screen = Screen.Notes
+
     fun openTrash() {
+        trashOrigin = _screen.value
         _screen.update { Screen.Trash }
         refreshTrash()
     }
 
-    fun closeTrash() = _screen.update { Screen.Notes }
+    fun closeTrash() = _screen.update { trashOrigin }
 
     fun refreshTrash() {
         viewModelScope.launch(Dispatchers.IO) {
@@ -548,6 +587,18 @@ class MainViewModel(
         }
     }
 
+    fun restoreAllTrash() {
+        viewModelScope.launch {
+            try {
+                for (entry in _trash.value) notes.restoreTrash(entry.trashName)
+            } catch (e: Exception) {
+                _sync.update { it.copy(error = "Restore failed: ${e.message}") }
+            }
+            refreshTrash()
+            syncNow(force = true, quiet = true)
+        }
+    }
+
     fun emptyTrash() {
         viewModelScope.launch {
             try {
@@ -570,9 +621,11 @@ class MainViewModel(
         // editor is gone (e.g. note deleted meanwhile).
         val origin = _searchOrigin.value
         _searchOrigin.value = Screen.Notes
-        _screen.value =
-            if (origin is Screen.Editor && _editor.value?.path == origin.path) origin
-            else Screen.Notes
+        _screen.value = when {
+            origin is Screen.Editor && _editor.value?.path == origin.path -> origin
+            origin in TabScreens && origin != Screen.Search -> origin
+            else -> Screen.Notes
+        }
     }
 
     fun closeSettings() = _screen.update { Screen.Notes }
@@ -580,6 +633,11 @@ class MainViewModel(
     fun setSearchQuery(q: String) {
         searchQuery.value = q
     }
+
+    // Last few queries that led to an opened result, newest first.
+    val recentSearches: StateFlow<List<String>> = prefs.recentSearches
+
+    fun rememberSearch(q: String) = prefs.addRecentSearch(q)
 
     // Preview interactions (no-ops for plain text, wired in EditorScreen).
     fun openWikilink(targetRaw: String) {
@@ -645,8 +703,7 @@ class MainViewModel(
         }
     }
 
-    fun createShareLink(password: String?) {
-        val path = _editor.value?.path ?: return
+    fun createShareLink(path: String, password: String?) {
         if (password != null && password.isNotBlank() && password.length < 4) {
             _sync.update { it.copy(error = "Password needs at least 4 characters") }
             return
@@ -764,36 +821,45 @@ class MainViewModel(
     }
 
     fun deleteCurrentNote() {
+        _editor.value?.let { deleteNote(it.path) }
+    }
+
+    // Deleting the open note also closes it.
+    fun deleteNote(path: String) {
         viewModelScope.launch {
-            val current = _editor.value ?: return@launch
-            notes.deleteLocally(current.path)
+            val target = currentPath(path)
+            notes.deleteLocally(target)
             scheduleAutoSync()
-            _editor.value = null
-            _screen.value = Screen.Notes
+            if (_editor.value?.path == target) {
+                _editor.value = null
+                _screen.value = Screen.Notes
+            }
         }
     }
 
     fun renameCurrentNote(newName: String) {
+        _editor.value?.let { renameNote(it.path, newName) }
+    }
+
+    // Renames a note, open or not. Filename -> title: the H1/frontmatter
+    // follows the new name, same as the web client; never injects a title
+    // into a note that has none.
+    fun renameNote(path: String, newName: String) {
         viewModelScope.launch {
-            val current = _editor.value ?: return@launch
+            flushEditor()
             try {
-                val newPath = notes.renameNote(current.path, newName) ?: return@launch
-                remapPaths(current.path, newPath)
-                // Filename -> title: keep the H1/frontmatter in step with the
-                // new name, same as the web client. Never injects when the
-                // note has no title source.
-                var text = current.text
+                val source = currentPath(path)
+                val newPath = notes.renameNote(source, newName) ?: return@launch
+                followMove(source, newPath)
+                val open = _editor.value?.takeIf { it.path == newPath }
+                val text = open?.text ?: notes.get(newPath)?.content ?: return@launch
                 val stem = newPath.substringAfterLast('/').removeSuffix(".md")
                 if (effectiveTitle(text, "") != stem) {
                     setEffectiveTitle(text, stem)?.let { updated ->
-                        text = updated
                         notes.saveLocally(newPath, updated)
+                        if (open != null) _editor.value = open.copy(text = updated)
                     }
                 }
-                _editor.value = current.copy(path = newPath, text = text)
-                editorEdits.value = null
-                titleSyncEdits.value = null
-                _screen.value = Screen.Editor(newPath)
                 scheduleAutoSync()
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Rename failed: ${e.message}") }
@@ -803,9 +869,11 @@ class MainViewModel(
 
     fun moveNote(path: String, newParent: String) {
         viewModelScope.launch {
+            flushEditor()
             try {
-                val newPath = notes.moveNote(path, newParent) ?: return@launch
-                remapPaths(path, newPath)
+                val source = currentPath(path)
+                val newPath = notes.moveNote(source, newParent) ?: return@launch
+                followMove(source, newPath)
                 scheduleAutoSync()
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Move failed: ${e.message}") }
@@ -816,8 +884,9 @@ class MainViewModel(
     fun renameFolder(folder: String, newName: String) {
         viewModelScope.launch {
             try {
+                flushEditor()
                 val newPrefix = notes.renameFolder(folder, newName) ?: return@launch
-                remapPaths(folder, newPrefix)
+                followMove(folder, newPrefix)
                 scheduleAutoSync()
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Rename failed: ${e.message}") }
@@ -828,13 +897,41 @@ class MainViewModel(
     fun moveFolder(folder: String, newParent: String) {
         viewModelScope.launch {
             try {
+                flushEditor()
                 val newPrefix = notes.moveFolder(folder, newParent) ?: return@launch
-                remapPaths(folder, newPrefix)
+                followMove(folder, newPrefix)
                 scheduleAutoSync()
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Move failed: ${e.message}") }
             }
         }
+    }
+
+    // Where the open note went on each rename or move this session. Dialogs,
+    // history and pending saves can hold a path an automatic title rename
+    // has since tombstoned; [currentPath] follows the chain to the live note.
+    private val movedTo = mutableMapOf<String, String>()
+
+    private suspend fun currentPath(path: String): String {
+        var p = path
+        repeat(32) {
+            val next = movedTo[p] ?: return p
+            if (notes.get(p)?.isDeleted != true) return p
+            p = next
+        }
+        return p
+    }
+
+    // Points pins, collapsed folders and the open editor at the new path
+    // after a note or folder prefix rewrite.
+    private fun followMove(oldPrefix: String, newPrefix: String) {
+        remapPaths(oldPrefix, newPrefix)
+        val open = _editor.value ?: return
+        if (open.path != oldPrefix && !open.path.startsWith("$oldPrefix/")) return
+        val moved = newPrefix + open.path.removePrefix(oldPrefix)
+        movedTo[open.path] = moved
+        _editor.value = open.copy(path = moved)
+        if (_screen.value == Screen.Editor(open.path)) _screen.value = Screen.Editor(moved)
     }
 
     // Follows collapsed and pinned state across a path or folder prefix
@@ -948,7 +1045,8 @@ class MainViewModel(
                     notes = container.notesRepository,
                     syncEngine = container.syncEngine,
                     images = container.imageLoader,
-                    prefs = container.prefs
+                    prefs = container.prefs,
+                    reminders = container.reminders
                 )
             }
         }
