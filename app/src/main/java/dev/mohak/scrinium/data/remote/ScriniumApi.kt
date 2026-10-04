@@ -22,6 +22,7 @@ import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.HTTP
 import retrofit2.http.Multipart
 import retrofit2.http.PATCH
 import retrofit2.http.POST
@@ -115,6 +116,24 @@ data class TaskLinkRequest(@SerialName("note_path") val notePath: String)
 @Serializable
 data class AttachmentResponse(val path: String)
 
+// One signed-in device. Only the token's SHA-256 is stored server-side.
+@Serializable
+data class ApiTokenDto(
+    @SerialName("token_hash") val tokenHash: String,
+    @SerialName("created_at") val createdAt: Long,
+    @SerialName("last_used_at") val lastUsedAt: Long? = null
+)
+
+@Serializable
+data class RevokeTokenRequest(@SerialName("token_hash") val tokenHash: String)
+
+// Google Calendar event, times in epoch ms. All-day events start at UTC midnight.
+@Serializable
+data class CalendarEvent(val id: String, val title: String, val start: Long, val end: Long, val allDay: Boolean)
+
+@Serializable
+data class CalendarResponse(val events: List<CalendarEvent> = emptyList(), val needsConnect: Boolean = false)
+
 private interface ScriniumService {
     @POST("api/auth/mobile")
     suspend fun mobileAuth(@Body body: MobileAuthRequest): MobileAuthResponse
@@ -191,6 +210,15 @@ private interface ScriniumService {
 
     @DELETE("api/tasks/{id}/links")
     suspend fun removeTaskLink(@Path("id") id: String, @Query("note_path") notePath: String): List<String>
+
+    @GET("api/tokens")
+    suspend fun tokens(): List<ApiTokenDto>
+
+    @HTTP(method = "DELETE", path = "api/tokens", hasBody = true)
+    suspend fun revokeToken(@Body body: RevokeTokenRequest): Response<ResponseBody>
+
+    @GET("api/calendar/events")
+    suspend fun calendarEvents(@Query("from") from: Long, @Query("to") to: Long): CalendarResponse
 
     @Multipart
     @POST("api/attachments")
@@ -320,6 +348,15 @@ class ScriniumApi(
         )
         return service.uploadAttachment(part, folder.toRequestBody(textMediaType)).path
     }
+
+    suspend fun fetchTokens(): List<ApiTokenDto> = service.tokens()
+
+    suspend fun revokeToken(tokenHash: String) {
+        val res = service.revokeToken(RevokeTokenRequest(tokenHash))
+        if (!res.isSuccessful) throw ApiException(res.code())
+    }
+
+    suspend fun fetchCalendarEvents(from: Long, to: Long): CalendarResponse = service.calendarEvents(from, to)
 
     companion object {
         fun encPath(path: String): String =

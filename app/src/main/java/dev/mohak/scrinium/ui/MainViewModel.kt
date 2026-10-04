@@ -15,6 +15,7 @@ import dev.mohak.scrinium.data.noteRelative
 import dev.mohak.scrinium.data.resolveImage
 import dev.mohak.scrinium.data.SessionRepository
 import dev.mohak.scrinium.data.local.NoteEntity
+import dev.mohak.scrinium.data.remote.ApiTokenDto
 import dev.mohak.scrinium.data.remote.PublicShare
 import dev.mohak.scrinium.data.remote.SearchResult
 import dev.mohak.scrinium.data.remote.TagCount
@@ -859,6 +860,34 @@ class MainViewModel(
         if (_sync.value.syncing) return
         if (last != 0L && System.currentTimeMillis() - last < 30 * 60_000) return
         syncNow()
+    }
+
+    // Settings > Devices: every phone signed in to this account.
+    private val _devices = MutableStateFlow<List<ApiTokenDto>>(emptyList())
+    val devices: StateFlow<List<ApiTokenDto>> = _devices.asStateFlow()
+    val currentDeviceHash: String? get() = session.currentTokenHash()
+
+    fun loadDevices() {
+        viewModelScope.launch {
+            try {
+                _devices.value = session.fetchDevices().sortedByDescending { it.lastUsedAt ?: it.createdAt }
+            } catch (e: Exception) {
+                _sync.update { it.copy(error = "Couldn't load devices: ${e.message}") }
+            }
+        }
+    }
+
+    // Revoking this phone's own token is a sign-out.
+    fun revokeDevice(tokenHash: String) {
+        viewModelScope.launch {
+            try {
+                session.revokeDevice(tokenHash)
+                _devices.update { list -> list.filterNot { it.tokenHash == tokenHash } }
+                if (tokenHash == session.currentTokenHash()) session.forceSignOut()
+            } catch (e: Exception) {
+                _sync.update { it.copy(error = "Couldn't revoke device: ${e.message}") }
+            }
+        }
     }
 
     fun signOut() {
