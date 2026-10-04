@@ -143,7 +143,7 @@ This is worth being explicit about since it's your stated top priority:
 | Debounced autosave                           | Same concept, local-first (see above)                             |
 | `/api/tree` vault listing                    | Served by the new manifest endpoint instead                       |
 | Note CRUD                                    | Room locally + sync engine reconciles with server                 |
-| Attachments (drop into `vault/attachments/`) | Phase 2 — needs its own upload flow; not blocking v1              |
+| Attachments (drop into `vault/attachments/`) | Photo picker upload to `attachments/`; images render in preview   |
 
 ---
 

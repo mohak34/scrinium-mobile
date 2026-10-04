@@ -66,8 +66,16 @@ in release.
 - `DELETE /api/notes/<path>` → move to trash (recovers to vault `.trash`)
 - `GET /api/tree` → nested vault listing
 - `GET /api/search?q=` → `[{ path, title, snippet }]` (FTS5)
+- `GET /api/tasks` (`?note=<path>` for one note's tasks), `POST /api/tasks`,
+  `PATCH|DELETE /api/tasks/<id>`, `GET|POST|DELETE /api/tasks/<id>/links`.
+  Rows are snake_case. Tasks live in the server's SQLite, not the vault, so
+  they are online-only: `TasksViewModel` calls the API directly, no Room.
+- `GET /api/assets/<path>` → image bytes; `POST /api/attachments` (multipart
+  `file` + `folder`) → `{ path }`. Phone uploads go to `attachments/`, the
+  web default, and the note gets a note-relative `![name](path)`.
 
-Paths are URL-encoded per segment. Attachments are out of scope for v1.
+Paths are URL-encoded per segment. Backlinks are computed on the phone from
+Room (`ui/Backlinks.kt`, a port of the web's `wikilinks.ts`), not fetched.
 
 ## Sync engine rules
 

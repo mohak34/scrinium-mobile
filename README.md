@@ -19,6 +19,14 @@ reconciles with the server in the background while the app is open. See
 - Tag browsing via the server tags API
 - Server trash with restore, purge, empty
 - Public share links with optional passwords
+- Tasks: list (Overdue, Today, Upcoming, No date, Done), board by status,
+  month calendar by due date, area filter. Detail screen with status, area,
+  priority, due date and time, reminder, waiting-on, subtasks and linked
+  notes. Online only; reminders still fire only in the web app
+- Note panel: tasks linked to the note, backlinks, and unlinked mentions
+  you can turn into links
+- Images in preview (vault images through the asset API, disk-cached for
+  an hour), and image upload from the editor into `attachments/`
 - Foreground-only sync: 5s auto-push after edits settle, 60s pull tick,
   sync on foreground and pull-to-refresh. Killing the app stops everything.
 
