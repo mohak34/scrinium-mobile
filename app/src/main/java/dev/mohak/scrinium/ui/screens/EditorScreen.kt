@@ -41,6 +41,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -54,6 +56,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.mohak.scrinium.ui.MainViewModel
 import dev.mohak.scrinium.ui.MarkdownText
 import dev.mohak.scrinium.ui.TasksViewModel
+import dev.mohak.scrinium.ui.lineStartOffset
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -76,6 +79,11 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var uploading by remember { mutableStateOf(false) }
+    val focus = remember { FocusRequester() }
+    val previewScroll = rememberScrollState()
+    // Heading line -> y in the preview, filled as headings lay out, so an
+    // outline tap can scroll there.
+    val headingY = remember(state.path) { mutableMapOf<Int, Int>() }
 
     // The field keeps its own selection so an image lands at the cursor.
     // Text changed elsewhere (task toggles in preview, title sync) is adopted
@@ -184,12 +192,13 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                     markdown = state.text,
                     modifier = Modifier
                         .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
+                        .verticalScroll(previewScroll)
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                     onWikilinkClick = { vm.openWikilink(it) },
                     onToggleTaskLine = { vm.toggleTaskLine(it) },
                     onTagClick = { vm.searchTag(it) },
-                    loadImage = { vm.loadImage(state.path, it) }
+                    loadImage = { vm.loadImage(state.path, it) },
+                    onHeadingPositioned = { line, y -> headingY[line] = y }
                 )
             } else {
                 BasicTextField(
@@ -201,6 +210,7 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                     modifier = Modifier
                         .fillMaxSize()
                         .imePadding()
+                        .focusRequester(focus)
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                     textStyle = TextStyle(
                         fontSize = 15.sp,
@@ -227,7 +237,22 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
     }
 
     if (showInfo) {
-        NotePanel(vm, tasksVm, state.path, onDismiss = { showInfo = false })
+        NotePanel(
+            vm,
+            tasksVm,
+            state.path,
+            state.text,
+            onJump = { line ->
+                if (preview) {
+                    headingY[line]?.let { y -> scope.launch { previewScroll.animateScrollTo(y) } }
+                } else {
+                    val at = lineStartOffset(field.text, line)
+                    field = field.copy(selection = TextRange(at))
+                    focus.requestFocus()
+                }
+            },
+            onDismiss = { showInfo = false }
+        )
     }
 
     if (showRename) {

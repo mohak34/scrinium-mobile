@@ -22,6 +22,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -43,7 +45,7 @@ private val imageLinePattern = Regex("""^!\[([^\]]*)]\(\s*(<[^>]+>|[^)\s]+)(?:\s
 // annotations (tasks, wikilinks, tags) survive the split into composables.
 private sealed interface Block {
     data class Text(val content: AnnotatedString) : Block
-    data class Heading(val level: Int, val content: AnnotatedString) : Block
+    data class Heading(val level: Int, val content: AnnotatedString, val line: Int) : Block
     data class Code(val text: String) : Block
     data class Math(val text: String) : Block
     data class Quote(val content: AnnotatedString) : Block
@@ -59,7 +61,8 @@ fun MarkdownText(
     onWikilinkClick: (String) -> Unit = {},
     onToggleTaskLine: (Int) -> Unit = {},
     onTagClick: (String) -> Unit = {},
-    loadImage: suspend (String) -> ImageBitmap? = { null }
+    loadImage: suspend (String) -> ImageBitmap? = { null },
+    onHeadingPositioned: (line: Int, y: Int) -> Unit = { _, _ -> }
 ) {
     val colors = MaterialTheme.colorScheme
     val renderer = remember(colors) {
@@ -115,6 +118,7 @@ fun MarkdownText(
                         text = block.content,
                         modifier = Modifier
                             .fillMaxWidth()
+                            .onGloballyPositioned { onHeadingPositioned(block.line, it.positionInParent().y.toInt()) }
                             .padding(bottom = 12.dp),
                         style = bodyStyle.merge(
                             androidx.compose.ui.text.TextStyle(
@@ -368,7 +372,7 @@ private class MarkdownRenderer(
                 }
                 headingLevel(trimmed) != null -> {
                     val level = headingLevel(trimmed)!!
-                    out += Block.Heading(level, inline(trimmed.drop(level).trim(), headingStyle(level)))
+                    out += Block.Heading(level, inline(trimmed.drop(level).trim(), headingStyle(level)), i)
                     i++
                 }
                 trimmed.startsWith("---") || trimmed.startsWith("***") || trimmed.startsWith("___") -> {

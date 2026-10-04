@@ -30,20 +30,37 @@ import dev.mohak.scrinium.ui.Backlink
 import dev.mohak.scrinium.ui.MainViewModel
 import dev.mohak.scrinium.ui.TaskStatus
 import dev.mohak.scrinium.ui.TasksViewModel
+import dev.mohak.scrinium.ui.frontmatterProperties
 import dev.mohak.scrinium.ui.noteTitle
+import dev.mohak.scrinium.ui.parseOutline
+import dev.mohak.scrinium.ui.wordCount
+import java.text.DateFormat
+import java.util.Date
 
 /**
- * The open note's side panel from the web, as a bottom sheet: tasks linked
- * to the note, notes linking here, and plain-text mentions that can be
- * turned into links.
+ * The open note's side panel from the web, as a bottom sheet: outline,
+ * frontmatter properties, tasks linked to the note, notes linking here,
+ * plain-text mentions that can be turned into links, and file info.
+ * [onJump] takes the 0-based line of a tapped heading.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NotePanel(vm: MainViewModel, tasksVm: TasksViewModel, path: String, onDismiss: () -> Unit) {
+fun NotePanel(
+    vm: MainViewModel,
+    tasksVm: TasksViewModel,
+    path: String,
+    content: String,
+    onJump: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
     val noteTasks by tasksVm.noteTasks.collectAsStateWithLifecycle()
     val backlinks by vm.backlinks.collectAsStateWithLifecycle()
     val notes by vm.notesFlow.collectAsStateWithLifecycle()
     var newTask by remember(path) { mutableStateOf("") }
+    val outline = remember(content) { parseOutline(content) }
+    val properties = remember(content) { frontmatterProperties(content) }
+    val words = remember(content) { wordCount(content) }
+    val stored = notes.firstOrNull { it.path == path }
 
     fun titleOf(p: String): String =
         notes.firstOrNull { it.path == p }?.let { noteTitle(it.path, it.content) }
@@ -51,6 +68,27 @@ fun NotePanel(vm: MainViewModel, tasksVm: TasksViewModel, path: String, onDismis
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         LazyColumn(modifier = Modifier.fillMaxWidth()) {
+            if (outline.isNotEmpty()) {
+                item { SectionHeader("Outline") }
+                items(outline, key = { "o-${it.line}" }) { h ->
+                    Text(
+                        h.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                onDismiss()
+                                onJump(h.line)
+                            }
+                            .padding(start = (16 + (h.level - 1) * 14).dp, end = 16.dp, top = 6.dp, bottom = 6.dp)
+                    )
+                }
+            }
+            if (properties.isNotEmpty()) {
+                item { SectionHeader("Properties") }
+                items(properties, key = { "p-${it.key}" }) { p -> InfoRow(p.key, p.value) }
+            }
             item { SectionHeader("Tasks") }
             items(noteTasks, key = { "t-${it.id}" }) { t ->
                 TaskRow(
@@ -107,8 +145,31 @@ fun NotePanel(vm: MainViewModel, tasksVm: TasksViewModel, path: String, onDismis
                     }
                 }
             }
+            item { SectionHeader("Info") }
+            item { InfoRow("Words", "%,d".format(words)) }
+            item { InfoRow("Characters", "%,d".format(content.length)) }
+            stored?.let { n ->
+                val modified = n.localModifiedAt ?: n.remoteUpdatedAt
+                item {
+                    InfoRow("Modified", DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(modified)))
+                }
+            }
+            item { InfoRow("Path", path) }
             item { Text("", modifier = Modifier.padding(bottom = 24.dp)) }
         }
+    }
+}
+
+@Composable
+private fun InfoRow(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(0.35f)
+        )
+        Text(value, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(0.65f))
     }
 }
 
