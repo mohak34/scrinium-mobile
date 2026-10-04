@@ -54,6 +54,7 @@ fun NotePanel(
     onDismiss: () -> Unit
 ) {
     val noteTasks by tasksVm.noteTasks.collectAsStateWithLifecycle()
+    val taskError by tasksVm.error.collectAsStateWithLifecycle()
     val backlinks by vm.backlinks.collectAsStateWithLifecycle()
     val notes by vm.notesFlow.collectAsStateWithLifecycle()
     var newTask by remember(path) { mutableStateOf("") }
@@ -90,6 +91,7 @@ fun NotePanel(
                 items(properties, key = { "p-${it.key}" }) { p -> InfoRow(p.key, p.value) }
             }
             item { SectionHeader("Tasks") }
+            taskError?.let { e -> item { ErrorBanner(e) { tasksVm.dismissError() } } }
             items(noteTasks, key = { "t-${it.id}" }) { t ->
                 TaskRow(
                     task = t,
@@ -109,8 +111,11 @@ fun NotePanel(
                     placeholder = { Text("Add task for this note") },
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = {
-                        tasksVm.create(newTask, status = TaskStatus.Inbox, linkPath = path)
-                        newTask = ""
+                        val title = newTask
+                        // Kept on failure for a retry; cleared unless more was typed.
+                        tasksVm.create(title, status = TaskStatus.Inbox, linkPath = path, onCreated = {
+                            if (newTask == title) newTask = ""
+                        })
                     }),
                     modifier = Modifier
                         .fillMaxWidth()

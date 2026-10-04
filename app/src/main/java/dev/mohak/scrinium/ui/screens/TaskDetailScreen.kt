@@ -35,7 +35,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,7 +55,6 @@ import dev.mohak.scrinium.ui.dueLabel
 import dev.mohak.scrinium.ui.noteTitle
 import dev.mohak.scrinium.ui.stampLabel
 import dev.mohak.scrinium.ui.startOfDay
-import kotlinx.coroutines.delay
 
 /** Full-screen task editor, the phone's version of the web task drawer. */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -117,20 +115,8 @@ fun TaskDetailScreen(vm: MainViewModel, tasksVm: TasksViewModel, id: String) {
                         Text("Subtask of ${parent?.title ?: "parent"}", maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
-                DebouncedField(
-                    key = task.id,
-                    value = task.title,
-                    label = "Title",
-                    singleLine = true,
-                    onCommit = { tasksVm.setTitle(task.id, it) }
-                )
-                DebouncedField(
-                    key = task.id,
-                    value = task.detail,
-                    label = "Notes",
-                    singleLine = false,
-                    onCommit = { tasksVm.setDetail(task.id, it) }
-                )
+                DraftField(tasksVm, task.id, TasksViewModel.TextField.Title, task.title, "Title", singleLine = true)
+                DraftField(tasksVm, task.id, TasksViewModel.TextField.Detail, task.detail, "Notes", singleLine = false)
 
                 FieldLabel("Status")
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -143,12 +129,13 @@ fun TaskDetailScreen(vm: MainViewModel, tasksVm: TasksViewModel, id: String) {
                     }
                 }
                 if (task.status == TaskStatus.Waiting.key) {
-                    DebouncedField(
-                        key = task.id,
-                        value = task.waitingOn.orEmpty(),
-                        label = "Waiting on",
-                        singleLine = true,
-                        onCommit = { tasksVm.setWaitingOn(task.id, it) }
+                    DraftField(
+                        tasksVm,
+                        task.id,
+                        TasksViewModel.TextField.WaitingOn,
+                        task.waitingOn.orEmpty(),
+                        "Waiting on",
+                        singleLine = true
                     )
                     task.waitingSince?.let {
                         Text(
@@ -346,31 +333,38 @@ private fun Subtasks(task: TaskDto, all: List<TaskDto>, tasksVm: TasksViewModel)
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
         keyboardActions = KeyboardActions(onDone = {
             // Subtasks inherit the parent's area and start in its column.
+            val title = newTitle
             tasksVm.create(
-                newTitle,
+                title,
                 area = TaskArea.of(task.area),
                 parentId = task.id,
-                status = TaskStatus.of(task.status).takeIf { it != TaskStatus.Done } ?: TaskStatus.Todo
+                status = TaskStatus.of(task.status).takeIf { it != TaskStatus.Done } ?: TaskStatus.Todo,
+                // Kept on failure for a retry; cleared unless more was typed.
+                onCreated = { if (newTitle == title) newTitle = "" }
             )
-            newTitle = ""
         }),
         modifier = Modifier.fillMaxWidth()
     )
 }
 
-// Text field that saves itself ~600ms after typing stops, so a task edit
-// costs one PATCH per pause rather than one per keystroke.
+// Text field whose edits go to the ViewModel as drafts: saved one PATCH per
+// typing pause, and saved at once when the task screen is left.
 @Composable
-private fun DebouncedField(key: String, value: String, label: String, singleLine: Boolean, onCommit: (String) -> Unit) {
-    var text by remember(key) { mutableStateOf(value) }
-    LaunchedEffect(key, text) {
-        if (text == value) return@LaunchedEffect
-        delay(600)
-        onCommit(text)
-    }
+private fun DraftField(
+    tasksVm: TasksViewModel,
+    id: String,
+    field: TasksViewModel.TextField,
+    value: String,
+    label: String,
+    singleLine: Boolean
+) {
+    var text by remember(id, field) { mutableStateOf(tasksVm.draftOf(id, field) ?: value) }
     OutlinedTextField(
         value = text,
-        onValueChange = { text = it },
+        onValueChange = {
+            text = it
+            tasksVm.draft(id, field, it)
+        },
         label = { Text(label) },
         singleLine = singleLine,
         minLines = if (singleLine) 1 else 3,

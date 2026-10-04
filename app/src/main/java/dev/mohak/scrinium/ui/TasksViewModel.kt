@@ -7,16 +7,19 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import dev.mohak.scrinium.data.remote.CalendarResponse
 import dev.mohak.scrinium.data.remote.NewTaskRequest
-import dev.mohak.scrinium.data.remote.ScriniumApi
+import dev.mohak.scrinium.data.remote.TasksApi
 import dev.mohak.scrinium.data.remote.TaskDto
 import dev.mohak.scrinium.di.AppContainer
-import dev.mohak.scrinium.reminders.Reminders
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -27,8 +30,13 @@ import kotlinx.serialization.json.JsonPrimitive
  * talks to the API directly and holds no Room state. Edits paint
  * optimistically and roll back on failure, like the web store. Offline means
  * a visible error, never a silent queue.
+ *
+ * [syncReminders] makes the phone's alarms match a full task list.
  */
-class TasksViewModel(private val api: ScriniumApi, private val reminders: Reminders) : ViewModel() {
+class TasksViewModel(
+    private val api: TasksApi,
+    private val syncReminders: (List<TaskDto>) -> Unit
+) : ViewModel() {
 
     private val _tasks = MutableStateFlow<List<TaskDto>>(emptyList())
     val tasks: StateFlow<List<TaskDto>> = _tasks.asStateFlow()
@@ -75,19 +83,20 @@ class TasksViewModel(private val api: ScriniumApi, private val reminders: Remind
 
     // Phone alarms follow the task list, but only once a full list has
     // loaded: a partial list (one task added from a note) must not cancel
-    // every other reminder.
+    // every other reminder. Every write goes through here so alarms are
+    // reconciled even when a write leaves the list equal (an empty first load).
     private var loaded = false
 
-    init {
-        viewModelScope.launch {
-            _tasks.collect { if (loaded) reminders.sync(it) }
-        }
+    private fun setTasks(transform: (List<TaskDto>) -> List<TaskDto>) {
+        _tasks.update(transform)
+        if (loaded) syncReminders(_tasks.value)
     }
 
     private suspend fun load() {
         val list = api.fetchTasks()
         loaded = true
-        _tasks.value = list
+        for (row in list) if (row.id in confirmed) confirmed[row.id] = row
+        setTasks { list.map(::withPending) }
     }
 
     // [quiet] is the app-foreground refresh that keeps reminders current:
@@ -105,31 +114,80 @@ class TasksViewModel(private val api: ScriniumApi, private val reminders: Remind
         }
     }
 
+    private var openJob: Job? = null
+
     fun openTask(id: String) {
+        flushDrafts()
         _openTaskId.value = id
         _openLinks.value = emptyList()
-        viewModelScope.launch {
+        openJob?.cancel()
+        openJob = viewModelScope.launch {
             // A task opened from a note panel may not be in the list yet.
             if (_tasks.value.none { it.id == id }) {
                 try {
                     load()
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     _error.value = "Couldn't load task: ${e.message}"
                 }
             }
             try {
-                _openLinks.value = api.fetchTaskLinks(id)
+                val links = api.fetchTaskLinks(id)
+                if (_openTaskId.value == id) _openLinks.value = links
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Exception) {
             }
         }
     }
 
     fun closeTask() {
+        flushDrafts()
+        openJob?.cancel()
         _openTaskId.value = null
     }
 
+    // Typed text fields (title, notes, waiting on) save ~600ms after typing
+    // stops. The pending text lives here, not in the screen, so leaving the
+    // task saves it at once instead of dropping it with the composition.
+    enum class TextField { Title, Detail, WaitingOn }
+
+    private class Draft(val text: String, val job: Job)
+
+    private val drafts = mutableMapOf<Pair<String, TextField>, Draft>()
+
+    fun draft(id: String, field: TextField, text: String) {
+        val key = id to field
+        drafts.remove(key)?.job?.cancel()
+        drafts[key] = Draft(text, viewModelScope.launch {
+            delay(DRAFT_DELAY_MS)
+            drafts.remove(key)
+            commit(id, field, text)
+        })
+    }
+
+    /** Unsaved text for a field, so a recreated screen shows what was typed. */
+    fun draftOf(id: String, field: TextField): String? = drafts[id to field]?.text
+
+    fun flushDrafts() {
+        val pending = drafts.toMap()
+        drafts.clear()
+        for ((key, d) in pending) {
+            d.job.cancel()
+            commit(key.first, key.second, d.text)
+        }
+    }
+
+    private fun commit(id: String, field: TextField, text: String) = when (field) {
+        TextField.Title -> setTitle(id, text)
+        TextField.Detail -> setDetail(id, text)
+        TextField.WaitingOn -> setWaitingOn(id, text)
+    }
+
     // Undated tasks land in the Inbox, dated ones are already planned:
-    // the web quick-add rule.
+    // the web quick-add rule. [onCreated] runs once the server has the task,
+    // so a form can keep its text for a retry when creation fails.
     fun create(
         title: String,
         area: TaskArea? = null,
@@ -137,7 +195,8 @@ class TasksViewModel(private val api: ScriniumApi, private val reminders: Remind
         parentId: String? = null,
         status: TaskStatus? = null,
         linkPath: String? = null,
-        open: Boolean = false
+        open: Boolean = false,
+        onCreated: () -> Unit = {}
     ) {
         val clean = title.trim()
         if (clean.isEmpty()) return
@@ -152,14 +211,17 @@ class TasksViewModel(private val api: ScriniumApi, private val reminders: Remind
                         parentId = parentId
                     )
                 )
-                _tasks.update { it + row }
+                setTasks { it + row }
+                onCreated()
                 if (linkPath != null) {
                     api.addTaskLink(row.id, linkPath)
-                    val linked = row.copy(linkCount = 1)
-                    replace(linked)
-                    _noteTasks.update { it + linked }
+                    setLinkCount(row.id, 1)
+                    // The panel may show another note by now.
+                    if (notePath == linkPath) _noteTasks.update { it + row.copy(linkCount = 1) }
                 }
                 if (open) openTask(row.id)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _error.value = "Couldn't add task: ${e.message}"
             }
@@ -200,7 +262,6 @@ class TasksViewModel(private val api: ScriniumApi, private val reminders: Remind
 
     fun delete(id: String) {
         val before = _tasks.value
-        val beforeNote = _noteTasks.value
         // The server deletes the whole subtree; mirror that so subtasks vanish too.
         val doomed = mutableSetOf(id)
         var grew = true
@@ -210,15 +271,23 @@ class TasksViewModel(private val api: ScriniumApi, private val reminders: Remind
                 if (t.parentId != null && t.parentId in doomed && doomed.add(t.id)) grew = true
             }
         }
-        _tasks.value = before.filterNot { it.id in doomed }
+        // Typing into a doomed task would PATCH a row that is gone.
+        drafts.keys.filter { it.first in doomed }.forEach { drafts.remove(it)?.job?.cancel() }
+        val removed = before.filter { it.id in doomed }
+        val removedNote = _noteTasks.value.filter { it.id in doomed }
+        setTasks { list -> list.filterNot { it.id in doomed } }
         _noteTasks.update { list -> list.filterNot { it.id in doomed } }
         if (_openTaskId.value in doomed) _openTaskId.value = null
         viewModelScope.launch {
             try {
                 api.deleteTask(id)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                _tasks.value = before
-                _noteTasks.value = beforeNote
+                // Put back only these rows; anything else that changed
+                // meanwhile stays as it is.
+                setTasks { list -> list + removed.filter { r -> list.none { it.id == r.id } } }
+                _noteTasks.update { list -> list + removedNote.filter { r -> list.none { it.id == r.id } } }
                 _error.value = "Couldn't delete task: ${e.message}"
             }
         }
@@ -229,7 +298,9 @@ class TasksViewModel(private val api: ScriniumApi, private val reminders: Remind
             try {
                 val links = api.addTaskLink(id, notePath)
                 if (_openTaskId.value == id) _openLinks.value = links
-                _tasks.value.firstOrNull { it.id == id }?.let { replace(it.copy(linkCount = links.size)) }
+                setLinkCount(id, links.size)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _error.value = "Couldn't link note: ${e.message}"
             }
@@ -241,48 +312,98 @@ class TasksViewModel(private val api: ScriniumApi, private val reminders: Remind
             try {
                 val links = api.removeTaskLink(id, notePath)
                 if (_openTaskId.value == id) _openLinks.value = links
-                _tasks.value.firstOrNull { it.id == id }?.let { replace(it.copy(linkCount = links.size)) }
+                setLinkCount(id, links.size)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _error.value = "Couldn't unlink note: ${e.message}"
             }
         }
     }
 
+    // The note whose tasks [noteTasks] holds; a late reply for another note
+    // is dropped.
+    private var notePath: String? = null
+    private var noteJob: Job? = null
+
     // Quiet: the panel just shows nothing when offline.
     fun loadNoteTasks(path: String) {
+        notePath = path
         _noteTasks.value = emptyList()
-        viewModelScope.launch {
+        noteJob?.cancel()
+        noteJob = viewModelScope.launch {
             try {
-                _noteTasks.value = api.fetchTasksForNote(path)
+                val list = api.fetchTasksForNote(path)
+                if (notePath == path) _noteTasks.value = list.map(::withPending)
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Exception) {
             }
         }
     }
 
+    // Field edits not yet answered by the server, per task in send order,
+    // and the last row the server returned for that task. The shown row is
+    // always confirmed + pending, so a reply or a failure for one edit never
+    // clobbers another, and other tasks are never touched.
+    private class Edit(val apply: (TaskDto) -> TaskDto)
+
+    private val pending = mutableMapOf<String, MutableList<Edit>>()
+    private val confirmed = mutableMapOf<String, TaskDto>()
+
+    // One PATCH in flight per task: replies then arrive in the order the
+    // server applied them, so the last one is the newest server row.
+    private val patchLocks = mutableMapOf<String, Mutex>()
+
     private fun patch(id: String, field: Pair<String, JsonElement>, local: (TaskDto) -> TaskDto) {
-        val before = _tasks.value
-        val beforeNote = _noteTasks.value
-        _tasks.update { list -> list.map { if (it.id == id) local(it) else it } }
-        _noteTasks.update { list -> list.map { if (it.id == id) local(it) else it } }
+        val shown = _tasks.value.firstOrNull { it.id == id } ?: _noteTasks.value.firstOrNull { it.id == id }
+        if (id !in confirmed && shown != null) confirmed[id] = shown
+        val edit = Edit(local)
+        pending.getOrPut(id) { mutableListOf() } += edit
+        mapRow(id, local)
+        val lock = patchLocks.getOrPut(id) { Mutex() }
         viewModelScope.launch {
             try {
-                replace(api.patchTask(id, JsonObject(mapOf(field))))
+                confirmed[id] = lock.withLock { api.patchTask(id, JsonObject(mapOf(field))) }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                _tasks.value = before
-                _noteTasks.value = beforeNote
                 _error.value = "Couldn't save task: ${e.message}"
             }
+            pending[id]?.remove(edit)
+            settle(id)
         }
     }
 
-    private fun replace(row: TaskDto) {
-        _tasks.update { list -> list.map { if (it.id == row.id) row else it } }
-        _noteTasks.update { list -> list.map { if (it.id == row.id) row else it } }
+    private fun withPending(row: TaskDto): TaskDto =
+        pending[row.id].orEmpty().fold(row) { r, edit -> edit.apply(r) }
+
+    private fun settle(id: String) {
+        confirmed[id]?.let { base ->
+            val row = withPending(base)
+            mapRow(id) { row }
+        }
+        if (pending[id].isNullOrEmpty()) {
+            pending.remove(id)
+            confirmed.remove(id)
+        }
+    }
+
+    private fun setLinkCount(id: String, count: Int) {
+        confirmed[id]?.let { confirmed[id] = it.copy(linkCount = count) }
+        mapRow(id) { it.copy(linkCount = count) }
+    }
+
+    private fun mapRow(id: String, f: (TaskDto) -> TaskDto) {
+        setTasks { list -> list.map { if (it.id == id) f(it) else it } }
+        _noteTasks.update { list -> list.map { if (it.id == id) f(it) else it } }
     }
 
     companion object {
+        private const val DRAFT_DELAY_MS = 600L
+
         fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
-            initializer { TasksViewModel(container.api, container.reminders) }
+            initializer { TasksViewModel(container.api, container.reminders::sync) }
         }
     }
 }
