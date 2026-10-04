@@ -111,6 +111,8 @@ class NotesRepository(
 
     suspend fun deleteShare(id: String) = api.deleteShare(id)
 
+    suspend fun fetchAsset(path: String): ByteArray = api.fetchAsset(path)
+
     suspend fun uploadAttachment(bytes: ByteArray, mimeType: String, fileName: String, folder: String) =
         api.uploadAttachment(bytes, mimeType, fileName, folder)
 

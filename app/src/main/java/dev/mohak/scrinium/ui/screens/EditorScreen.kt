@@ -57,6 +57,7 @@ import dev.mohak.scrinium.ui.MainViewModel
 import dev.mohak.scrinium.ui.MarkdownText
 import dev.mohak.scrinium.ui.TasksViewModel
 import dev.mohak.scrinium.ui.lineStartOffset
+import dev.mohak.scrinium.ui.printHtml
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -169,6 +170,16 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                                 onClick = {
                                     showMenu = false
                                     pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Export PDF") },
+                                onClick = {
+                                    showMenu = false
+                                    scope.launch {
+                                        val html = vm.printableHtml(state.path, field.text)
+                                        printHtml(context, fileName, html)
+                                    }
                                 }
                             )
                             DropdownMenuItem(

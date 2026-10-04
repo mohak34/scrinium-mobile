@@ -8,7 +8,9 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import dev.mohak.scrinium.BuildConfig
+import android.util.Base64
 import dev.mohak.scrinium.data.ImageLoader
+import dev.mohak.scrinium.data.ImageSource
 import dev.mohak.scrinium.data.NotesRepository
 import dev.mohak.scrinium.data.Prefs
 import dev.mohak.scrinium.data.noteRelative
@@ -727,6 +729,39 @@ class MainViewModel(
             _sync.update { it.copy(error = "Image upload failed: ${e.message}") }
             null
         }
+    }
+
+    /**
+     * The open note as a printable HTML page. Vault images are inlined as
+     * data URIs (the print WebView has no API token); external images load
+     * by URL; images that fail to load are left out.
+     */
+    suspend fun printableHtml(notePath: String, text: String): String {
+        val refs = text.lineSequence()
+            .mapNotNull { Regex("""^!\[[^\]]*]\(\s*(<[^>]+>|[^)\s]+)""").find(it.trim())?.groupValues?.get(1) }
+            .map { it.removeSurrounding("<", ">") }
+            .toSet()
+        val sources = refs.associateWith { raw ->
+            when (val src = resolveImage(raw, notePath)) {
+                is ImageSource.External -> src.url
+                is ImageSource.Vault -> try {
+                    val bytes = notes.fetchAsset(src.path)
+                    val mime = when (src.path.substringAfterLast('.').lowercase()) {
+                        "png" -> "image/png"
+                        "gif" -> "image/gif"
+                        "webp" -> "image/webp"
+                        "svg" -> "image/svg+xml"
+                        else -> "image/jpeg"
+                    }
+                    "data:$mime;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
+                } catch (_: Exception) {
+                    null
+                }
+                null -> null
+            }
+        }
+        val title = effectiveTitle(text, notePath.substringAfterLast('/').removeSuffix(".md"))
+        return withContext(Dispatchers.Default) { noteHtml(title, text) { sources[it] } }
     }
 
     fun deleteCurrentNote() {
