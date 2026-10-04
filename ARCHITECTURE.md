@@ -117,10 +117,12 @@ This is worth being explicit about since it's your stated top priority:
 - **No foreground service.** Sync is a WorkManager job that runs,
   finishes, and stops — never a persistent background process holding
   a wakelock.
-- **No background work.** Sync triggers, all foreground-only: auto-push 5s
+- **No background sync.** Sync triggers, all foreground-only: auto-push 5s
   after local edits settle, a 60s pull tick while foregrounded, app opened
   from background, and manual pull-to-refresh. Killing the app stops
-  everything — no WorkManager jobs, no service, no polling loop.
+  sync — no WorkManager jobs, no service, no polling loop. Task reminders
+  are the one exception: one exact alarm per reminder, which wakes the app
+  only to post its notification.
 - **Manifest-first sync** (above) means most sync cycles transfer a few
   KB of metadata and nothing else, not full note bodies.
 - **Lazy content loading**: don't hold the entire vault's text in memory
@@ -139,7 +141,7 @@ This is worth being explicit about since it's your stated top priority:
 | -------------------------------------------- | ----------------------------------------------------------------- |
 | Google OAuth + email allowlist               | Native Google Sign-In → mobile auth endpoint (above)              |
 | Sidebar / file tree                          | Compose `LazyColumn` note list, same vault structure              |
-| Markdown editor                              | Phase 1: plain text field + preview toggle. Phase 2: live-preview |
+| Markdown editor                              | Live-preview text field + preview toggle                          |
 | Debounced autosave                           | Same concept, local-first (see above)                             |
 | `/api/tree` vault listing                    | Served by the new manifest endpoint instead                       |
 | Note CRUD                                    | Room locally + sync engine reconciles with server                 |
@@ -147,25 +149,16 @@ This is worth being explicit about since it's your stated top priority:
 
 ---
 
-## Phase 2 editor: porting live-preview behavior
+## Live-preview editor
 
 `livePreview.ts`'s core idea — hide markdown marks (`**`, `#`, etc.)
-except on the line the cursor is currently on — has a real Compose
-equivalent: a custom `VisualTransformation` (or `AnnotatedString`
-built per-recomposition) that:
-
-1. Parses the raw text line by line (same mark-detection logic as
-   `HIDEABLE_MARKS`, ported to Kotlin)
-2. Checks which line the cursor is on
-3. Renders all other lines with marks visually hidden/styled, and the
-   cursor's line with raw markdown visible
-
-This is a genuine port, not a wrapper — CM6's decoration system and
-Compose's text APIs work differently — but the _logic_ (what to hide,
-when) transfers directly from your existing `livePreview.ts` comments.
-Worth tackling once Phase 1 is stable and you're actually using the app
-daily, so you're solving it against real usage patterns rather than
-guessing upfront.
+except on the line the cursor is on — is a `VisualTransformation`
+(`ui/LiveMarkdown.kt`). `liveLayout` parses the text line by line,
+styles headings, bold, italic, code, links, tags and code blocks, and
+drops the marks from every line outside the selection; the cursor's
+lines keep them, dimmed. It returns both offset maps the text field
+needs, so taps and the cursor land on the right raw character. Without
+focus, every line renders clean. The text itself never changes.
 
 ---
 
