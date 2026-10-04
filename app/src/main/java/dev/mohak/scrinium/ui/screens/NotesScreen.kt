@@ -2,49 +2,28 @@ package dev.mohak.scrinium.ui.screens
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.scrollBy
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -53,24 +32,44 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalViewConfiguration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.mohak.scrinium.R
 import dev.mohak.scrinium.data.local.NoteEntity
+import dev.mohak.scrinium.ui.ConfirmDialog
+import dev.mohak.scrinium.ui.Divider
+import dev.mohak.scrinium.ui.EmptyState
+import dev.mohak.scrinium.ui.ErrorStrip
+import dev.mohak.scrinium.ui.Fab
+import dev.mohak.scrinium.ui.IconBtn
 import dev.mohak.scrinium.ui.MainViewModel
+import dev.mohak.scrinium.ui.Menu
+import dev.mohak.scrinium.ui.MenuRow
+import dev.mohak.scrinium.ui.PromptDialog
+import dev.mohak.scrinium.ui.Sc
+import dev.mohak.scrinium.ui.Sheet
+import dev.mohak.scrinium.ui.SheetTitle
+import dev.mohak.scrinium.ui.Sym
+import dev.mohak.scrinium.ui.TopBar
 import dev.mohak.scrinium.ui.TreeItem
+import dev.mohak.scrinium.ui.Type
 import dev.mohak.scrinium.ui.buildTree
 import dev.mohak.scrinium.ui.folderPaths
 import dev.mohak.scrinium.ui.name
@@ -124,11 +123,15 @@ fun NotesScreen(vm: MainViewModel) {
     val items = remember(notes, collapsed, pinned) { buildTree(notes, collapsed, pinned) }
     val folders = remember(notes) { folderPaths(notes) }
     var folderMenu by remember { mutableStateOf<String?>(null) }
-    var moveTarget by remember { mutableStateOf<NoteEntity?>(null) }
     var noteMenu by remember { mutableStateOf<NoteEntity?>(null) }
     var moveFolderTarget by remember { mutableStateOf<String?>(null) }
     var renameFolderTarget by remember { mutableStateOf<String?>(null) }
     var deleteFolderTarget by remember { mutableStateOf<String?>(null) }
+    var newFolder by remember { mutableStateOf(false) }
+    var overflow by remember { mutableStateOf(false) }
+    val actions = rememberNoteActions()
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     val latestItems = rememberUpdatedState(items)
     val latestCollapsed = rememberUpdatedState(collapsed)
@@ -230,460 +233,233 @@ fun NotesScreen(vm: MainViewModel) {
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Scrinium") },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background
-                ),
-                actions = {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(-12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(onClick = { vm.openSearch() }) {
-                            Icon(Icons.Default.Search, contentDescription = "Search")
-                        }
-                        IconButton(onClick = { vm.openTasks() }) {
-                            Icon(Icons.Default.CheckCircle, contentDescription = "Tasks")
-                        }
-                        IconButton(onClick = { vm.openTags() }) {
-                            Text(
-                                text = "#",
-                                style = MaterialTheme.typography.titleLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        IconButton(onClick = { vm.openSettings() }) {
-                            Icon(Icons.Default.Settings, contentDescription = "Settings")
-                        }
-                    }
+    Column(Modifier.fillMaxSize()) {
+        TopBar("Notes") {
+            IconBtn(R.drawable.ms_sell, "Tags", { vm.openTags() })
+            Box {
+                IconBtn(R.drawable.ms_more_vert, "More", { overflow = true }, active = overflow)
+                Menu(overflow, { overflow = false }) {
+                    MenuRow(R.drawable.ms_sync, "Sync now", { overflow = false; vm.syncNow(force = true) })
+                    MenuRow(R.drawable.ms_create_new_folder, "New folder", { overflow = false; newFolder = true })
+                    MenuRow(R.drawable.ms_unfold_less, "Collapse all", { overflow = false; vm.collapseAll() })
+                    Divider()
+                    MenuRow(R.drawable.ms_delete, "Trash", { overflow = false; vm.openTrash() })
+                    MenuRow(R.drawable.ms_settings, "Settings", { overflow = false; vm.openSettings() })
                 }
-            )
-        },
-        floatingActionButton = {
-            FloatingActionButton(onClick = { vm.createNote() }) {
-                Icon(Icons.Default.Add, contentDescription = "New note")
             }
         }
-    ) { padding ->
-        PullToRefreshBox(
-            isRefreshing = sync.syncing,
-            onRefresh = { if (dragItem == null) vm.syncNow(force = true) },
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
-            if (items.isEmpty() && !sync.syncing) {
-                EmptyState()
-            } else {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .onGloballyPositioned { drag.viewportH = it.size.height.toFloat() }
-                            .pointerInput(Unit) {
-                                // Passive gesture tracker on the list itself (never
-                                // recycled, unlike rows). Observes without consuming
-                                // until a row long-press promotes it to a drag.
-                                awaitEachGesture {
-                                    val down = awaitFirstDown(requireUnconsumed = false)
-                                    val id = down.id
-                                    var moved = false
-                                    var tracking = false
-                                    try {
-                                        do {
-                                            val event = awaitPointerEvent()
-                                            val change = event.changes.firstOrNull { it.id == id }
-                                                ?: continue
-                                            if (dragItem != null) tracking = true
-                                            if (!change.pressed) break
-                                            if (tracking) {
-                                                change.consume()
-                                                val y = change.position.y
-                                                if (!moved && abs(y - down.position.y) > touchSlop) {
-                                                    moved = true
+        sync.error?.let { ErrorStrip(it) { vm.dismissSyncError() } }
+        Box(Modifier.weight(1f)) {
+            PullToRefreshBox(
+                isRefreshing = sync.syncing,
+                onRefresh = { if (dragItem == null) vm.syncNow(force = true) },
+                modifier = Modifier.fillMaxSize()
+            ) {
+                if (items.isEmpty() && !sync.syncing) {
+                    EmptyState(R.drawable.ms_description, "No notes yet", "Pull to sync, or tap the pen to write one.")
+                } else {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .onGloballyPositioned { drag.viewportH = it.size.height.toFloat() }
+                                .pointerInput(Unit) {
+                                    // Passive gesture tracker on the list itself (never
+                                    // recycled, unlike rows). Observes without consuming
+                                    // until a row long-press promotes it to a drag.
+                                    awaitEachGesture {
+                                        val down = awaitFirstDown(requireUnconsumed = false)
+                                        val id = down.id
+                                        var moved = false
+                                        var tracking = false
+                                        try {
+                                            do {
+                                                val event = awaitPointerEvent()
+                                                val change = event.changes.firstOrNull { it.id == id }
+                                                    ?: continue
+                                                if (dragItem != null) tracking = true
+                                                if (!change.pressed) break
+                                                if (tracking) {
+                                                    change.consume()
+                                                    val y = change.position.y
+                                                    if (!moved && abs(y - down.position.y) > touchSlop) {
+                                                        moved = true
+                                                    }
+                                                    moveRef.value(y)
                                                 }
-                                                moveRef.value(y)
-                                            }
-                                        } while (true)
-                                    } catch (e: CancellationException) {
-                                        dragItem = null
-                                        dropTarget = null
-                                        drag.hoverFolder = null
-                                        drag.openMenu = null
-                                        throw e
+                                            } while (true)
+                                        } catch (e: CancellationException) {
+                                            dragItem = null
+                                            dropTarget = null
+                                            drag.hoverFolder = null
+                                            drag.openMenu = null
+                                            throw e
+                                        }
+                                        if (tracking) endRef.value(moved)
                                     }
-                                    if (tracking) endRef.value(moved)
-                                }
-                            },
-                        contentPadding = PaddingValues(bottom = 88.dp)
-                    ) {
-                        items(
-                            items,
-                            key = {
-                                when (it) {
-                                    is TreeItem.Folder -> "d:${it.path}"
-                                    is TreeItem.Note -> "f:${it.note.path}"
-                                }
-                            }
-                        ) { item ->
-                            when (item) {
-                                is TreeItem.Folder -> FolderRow(
-                                    folder = item,
-                                    expanded = item.path !in collapsed,
-                                    highlighted = dropTarget == item.path,
-                                    dimmed = (dragItem as? TreeItem.Folder)?.path == item.path,
-                                    onTap = { vm.toggleFolder(item.path) },
-                                    onLongPress = {
-                                        onDragStart(
-                                            item,
-                                            "${item.name} (${item.noteCount})",
-                                            listState.layoutInfo.visibleItemsInfo
-                                                .firstOrNull { it.key == "d:${item.path}" }
-                                                ?.let { it.offset + it.size / 2f } ?: 0f
-                                        ) { folderMenu = item.path }
+                                },
+                            contentPadding = PaddingValues(top = 2.dp, bottom = 96.dp)
+                        ) {
+                            items(
+                                items,
+                                key = {
+                                    when (it) {
+                                        is TreeItem.Folder -> "d:${it.path}"
+                                        is TreeItem.Note -> "f:${it.note.path}"
                                     }
-                                )
-                                is TreeItem.Note -> {
-                                    val parent = item.note.path.substringBeforeLast('/', "")
-                                    NoteRow(
-                                        note = item.note,
-                                        pinned = item.pinned,
-                                        now = now,
-                                        depth = item.depth,
-                                        highlighted = dropTarget != null && dropTarget == parent,
-                                        dimmed = (dragItem as? TreeItem.Note)?.note?.path == item.note.path,
-                                        onTap = { vm.openNote(item.note.path) },
+                                }
+                            ) { item ->
+                                when (item) {
+                                    is TreeItem.Folder -> FolderRow(
+                                        folder = item,
+                                        expanded = item.path !in collapsed,
+                                        highlighted = dropTarget == item.path,
+                                        dimmed = (dragItem as? TreeItem.Folder)?.path == item.path,
+                                        onTap = { vm.toggleFolder(item.path) },
                                         onLongPress = {
                                             onDragStart(
                                                 item,
-                                                noteTitle(item.note.path, item.note.content),
+                                                "${item.name} (${item.noteCount})",
                                                 listState.layoutInfo.visibleItemsInfo
-                                                    .firstOrNull { it.key == "f:${item.note.path}" }
+                                                    .firstOrNull { it.key == "d:${item.path}" }
                                                     ?.let { it.offset + it.size / 2f } ?: 0f
-                                            ) { noteMenu = item.note }
+                                            ) { folderMenu = item.path }
                                         }
                                     )
+                                    is TreeItem.Note -> {
+                                        val parent = item.note.path.substringBeforeLast('/', "")
+                                        NoteRow(
+                                            note = item.note,
+                                            pinned = item.pinned,
+                                            now = now,
+                                            depth = item.depth,
+                                            highlighted = dropTarget != null && dropTarget == parent,
+                                            dimmed = (dragItem as? TreeItem.Note)?.note?.path == item.note.path,
+                                            onTap = { vm.openNote(item.note.path) },
+                                            onLongPress = {
+                                                onDragStart(
+                                                    item,
+                                                    noteTitle(item.note.path, item.note.content),
+                                                    listState.layoutInfo.visibleItemsInfo
+                                                        .firstOrNull { it.key == "f:${item.note.path}" }
+                                                        ?.let { it.offset + it.size / 2f } ?: 0f
+                                                ) { noteMenu = item.note }
+                                            }
+                                        )
+                                    }
                                 }
                             }
+                            item {
+                                SyncFooter(sync.syncing, unsynced, sync.lastSyncAt, now, sync.report?.errors ?: 0, sync.report?.failures.orEmpty())
+                            }
                         }
-                        item {
-                            SyncFooter(sync.syncing, unsynced, sync.report?.errors ?: 0, sync.report?.failures.orEmpty())
-                        }
-                    }
-                    // Floating drag shadow with the live destination. No pointer
-                    // handlers, so touches pass straight through to the list.
-                    if (dragItem != null) {
-                        val destLabel = when (dropTarget) {
-                            null -> null
-                            "" -> "All notes"
-                            else -> dropTarget
-                        }
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 24.dp)
-                                .offset {
-                                    IntOffset(
-                                        0,
-                                        (dragFingerY - with(density) { 24.dp.toPx() }).roundToInt()
-                                    )
-                                },
-                            tonalElevation = 6.dp,
-                            shape = MaterialTheme.shapes.medium
-                        ) {
+                        // Floating drag shadow with the live destination. No pointer
+                        // handlers, so touches pass straight through to the list.
+                        if (dragItem != null) {
+                            val destLabel = when (dropTarget) {
+                                null -> null
+                                "" -> "Vault root"
+                                else -> dropTarget
+                            }
                             Text(
-                                text = if (destLabel == null) dragLabel else "$dragLabel → $destLabel",
-                                style = MaterialTheme.typography.bodyMedium,
+                                text = if (destLabel == null) dragLabel else "$dragLabel  ->  $destLabel",
+                                style = Type.body,
                                 maxLines = 1,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 24.dp)
+                                    .offset {
+                                        IntOffset(0, (dragFingerY - with(density) { 24.dp.toPx() }).roundToInt())
+                                    }
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(Sc.press)
+                                    .border(1.dp, Sc.accent, RoundedCornerShape(10.dp))
+                                    .padding(horizontal = 16.dp, vertical = 12.dp)
                             )
                         }
                     }
                 }
             }
+            Fab(R.drawable.ms_edit_square, "New note", { vm.createNote() }, Modifier.align(Alignment.BottomEnd))
         }
-        sync.error?.let { error ->
-            SyncErrorBanner(
-                message = error,
-                onDismiss = { vm.dismissSyncError() }
-            )
-        }
+    }
+
+    actions.Host(vm, folders)
+
+    noteMenu?.let { note ->
+        val dir = note.path.substringBeforeLast('/', "")
+        NoteMenuSheet(
+            title = noteTitle(note.path, note.content),
+            subtitle = (dir.ifBlank { "Vault root" }) + "  ·  edited " + relativeTime(note.localModifiedAt ?: note.remoteUpdatedAt, now),
+            pinned = note.path in pinned,
+            onDismiss = { noteMenu = null },
+            onPin = { vm.togglePin(note.path) },
+            onRename = { actions.rename = note.path },
+            onMove = { actions.move = note.path },
+            onShare = { actions.share = note.path },
+            onExport = { exportPdf(context, scope, vm, note.path, note.content) },
+            onDelete = { actions.delete = note.path }
+        )
     }
 
     folderMenu?.let { folder ->
         val count = notes.count { it.path.startsWith("$folder/") }
-        AlertDialog(
-            onDismissRequest = { folderMenu = null },
-            title = { Text(folder.substringAfterLast('/'), maxLines = 1) },
-            text = {
-                Column {
-                    FolderMenuButton("New note here") {
-                        folderMenu = null
-                        vm.createNoteIn(folder)
-                    }
-                    FolderMenuButton(if (folder in pinned) "Unpin folder" else "Pin folder") {
-                        folderMenu = null
-                        vm.togglePin(folder)
-                    }
-                    FolderMenuButton("Rename folder") {
-                        folderMenu = null
-                        renameFolderTarget = folder
-                    }
-                    FolderMenuButton("Move folder") {
-                        folderMenu = null
-                        moveFolderTarget = folder
-                    }
-                    FolderMenuButton("Delete folder ($count notes)") {
-                        folderMenu = null
-                        deleteFolderTarget = folder
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { folderMenu = null }) { Text("Cancel") }
-            }
-        )
-    }
-
-    noteMenu?.let { note ->
-        AlertDialog(
-            onDismissRequest = { noteMenu = null },
-            title = { Text(noteTitle(note.path, note.content), maxLines = 1) },
-            text = {
-                Column {
-                    FolderMenuButton(if (note.path in pinned) "Unpin" else "Pin") {
-                        noteMenu = null
-                        vm.togglePin(note.path)
-                    }
-                    FolderMenuButton("Move to folder") {
-                        noteMenu = null
-                        moveTarget = note
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { noteMenu = null }) { Text("Cancel") }
-            }
-        )
-    }
-
-    moveTarget?.let { note ->
-        MoveNoteDialog(
-            note = note,
-            folders = folders,
-            onDismiss = { moveTarget = null },
-            onMove = { dest ->
-                moveTarget = null
-                vm.moveNote(note.path, dest)
-            }
-        )
+        Sheet(onDismiss = { folderMenu = null }) {
+            fun act(f: () -> Unit) = { folderMenu = null; f() }
+            SheetTitle(folder.substringAfterLast('/'), "$count note${if (count == 1) "" else "s"}  ·  ${folder.substringBeforeLast('/', "").ifBlank { "Vault root" }}")
+            Divider()
+            MenuRow(R.drawable.ms_note_add, "New note here", act { vm.createNoteIn(folder) })
+            val isPinned = folder in pinned
+            MenuRow(if (isPinned) R.drawable.ms_star_fill else R.drawable.ms_star, if (isPinned) "Unpin" else "Pin", act { vm.togglePin(folder) }, tint = if (isPinned) Sc.accent else null)
+            MenuRow(R.drawable.ms_edit, "Rename", act { renameFolderTarget = folder })
+            MenuRow(R.drawable.ms_drive_file_move, "Move to folder", act { moveFolderTarget = folder })
+            MenuRow(R.drawable.ms_delete, "Delete", act { deleteFolderTarget = folder }, danger = true)
+        }
     }
 
     moveFolderTarget?.let { folder ->
-        MoveFolderDialog(
-            folder = folder,
+        MoveSheet(
+            title = "Move \"${folder.substringAfterLast('/')}\"",
             folders = folders.filter { it != folder && !it.startsWith("$folder/") },
+            current = folder.substringBeforeLast('/', ""),
             onDismiss = { moveFolderTarget = null },
-            onMove = { dest ->
-                moveFolderTarget = null
-                vm.moveFolder(folder, dest)
-            }
+            onMove = { vm.moveFolder(folder, it) }
         )
     }
 
     renameFolderTarget?.let { folder ->
-        var name by remember(folder) { mutableStateOf(folder.substringAfterLast('/')) }
-        AlertDialog(
-            onDismissRequest = { renameFolderTarget = null },
-            title = { Text("Rename folder") },
-            text = {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    singleLine = true
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    renameFolderTarget = null
-                    vm.renameFolder(folder, name)
-                }) { Text("Rename") }
-            },
-            dismissButton = {
-                TextButton(onClick = { renameFolderTarget = null }) { Text("Cancel") }
-            }
+        PromptDialog(
+            "Rename folder",
+            folder.substringAfterLast('/'),
+            "Rename",
+            onConfirm = { vm.renameFolder(folder, it) },
+            onDismiss = { renameFolderTarget = null }
         )
     }
 
     deleteFolderTarget?.let { folder ->
         val count = notes.count { it.path.startsWith("$folder/") }
-        AlertDialog(
-            onDismissRequest = { deleteFolderTarget = null },
-            title = { Text("Delete folder?") },
-            text = { Text("$count note${if (count == 1) "" else "s"} move to the server trash on the next sync.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    deleteFolderTarget = null
-                    vm.deleteFolder(folder)
-                }) { Text("Delete") }
-            },
-            dismissButton = {
-                TextButton(onClick = { deleteFolderTarget = null }) { Text("Cancel") }
-            }
+        ConfirmDialog(
+            "Delete folder?",
+            "$count note${if (count == 1) "" else "s"} move to the server trash on the next sync.",
+            "Delete",
+            onConfirm = { vm.deleteFolder(folder) },
+            onDismiss = { deleteFolderTarget = null }
         )
     }
-}
 
-@Composable
-private fun FolderMenuButton(label: String, onClick: () -> Unit) {
-    TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-        Text(label, modifier = Modifier.fillMaxWidth())
-    }
-}
-
-@Composable
-private fun MoveNoteDialog(
-    note: NoteEntity,
-    folders: List<String>,
-    onDismiss: () -> Unit,
-    onMove: (String) -> Unit
-) {
-    val currentParent = note.path.substringBeforeLast('/', "")
-    var selected by remember(note.path) { mutableStateOf(currentParent) }
-    var newFolder by remember(note.path) { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Move to folder") },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 320.dp)
-                    .verticalScroll(rememberScrollState())
-            ) {
-                FolderOption(
-                    label = "All notes",
-                    sublabel = "Vault root",
-                    selected = selected.isEmpty() && newFolder.isBlank(),
-                    onClick = { selected = ""; newFolder = "" }
-                )
-                for (folder in folders) {
-                    FolderOption(
-                        label = folder,
-                        sublabel = null,
-                        selected = selected == folder && newFolder.isBlank(),
-                        onClick = { selected = folder; newFolder = "" }
-                    )
-                }
-                OutlinedTextField(
-                    value = newFolder,
-                    onValueChange = { newFolder = it },
-                    label = { Text("Or new folder…") },
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp)
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onMove(newFolder.ifBlank { selected }) }) { Text("Move") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        }
-    )
-}
-
-@Composable
-private fun MoveFolderDialog(
-    folder: String,
-    folders: List<String>,
-    onDismiss: () -> Unit,
-    onMove: (String) -> Unit
-) {
-    val currentParent = folder.substringBeforeLast('/', "")
-    var selected by remember(folder) { mutableStateOf(currentParent) }
-    var newFolder by remember(folder) { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Move folder", maxLines = 1) },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 320.dp)
-                    .verticalScroll(rememberScrollState())
-            ) {
-                FolderOption(
-                    label = "All notes",
-                    sublabel = "Vault root",
-                    selected = selected.isEmpty() && newFolder.isBlank(),
-                    onClick = { selected = ""; newFolder = "" }
-                )
-                for (option in folders) {
-                    FolderOption(
-                        label = option,
-                        sublabel = null,
-                        selected = selected == option && newFolder.isBlank(),
-                        onClick = { selected = option; newFolder = "" }
-                    )
-                }
-                OutlinedTextField(
-                    value = newFolder,
-                    onValueChange = { newFolder = it },
-                    label = { Text("Or new folder…") },
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp)
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onMove(newFolder.ifBlank { selected }) }) { Text("Move") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        }
-    )
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun FolderOption(label: String, sublabel: String?, selected: Boolean, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .combinedClickable(onClick = onClick)
-            .background(
-                if (selected) MaterialTheme.colorScheme.primaryContainer
-                else MaterialTheme.colorScheme.surface
-            )
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
-                else MaterialTheme.colorScheme.onSurface
-            )
-            sublabel?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
+    // A folder exists only through its notes, so a new folder starts with one.
+    if (newFolder) {
+        PromptDialog(
+            "New folder",
+            "",
+            "Create",
+            onConfirm = { vm.createNoteIn(it) },
+            onDismiss = { newFolder = false },
+            placeholder = "Folder name, or a/b for nested"
+        )
     }
 }
 
@@ -700,54 +476,23 @@ private fun FolderRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(
-                if (highlighted) MaterialTheme.colorScheme.surfaceContainerHigh
-                else Color.Transparent
-            )
+            .height(if (folder.pathHint != null) 44.dp else 36.dp)
+            .background(if (highlighted) Sc.hover else Color.Transparent)
             .combinedClickable(onClick = onTap, onLongClick = onLongPress)
-            .padding(start = (8 + folder.depth * 20).dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
+            .padding(start = (14 + folder.depth * 20).dp, end = 16.dp)
+            .alpha(if (dimmed) 0.35f else 1f),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(
-            if (expanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowRight,
-            contentDescription = if (expanded) "Collapse" else "Expand",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.alpha(if (dimmed) 0.35f else 1f)
-        )
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .padding(start = 8.dp)
-                .alpha(if (dimmed) 0.35f else 1f)
-        ) {
-            Text(
-                text = folder.name,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            folder.pathHint?.let { hint ->
-                Text(
-                    text = hint,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+        Sym(if (expanded) R.drawable.ms_expand_more else R.drawable.ms_chevron_right, tint = Sc.text3, size = 17.dp, desc = if (expanded) "Collapse" else "Expand")
+        Spacer(Modifier.width(6.dp))
+        Sym(if (expanded) R.drawable.ms_folder_open else R.drawable.ms_folder, tint = Sc.text3, size = 17.dp)
+        Column(Modifier.weight(1f).padding(start = 8.dp)) {
+            Text(folder.name, style = Type.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            folder.pathHint?.let { Text(it, style = Type.meta, maxLines = 1) }
         }
-        if (folder.pinned) PinMark()
-        Text(
-            text = folder.noteCount.toString(),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.alpha(if (dimmed) 0.35f else 1f)
-        )
-        if (folder.hasUnsynced) {
-            Box(
-                modifier = Modifier
-                    .padding(start = 8.dp)
-                    .size(8.dp)
-                    .background(MaterialTheme.colorScheme.primary, CircleShape)
-            )
-        }
+        if (folder.pinned) Sym(R.drawable.ms_star_fill, tint = Sc.accent, size = 14.dp, desc = "Pinned")
+        if (folder.hasUnsynced) Sym(R.drawable.ms_cloud_upload, tint = Sc.text3, size = 15.dp, desc = "Not synced", modifier = Modifier.padding(start = 8.dp))
+        Text(folder.noteCount.toString(), style = Type.mono, modifier = Modifier.padding(start = 8.dp))
     }
 }
 
@@ -767,104 +512,58 @@ private fun NoteRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(
-                if (highlighted) MaterialTheme.colorScheme.surfaceContainerHigh
-                else Color.Transparent
-            )
+            .height(36.dp)
+            .background(if (highlighted) Sc.hover else Color.Transparent)
             .combinedClickable(onClick = onTap, onLongClick = onLongPress)
-            .padding(start = (36 + depth * 20).dp, end = 16.dp, top = 10.dp, bottom = 10.dp)
+            .padding(start = (14 + depth * 20).dp, end = 16.dp)
             .alpha(if (dimmed) 0.35f else 1f),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = noteTitle(note.path, note.content),
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                text = relativeTime(updatedAt, now),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        if (pinned) PinMark()
-        if (note.localModifiedAt != null) {
-            Box(
-                modifier = Modifier
-                    .padding(start = 12.dp)
-                    .size(8.dp)
-                    .background(MaterialTheme.colorScheme.primary, CircleShape)
-            )
-        }
-    }
-}
-
-@Composable
-private fun PinMark() {
-    Icon(
-        Icons.Default.Star,
-        contentDescription = "Pinned",
-        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(horizontal = 8.dp).size(14.dp)
-    )
-}
-
-@Composable
-private fun EmptyState() {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        if (pinned) Sym(R.drawable.ms_star_fill, tint = Sc.accent, size = 17.dp, desc = "Pinned")
+        else Spacer(Modifier.width(17.dp))
+        Spacer(Modifier.width(6.dp))
+        Sym(R.drawable.ms_description, tint = Sc.text3, size = 17.dp)
         Text(
-            text = "No notes yet. Pull to sync, or tap + to create one.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            noteTitle(note.path, note.content),
+            style = Type.body,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f).padding(start = 8.dp)
         )
+        if (note.localModifiedAt != null) Sym(R.drawable.ms_cloud_upload, tint = Sc.text3, size = 15.dp, desc = "Not synced", modifier = Modifier.padding(start = 8.dp))
+        Text(shortAge(updatedAt, now), style = Type.mono, modifier = Modifier.padding(start = 8.dp))
+    }
+}
+
+// "now", "5m", "3h", "2d", "4w", "8mo": the tree's right-hand age column.
+private fun shortAge(epoch: Long, now: Long): String {
+    if (epoch <= 0) return ""
+    val m = (now - epoch).coerceAtLeast(0) / 60_000
+    return when {
+        m < 1 -> "now"
+        m < 60 -> "${m}m"
+        m < 60 * 24 -> "${m / 60}h"
+        m < 60 * 24 * 7 -> "${m / (60 * 24)}d"
+        m < 60 * 24 * 30 -> "${m / (60 * 24 * 7)}w"
+        m < 60 * 24 * 365 -> "${m / (60 * 24 * 30)}mo"
+        else -> "${m / (60 * 24 * 365)}y"
     }
 }
 
 @Composable
-private fun SyncFooter(syncing: Boolean, unsynced: Int, errors: Int, failures: List<String>) {
-    val status = when {
-        syncing -> "Syncing…"
-        errors > 0 -> {
-            val reason = failures.firstOrNull() ?: "pull to retry"
-            "$errors change${if (errors == 1) "" else "s"} failed: ${reason.take(60)}"
+private fun SyncFooter(syncing: Boolean, unsynced: Int, lastSyncAt: Long?, now: Long, errors: Int, failures: List<String>) {
+    val parts = buildList {
+        when {
+            syncing -> add("syncing")
+            errors > 0 -> add("$errors failed: ${(failures.firstOrNull() ?: "pull to retry").take(60)}")
         }
-        unsynced > 0 -> "$unsynced unsynced change${if (unsynced == 1) "" else "s"} - will push on next sync"
-        else -> ""
+        if (unsynced > 0) add("$unsynced unsynced")
+        if (!syncing && lastSyncAt != null) add("synced ${shortAge(lastSyncAt, now).let { if (it == "now") "just now" else "$it ago" }}")
     }
-    if (status.isBlank()) return
+    if (parts.isEmpty()) return
     Text(
-        text = status,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.outline,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp)
+        parts.joinToString("  ·  "),
+        style = Type.mono.copy(color = if (errors > 0) Sc.red else Sc.text3),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp)
     )
-}
-
-@Composable
-private fun SyncErrorBanner(message: String, onDismiss: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.errorContainer)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = message,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onErrorContainer,
-            modifier = Modifier.weight(1f)
-        )
-        IconButton(onClick = onDismiss) {
-            Icon(
-                Icons.Default.Close,
-                contentDescription = "Dismiss",
-                tint = MaterialTheme.colorScheme.onErrorContainer
-            )
-        }
-    }
 }

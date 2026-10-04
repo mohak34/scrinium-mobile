@@ -2,6 +2,7 @@ package dev.mohak.scrinium.ui
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,7 +13,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.ClickableText
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
@@ -64,19 +64,18 @@ fun MarkdownText(
     loadImage: suspend (String) -> ImageBitmap? = { null },
     onHeadingPositioned: (line: Int, y: Int) -> Unit = { _, _ -> }
 ) {
-    val colors = MaterialTheme.colorScheme
-    val renderer = remember(colors) {
+    val renderer = remember {
         MarkdownRenderer(
-            primary = colors.primary,
-            onSurface = colors.onSurface,
-            onSurfaceVariant = colors.onSurfaceVariant,
-            codeBackground = colors.surfaceContainerHigh,
-            warning = colors.tertiary,
-            danger = colors.error,
-            muted = colors.outline
+            primary = Sc.accent,
+            onSurface = Sc.text,
+            onSurfaceVariant = Sc.text2,
+            codeBackground = Sc.press,
+            warning = Sc.orange,
+            danger = Sc.red,
+            muted = Sc.text3
         )
     }
-    val blocks = remember(markdown, renderer) { renderer.parse(markdown) }
+    val blocks = remember(markdown) { renderer.parse(markdown) }
     fun handleTap(offset: Int, rendered: AnnotatedString) {
         val annotations = rendered.getStringAnnotations(start = offset, end = offset)
         annotations.firstOrNull { it.tag == "toggle" }?.let {
@@ -91,11 +90,7 @@ fun MarkdownText(
             onTagClick(it.item)
         }
     }
-    val bodyStyle = androidx.compose.ui.text.TextStyle(
-        color = colors.onSurface,
-        fontSize = 15.sp,
-        lineHeight = 25.5.sp
-    )
+    val bodyStyle = Type.read
     Column(modifier = modifier) {
         for (block in blocks) {
             when (block) {
@@ -110,9 +105,9 @@ fun MarkdownText(
                 is Block.Heading -> {
                     val size = when (block.level) {
                         1 -> 24.sp
-                        2 -> 20.sp
+                        2 -> 19.sp
                         3 -> 17.sp
-                        else -> 15.sp
+                        else -> 16.sp
                     }
                     ClickableText(
                         text = block.content,
@@ -123,7 +118,8 @@ fun MarkdownText(
                         style = bodyStyle.merge(
                             androidx.compose.ui.text.TextStyle(
                                 fontSize = size,
-                                fontWeight = FontWeight.Medium
+                                lineHeight = size * 1.35f,
+                                fontWeight = FontWeight.SemiBold
                             )
                         ),
                         onClick = { handleTap(it, block.content) }
@@ -133,15 +129,16 @@ fun MarkdownText(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(bottom = 12.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(colors.surfaceContainerHigh)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Sc.raise)
+                        .border(1.dp, Sc.line, RoundedCornerShape(6.dp))
                         .padding(12.dp)
                 ) {
                     androidx.compose.material3.Text(
                         text = block.text,
                         style = bodyStyle.merge(
                             androidx.compose.ui.text.TextStyle(
-                                fontFamily = FontFamily.Monospace,
+                                fontFamily = MonoFont,
                                 fontSize = 13.sp,
                                 lineHeight = 20.sp
                             )
@@ -152,15 +149,15 @@ fun MarkdownText(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(bottom = 12.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(colors.surfaceContainerHigh)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Sc.raise)
                         .padding(12.dp)
                 ) {
                     androidx.compose.material3.Text(
                         text = block.text,
                         style = bodyStyle.merge(
                             androidx.compose.ui.text.TextStyle(
-                                fontFamily = FontFamily.Monospace,
+                                fontFamily = MonoFont,
                                 fontStyle = FontStyle.Italic,
                                 fontSize = 14.sp
                             )
@@ -171,18 +168,14 @@ fun MarkdownText(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(bottom = 12.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(colors.surfaceContainerHigh)
-                        .padding(12.dp)
                 ) {
                     Row(modifier = Modifier.fillMaxWidth()) {
                         Box(
                             modifier = Modifier
                                 .padding(end = 12.dp)
-                                .width(4.dp)
+                                .width(2.dp)
                                 .fillMaxHeight()
-                                .clip(RoundedCornerShape(2.dp))
-                                .background(colors.outline)
+                                .background(Sc.line3)
                         )
                         ClickableText(
                             text = block.content,
@@ -190,7 +183,7 @@ fun MarkdownText(
                             style = bodyStyle.merge(
                                 androidx.compose.ui.text.TextStyle(
                                     fontStyle = FontStyle.Italic,
-                                    color = colors.onSurfaceVariant
+                                    color = Sc.text2
                                 )
                             ),
                             onClick = { handleTap(it, block.content) }
@@ -201,13 +194,13 @@ fun MarkdownText(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(bottom = 12.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(colors.surfaceContainerHigh)
+                        .clip(RoundedCornerShape(topEnd = 6.dp, bottomEnd = 6.dp))
+                        .background(renderer.accentFor(block.kind).copy(alpha = 0.07f))
                 ) {
                     val accent = renderer.accentFor(block.kind)
                     Box(
                         modifier = Modifier
-                            .width(4.dp)
+                            .width(2.dp)
                             .fillMaxHeight()
                             .background(accent)
                     )
@@ -218,17 +211,15 @@ fun MarkdownText(
                     ) {
                         Row {
                             androidx.compose.material3.Text(
-                                text = block.kind.uppercase(),
-                                style = bodyStyle.merge(
-                                    androidx.compose.ui.text.TextStyle(fontWeight = FontWeight.SemiBold)
-                                ),
+                                text = block.kind.replaceFirstChar { it.uppercase() },
+                                style = Type.group,
                                 color = accent
                             )
                             if (block.title.isNotBlank()) {
                                 androidx.compose.material3.Text(
                                     text = "  ${block.title}",
                                     style = bodyStyle,
-                                    color = colors.onSurfaceVariant
+                                    color = Sc.text2
                                 )
                             }
                         }
@@ -239,19 +230,19 @@ fun MarkdownText(
                                     .fillMaxWidth()
                                     .padding(top = 4.dp),
                                 style = bodyStyle.merge(
-                                    androidx.compose.ui.text.TextStyle(color = colors.onSurfaceVariant)
+                                    androidx.compose.ui.text.TextStyle(color = Sc.text2)
                                 ),
                                 onClick = { offset -> handleTap(offset, it) }
                             )
                         }
                     }
                 }
-                is Block.Image -> MarkdownImage(block, loadImage, colors.onSurfaceVariant)
+                is Block.Image -> MarkdownImage(block, loadImage, Sc.text3)
                 is Block.Rule -> HorizontalDivider(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(vertical = 12.dp),
-                    color = colors.outlineVariant
+                    color = Sc.line2
                 )
             }
         }
@@ -519,7 +510,7 @@ private class MarkdownRenderer(
             withStyle(
                 base.merge(
                     SpanStyle(
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = MonoFont,
                         fontStyle = FontStyle.Italic,
                         background = codeBackground
                     )
@@ -557,7 +548,8 @@ private class MarkdownRenderer(
                     val end = rest.indexOf('`', 1)
                     val style = base.merge(
                         SpanStyle(
-                            fontFamily = FontFamily.Monospace,
+                            fontFamily = MonoFont,
+                            fontSize = 14.sp,
                             background = codeBackground
                         )
                     )

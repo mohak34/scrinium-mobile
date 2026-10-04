@@ -58,7 +58,12 @@ sealed interface Screen {
     data object Tags : Screen
     data object Trash : Screen
     data object Tasks : Screen
+    data object Board : Screen
+    data object Calendar : Screen
 }
+
+/** The five screens behind the bottom tabs, in tab order. */
+val TabScreens: List<Screen> = listOf(Screen.Notes, Screen.Tasks, Screen.Search, Screen.Board, Screen.Calendar)
 
 // Back history for the editor: note→note (wikilinks), search→note and
 // tags→note all return where they came from instead of home.
@@ -66,7 +71,7 @@ private sealed interface History {
     data class Note(val path: String) : History
     data class Search(val query: String, val origin: Screen) : History
     data class Tags(val tag: String?) : History
-    data object Tasks : History
+    data class Tab(val screen: Screen) : History
 }
 
 data class SyncUiState(
@@ -112,6 +117,10 @@ class MainViewModel(
 
     fun toggleFolder(path: String) {
         _collapsedFolders.update { if (path in it) it - path else it + path }
+    }
+
+    fun collapseAll() {
+        _collapsedFolders.value = folderPaths(notesFlow.value).toSet()
     }
 
     // Tags for editor autocomplete, from Room so they work offline.
@@ -174,7 +183,7 @@ class MainViewModel(
             }
             Screen.Search -> pushHistory(History.Search(searchQuery.value, _searchOrigin.value))
             Screen.Tags -> pushHistory(History.Tags(_selectedTag.value))
-            Screen.Tasks -> pushHistory(History.Tasks)
+            Screen.Tasks, Screen.Board, Screen.Calendar -> pushHistory(History.Tab(s))
             else -> Unit
         }
     }
@@ -421,9 +430,9 @@ class MainViewModel(
                     _screen.value = Screen.Tags
                     selectTag(prev.tag)
                 }
-                History.Tasks -> {
+                is History.Tab -> {
                     _editor.value = null
-                    _screen.value = Screen.Tasks
+                    _screen.value = prev.screen
                 }
                 null -> {
                     _editor.value = null
@@ -439,9 +448,11 @@ class MainViewModel(
     }
     fun openSettings() = _screen.update { Screen.Settings }
 
-    fun openTasks() = _screen.update { Screen.Tasks }
-
-    fun closeTasks() = _screen.update { Screen.Notes }
+    /** Bottom-tab switch. Search remembers the tab it was opened from. */
+    fun openTab(tab: Screen) {
+        if (tab == Screen.Search && _screen.value != Screen.Search) _searchOrigin.value = _screen.value
+        _screen.value = tab
+    }
 
     // Tags are server-driven (vault-wide counts the phone can't compute
     // cheaply). Loaded on open, quiet offline failure leaves stale list.
@@ -485,12 +496,16 @@ class MainViewModel(
     private val _trashLoading = MutableStateFlow(false)
     val trashLoading: StateFlow<Boolean> = _trashLoading.asStateFlow()
 
+    // Trash opens from Notes and from Settings; back returns there.
+    private var trashOrigin: Screen = Screen.Notes
+
     fun openTrash() {
+        trashOrigin = _screen.value
         _screen.update { Screen.Trash }
         refreshTrash()
     }
 
-    fun closeTrash() = _screen.update { Screen.Notes }
+    fun closeTrash() = _screen.update { trashOrigin }
 
     fun refreshTrash() {
         viewModelScope.launch(Dispatchers.IO) {
@@ -543,6 +558,18 @@ class MainViewModel(
         }
     }
 
+    fun restoreAllTrash() {
+        viewModelScope.launch {
+            try {
+                for (entry in _trash.value) notes.restoreTrash(entry.trashName)
+            } catch (e: Exception) {
+                _sync.update { it.copy(error = "Restore failed: ${e.message}") }
+            }
+            refreshTrash()
+            syncNow(force = true, quiet = true)
+        }
+    }
+
     fun emptyTrash() {
         viewModelScope.launch {
             try {
@@ -565,9 +592,11 @@ class MainViewModel(
         // editor is gone (e.g. note deleted meanwhile).
         val origin = _searchOrigin.value
         _searchOrigin.value = Screen.Notes
-        _screen.value =
-            if (origin is Screen.Editor && _editor.value?.path == origin.path) origin
-            else Screen.Notes
+        _screen.value = when {
+            origin is Screen.Editor && _editor.value?.path == origin.path -> origin
+            origin in TabScreens && origin != Screen.Search -> origin
+            else -> Screen.Notes
+        }
     }
 
     fun closeSettings() = _screen.update { Screen.Notes }
@@ -575,6 +604,11 @@ class MainViewModel(
     fun setSearchQuery(q: String) {
         searchQuery.value = q
     }
+
+    // Last few queries that led to an opened result, newest first.
+    val recentSearches: StateFlow<List<String>> = prefs.recentSearches
+
+    fun rememberSearch(q: String) = prefs.addRecentSearch(q)
 
     // Preview interactions (no-ops for plain text, wired in EditorScreen).
     fun openWikilink(targetRaw: String) {
@@ -654,8 +688,7 @@ class MainViewModel(
         }
     }
 
-    fun createShareLink(password: String?) {
-        val path = _editor.value?.path ?: return
+    fun createShareLink(path: String, password: String?) {
         if (password != null && password.isNotBlank() && password.length < 4) {
             _sync.update { it.copy(error = "Password needs at least 4 characters") }
             return
@@ -771,25 +804,36 @@ class MainViewModel(
     }
 
     fun deleteCurrentNote() {
+        _editor.value?.let { deleteNote(it.path) }
+    }
+
+    // Deleting the open note also closes it.
+    fun deleteNote(path: String) {
         viewModelScope.launch {
-            val current = _editor.value ?: return@launch
-            notes.deleteLocally(current.path)
+            notes.deleteLocally(path)
             scheduleAutoSync()
-            _editor.value = null
-            _screen.value = Screen.Notes
+            if (_editor.value?.path == path) {
+                _editor.value = null
+                _screen.value = Screen.Notes
+            }
         }
     }
 
     fun renameCurrentNote(newName: String) {
+        _editor.value?.let { renameNote(it.path, newName) }
+    }
+
+    // Renames a note, open or not. Filename -> title: the H1/frontmatter
+    // follows the new name, same as the web client; never injects a title
+    // into a note that has none.
+    fun renameNote(path: String, newName: String) {
         viewModelScope.launch {
-            val current = _editor.value ?: return@launch
+            val open = _editor.value?.takeIf { it.path == path }
+            if (open != null) flushEditor()
             try {
-                val newPath = notes.renameNote(current.path, newName) ?: return@launch
-                remapPaths(current.path, newPath)
-                // Filename -> title: keep the H1/frontmatter in step with the
-                // new name, same as the web client. Never injects when the
-                // note has no title source.
-                var text = current.text
+                val newPath = notes.renameNote(path, newName) ?: return@launch
+                remapPaths(path, newPath)
+                var text = open?.text ?: notes.get(newPath)?.content ?: return@launch
                 val stem = newPath.substringAfterLast('/').removeSuffix(".md")
                 if (effectiveTitle(text, "") != stem) {
                     setEffectiveTitle(text, stem)?.let { updated ->
@@ -797,10 +841,12 @@ class MainViewModel(
                         notes.saveLocally(newPath, updated)
                     }
                 }
-                _editor.value = EditorState(newPath, text)
-                editorEdits.value = null
-                titleSyncEdits.value = null
-                _screen.value = Screen.Editor(newPath)
+                if (open != null) {
+                    _editor.value = EditorState(newPath, text)
+                    editorEdits.value = null
+                    titleSyncEdits.value = null
+                    _screen.value = Screen.Editor(newPath)
+                }
                 scheduleAutoSync()
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Rename failed: ${e.message}") }

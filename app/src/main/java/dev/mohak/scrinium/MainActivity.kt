@@ -7,7 +7,13 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
@@ -16,6 +22,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.mohak.scrinium.ui.MainViewModel
 import dev.mohak.scrinium.ui.Screen
 import dev.mohak.scrinium.ui.ScriniumTheme
+import dev.mohak.scrinium.ui.BottomTabs
+import dev.mohak.scrinium.ui.Sc
+import dev.mohak.scrinium.ui.TabScreens
+import dev.mohak.scrinium.ui.screens.BoardScreen
+import dev.mohak.scrinium.ui.screens.CalendarScreen
 import dev.mohak.scrinium.ui.TasksViewModel
 import dev.mohak.scrinium.ui.screens.EditorScreen
 import dev.mohak.scrinium.ui.screens.LoginScreen
@@ -76,12 +87,25 @@ class MainActivity : ComponentActivity() {
 private fun AppContent(vm: MainViewModel, tasksVm: TasksViewModel) {
     val screen by vm.screen.collectAsStateWithLifecycle()
     val openTaskId by tasksVm.openTaskId.collectAsStateWithLifecycle()
-    // The task detail sits on top of whichever screen opened it.
-    openTaskId?.let { id ->
-        BackHandler { tasksVm.closeTask() }
-        TaskDetailScreen(vm, tasksVm, id)
-        return
+    Column(Modifier.fillMaxSize().background(Sc.bg).systemBarsPadding()) {
+        Box(Modifier.weight(1f)) {
+            // The task detail sits on top of whichever screen opened it.
+            val taskId = openTaskId
+            if (taskId != null) {
+                BackHandler { tasksVm.closeTask() }
+                TaskDetailScreen(vm, tasksVm, taskId)
+            } else {
+                AppScreen(vm, tasksVm, screen)
+            }
+        }
+        if (openTaskId == null && screen in TabScreens) {
+            BottomTabs(screen) { vm.openTab(it) }
+        }
     }
+}
+
+@Composable
+private fun AppScreen(vm: MainViewModel, tasksVm: TasksViewModel, screen: Screen) {
     BackHandler(enabled = screen != Screen.Notes) {
         when (screen) {
             is Screen.Editor -> vm.closeEditor()
@@ -89,17 +113,19 @@ private fun AppContent(vm: MainViewModel, tasksVm: TasksViewModel) {
             Screen.Settings -> vm.closeSettings()
             Screen.Tags -> vm.closeTags()
             Screen.Trash -> vm.closeTrash()
-            Screen.Tasks -> vm.closeTasks()
-            else -> Unit
+            Screen.Tasks, Screen.Board, Screen.Calendar -> vm.openTab(Screen.Notes)
+            Screen.Notes -> Unit
         }
     }
-    when (val s = screen) {
+    when (screen) {
         Screen.Notes -> NotesScreen(vm)
         is Screen.Editor -> EditorScreen(vm, tasksVm)
-        Screen.Search -> SearchScreen(vm)
-        Screen.Settings -> SettingsScreen(vm)
+        Screen.Search -> SearchScreen(vm, tasksVm)
+        Screen.Settings -> SettingsScreen(vm, tasksVm)
         Screen.Tags -> TagsScreen(vm)
         Screen.Trash -> TrashScreen(vm)
-        Screen.Tasks -> TasksScreen(vm, tasksVm)
+        Screen.Tasks -> TasksScreen(tasksVm)
+        Screen.Board -> BoardScreen(tasksVm)
+        Screen.Calendar -> CalendarScreen(tasksVm)
     }
 }

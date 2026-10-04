@@ -33,6 +33,14 @@ class TasksViewModel(private val api: ScriniumApi, private val reminders: Remind
     private val _tasks = MutableStateFlow<List<TaskDto>>(emptyList())
     val tasks: StateFlow<List<TaskDto>> = _tasks.asStateFlow()
 
+    // Area filter shared by the Tasks, Board and Calendar tabs. Null is all.
+    private val _areaFilter = MutableStateFlow<String?>(null)
+    val areaFilter: StateFlow<String?> = _areaFilter.asStateFlow()
+
+    fun setAreaFilter(key: String?) {
+        _areaFilter.value = key
+    }
+
     private val _loading = MutableStateFlow(false)
     val loading: StateFlow<Boolean> = _loading.asStateFlow()
 
@@ -67,6 +75,18 @@ class TasksViewModel(private val api: ScriniumApi, private val reminders: Remind
                 CalendarResponse()
             }
         }
+    }
+
+    // Settings > Reminders: the switch and what is scheduled right now.
+    private val _remindersOn = MutableStateFlow(reminders.enabled)
+    val remindersOn: StateFlow<Boolean> = _remindersOn.asStateFlow()
+
+    fun scheduledReminders(): List<Reminders.Entry> = reminders.scheduled()
+
+    fun setRemindersOn(on: Boolean) {
+        reminders.enabled = on
+        _remindersOn.value = on
+        if (on && loaded) reminders.sync(_tasks.value)
     }
 
     fun dismissError() {

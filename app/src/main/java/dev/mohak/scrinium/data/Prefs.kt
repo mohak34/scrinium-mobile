@@ -6,7 +6,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Phone-only display preferences: pinned paths and the new-note template.
+ * Phone-only display preferences: pinned paths, the new-note template and
+ * recent searches.
  * The web keeps both in localStorage, so neither syncs; the phone keeps its
  * own the same way. Plain SharedPreferences, read once at startup.
  */
@@ -18,6 +19,18 @@ class Prefs(context: Context) {
 
     private val _template = MutableStateFlow(sp.getString(KEY_TEMPLATE, "") ?: "")
     val template: StateFlow<String> = _template.asStateFlow()
+
+    // Newline-joined: a query never contains one (the search box is single-line).
+    private val _recent = MutableStateFlow(sp.getString(KEY_RECENT, "").orEmpty().split('\n').filter { it.isNotBlank() })
+    val recentSearches: StateFlow<List<String>> = _recent.asStateFlow()
+
+    fun addRecentSearch(q: String) {
+        val clean = q.trim()
+        if (clean.isEmpty()) return
+        val next = (listOf(clean) + _recent.value.filter { it != clean }).take(MAX_RECENT)
+        _recent.value = next
+        sp.edit().putString(KEY_RECENT, next.joinToString("\n")).apply()
+    }
 
     fun setPinned(paths: Set<String>) {
         _pinned.value = paths
@@ -38,5 +51,7 @@ class Prefs(context: Context) {
     private companion object {
         const val KEY_PINNED = "pinned"
         const val KEY_TEMPLATE = "new_note_template"
+        const val KEY_RECENT = "recent_searches"
+        const val MAX_RECENT = 6
     }
 }

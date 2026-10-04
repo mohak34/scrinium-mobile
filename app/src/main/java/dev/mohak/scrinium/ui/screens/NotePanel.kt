@@ -4,32 +4,40 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.mohak.scrinium.R
 import dev.mohak.scrinium.ui.Backlink
+import dev.mohak.scrinium.ui.GroupHeader
+import dev.mohak.scrinium.ui.InputBox
 import dev.mohak.scrinium.ui.MainViewModel
+import dev.mohak.scrinium.ui.Sc
+import dev.mohak.scrinium.ui.Sheet
 import dev.mohak.scrinium.ui.TaskStatus
 import dev.mohak.scrinium.ui.TasksViewModel
+import dev.mohak.scrinium.ui.TextAction
+import dev.mohak.scrinium.ui.TextTabs
+import dev.mohak.scrinium.ui.Type
 import dev.mohak.scrinium.ui.frontmatterProperties
 import dev.mohak.scrinium.ui.noteTitle
 import dev.mohak.scrinium.ui.parseOutline
@@ -38,12 +46,11 @@ import java.text.DateFormat
 import java.util.Date
 
 /**
- * The open note's side panel from the web, as a bottom sheet: outline,
- * frontmatter properties, tasks linked to the note, notes linking here,
- * plain-text mentions that can be turned into links, and file info.
- * [onJump] takes the 0-based line of a tapped heading.
+ * The web's right panel for the open note, as a bottom sheet with four
+ * tabs: Outline, Links (backlinks + unlinked mentions), Tasks linked to the
+ * note, and Info (frontmatter properties + file facts). [onJump] takes the
+ * 0-based line of a tapped heading.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NotePanel(
     vm: MainViewModel,
@@ -56,120 +63,132 @@ fun NotePanel(
     val noteTasks by tasksVm.noteTasks.collectAsStateWithLifecycle()
     val backlinks by vm.backlinks.collectAsStateWithLifecycle()
     val notes by vm.notesFlow.collectAsStateWithLifecycle()
+    var tab by rememberSaveable { mutableIntStateOf(0) }
     var newTask by remember(path) { mutableStateOf("") }
     val outline = remember(content) { parseOutline(content) }
     val properties = remember(content) { frontmatterProperties(content) }
     val words = remember(content) { wordCount(content) }
     val stored = notes.firstOrNull { it.path == path }
+    val linkCount = backlinks?.let { it.linked.size + it.unlinked.size }
+    // Fixed height so switching tabs doesn't make the sheet jump.
+    val height = (LocalConfiguration.current.screenHeightDp * 0.62f).dp
 
     fun titleOf(p: String): String =
         notes.firstOrNull { it.path == p }?.let { noteTitle(it.path, it.content) }
             ?: p.substringAfterLast('/').removeSuffix(".md")
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        LazyColumn(modifier = Modifier.fillMaxWidth()) {
-            if (outline.isNotEmpty()) {
-                item { SectionHeader("Outline") }
-                items(outline, key = { "o-${it.line}" }) { h ->
-                    Text(
-                        h.text,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                onDismiss()
-                                onJump(h.line)
-                            }
-                            .padding(start = (16 + (h.level - 1) * 14).dp, end = 16.dp, top = 6.dp, bottom = 6.dp)
-                    )
-                }
-            }
-            if (properties.isNotEmpty()) {
-                item { SectionHeader("Properties") }
-                items(properties, key = { "p-${it.key}" }) { p -> InfoRow(p.key, p.value) }
-            }
-            item { SectionHeader("Tasks") }
-            items(noteTasks, key = { "t-${it.id}" }) { t ->
-                TaskRow(
-                    task = t,
-                    subtasks = 0,
-                    onToggle = { tasksVm.toggleDone(t) },
-                    onOpen = {
-                        onDismiss()
-                        tasksVm.openTask(t.id)
-                    }
-                )
-            }
-            item {
-                OutlinedTextField(
-                    value = newTask,
-                    onValueChange = { newTask = it },
-                    singleLine = true,
-                    placeholder = { Text("Add task for this note") },
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(onDone = {
-                        tasksVm.create(newTask, status = TaskStatus.Inbox, linkPath = path)
-                        newTask = ""
-                    }),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp)
-                )
-            }
-
-            val bl = backlinks
-            item { SectionHeader("Linked mentions${bl?.let { "  ${it.linked.size}" } ?: ""}") }
-            if (bl == null) {
-                item { EmptyHint("Scanning notes") }
-            } else {
-                if (bl.linked.isEmpty()) item { EmptyHint("No notes link here") }
-                items(bl.linked, key = { "l-${it.path}" }) { b ->
-                    BacklinkRow(b, titleOf(b.path), onOpen = {
-                        onDismiss()
-                        vm.openNote(b.path)
-                    })
-                }
-                if (bl.unlinked.isNotEmpty()) {
-                    item { SectionHeader("Unlinked mentions  ${bl.unlinked.size}") }
-                    items(bl.unlinked, key = { "u-${it.path}" }) { b ->
-                        BacklinkRow(
-                            b,
-                            titleOf(b.path),
-                            onOpen = {
-                                onDismiss()
-                                vm.openNote(b.path)
-                            },
-                            onLink = { vm.linkMention(b.path) }
+    Sheet(onDismiss) {
+        TextTabs(
+            listOf("Outline", "Links" + (linkCount?.let { " $it" } ?: ""), "Tasks " + noteTasks.size, "Info"),
+            tab
+        ) { tab = it }
+        LazyColumn(Modifier.fillMaxWidth().height(height), contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 4.dp, bottom = 24.dp)) {
+            when (tab) {
+                0 -> {
+                    if (outline.isEmpty()) item { Hint("No headings in this note") }
+                    items(outline, key = { "o-${it.line}" }) { h ->
+                        Text(
+                            h.text,
+                            style = Type.body.copy(color = if (h.level <= 2) Sc.text else Sc.text2),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onDismiss()
+                                    onJump(h.line)
+                                }
+                                .padding(start = (16 + (h.level - 1) * 14).dp, end = 16.dp, top = 9.dp, bottom = 9.dp)
                         )
                     }
                 }
-            }
-            item { SectionHeader("Info") }
-            item { InfoRow("Words", "%,d".format(words)) }
-            item { InfoRow("Characters", "%,d".format(content.length)) }
-            stored?.let { n ->
-                val modified = n.localModifiedAt ?: n.remoteUpdatedAt
-                item {
-                    InfoRow("Modified", DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(modified)))
+                1 -> {
+                    val bl = backlinks
+                    if (bl == null) {
+                        item { Hint("Scanning notes") }
+                    } else {
+                        item { GroupHeader("Backlinks", "${bl.linked.size}") }
+                        if (bl.linked.isEmpty()) item { Hint("No notes link here") }
+                        items(bl.linked, key = { "l-${it.path}" }) { b ->
+                            BacklinkRow(b, titleOf(b.path), onOpen = {
+                                onDismiss()
+                                vm.openNote(b.path)
+                            })
+                        }
+                        if (bl.unlinked.isNotEmpty()) {
+                            item { GroupHeader("Unlinked mentions", "${bl.unlinked.size}") }
+                            items(bl.unlinked, key = { "u-${it.path}" }) { b ->
+                                BacklinkRow(
+                                    b,
+                                    titleOf(b.path),
+                                    onOpen = {
+                                        onDismiss()
+                                        vm.openNote(b.path)
+                                    },
+                                    onLink = { vm.linkMention(b.path) }
+                                )
+                            }
+                        }
+                    }
+                }
+                2 -> {
+                    items(noteTasks, key = { "t-${it.id}" }) { t ->
+                        TaskRow(t, null, onToggle = { tasksVm.toggleDone(t) }, onOpen = {
+                            onDismiss()
+                            tasksVm.openTask(t.id)
+                        }, showStatus = true)
+                    }
+                    item {
+                        InputBox(
+                            newTask,
+                            { newTask = it },
+                            "Add task for this note",
+                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                            icon = R.drawable.ms_add,
+                            keyboardOptions = KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Done),
+                            keyboardActions = KeyboardActions(onDone = {
+                                tasksVm.create(newTask, status = TaskStatus.Inbox, linkPath = path)
+                                newTask = ""
+                            })
+                        )
+                    }
+                }
+                else -> {
+                    if (properties.isNotEmpty()) {
+                        item { GroupHeader("Properties") }
+                        items(properties, key = { "p-${it.key}" }) { p -> InfoRow(p.key, p.value) }
+                    }
+                    item { GroupHeader("File") }
+                    item { InfoRow("path", path, mono = true) }
+                    item { InfoRow("words", "%,d".format(words), mono = true) }
+                    item { InfoRow("characters", "%,d".format(content.length), mono = true) }
+                    stored?.let { n ->
+                        val modified = n.localModifiedAt ?: n.remoteUpdatedAt
+                        item {
+                            InfoRow(
+                                "edited",
+                                DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(modified)) +
+                                    if (n.localModifiedAt != null) "  ·  not synced" else "",
+                                mono = true
+                            )
+                        }
+                    }
                 }
             }
-            item { InfoRow("Path", path) }
-            item { Text("", modifier = Modifier.padding(bottom = 24.dp)) }
         }
     }
 }
 
 @Composable
-private fun InfoRow(label: String, value: String) {
-    Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-        Text(
-            label,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(0.35f)
-        )
-        Text(value, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(0.65f))
+private fun Hint(text: String) {
+    Text(text, style = Type.meta, modifier = Modifier.padding(16.dp))
+}
+
+@Composable
+private fun InfoRow(label: String, value: String, mono: Boolean = false) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 34.dp).padding(horizontal = 16.dp, vertical = 6.dp)) {
+        Text(label, style = Type.body.copy(color = Sc.text3), modifier = Modifier.width(96.dp))
+        Text(value, style = if (mono) Type.mono.copy(color = Sc.text, fontSize = Type.body.fontSize * 0.9f) else Type.body, modifier = Modifier.weight(1f))
     }
 }
 
@@ -182,20 +201,12 @@ private fun BacklinkRow(b: Backlink, title: String, onOpen: () -> Unit, onLink: 
             .padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Column(Modifier.weight(1f)) {
+            Text(title, style = Type.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (b.excerpt.isNotBlank()) {
-                Text(
-                    b.excerpt,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Text(b.excerpt, style = Type.meta.copy(color = Sc.text2), maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
-        if (onLink != null) {
-            TextButton(onClick = onLink) { Text("Link") }
-        }
+        if (onLink != null) TextAction("Link", onLink)
     }
 }

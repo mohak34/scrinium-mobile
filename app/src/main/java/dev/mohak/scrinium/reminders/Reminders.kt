@@ -30,10 +30,25 @@ class Reminders(context: Context) {
     private val store = ctx.getSharedPreferences("scrinium_reminders", Context.MODE_PRIVATE)
     private val alarms = ctx.getSystemService(AlarmManager::class.java)
 
-    private data class Entry(val at: Long, val title: String)
+    // The on/off switch in Settings. Kept apart from [store], which holds
+    // only the alarm entries.
+    private val settings = ctx.getSharedPreferences("scrinium_reminder_settings", Context.MODE_PRIVATE)
+
+    data class Entry(val at: Long, val title: String)
+
+    var enabled: Boolean
+        get() = settings.getBoolean("enabled", true)
+        set(value) {
+            settings.edit().putBoolean("enabled", value).apply()
+            if (!value) clearAll()
+        }
+
+    /** Alarms waiting to fire, soonest first. */
+    fun scheduled(): List<Entry> = stored().values.sortedBy { it.at }
 
     /** Makes the scheduled alarms match [tasks]' future, not-done reminders. */
     fun sync(tasks: List<TaskDto>) {
+        if (!enabled) return clearAll()
         val now = System.currentTimeMillis()
         val want = tasks
             .filter { !it.isDone && it.remindAt != null && it.remindAt > now }
@@ -54,6 +69,7 @@ class Reminders(context: Context) {
 
     /** After a reboot or app update the system drops alarms; set them again. */
     fun rearm() {
+        if (!enabled) return
         val now = System.currentTimeMillis()
         val edit = store.edit()
         for ((id, e) in stored()) {

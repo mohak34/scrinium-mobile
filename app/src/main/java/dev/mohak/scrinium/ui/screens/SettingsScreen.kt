@@ -1,226 +1,359 @@
 package dev.mohak.scrinium.ui.screens
 
+import android.content.Intent
+import android.provider.Settings
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.TextButton
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import dev.mohak.scrinium.data.remote.ApiTokenDto
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.mohak.scrinium.BuildConfig
+import dev.mohak.scrinium.R
+import dev.mohak.scrinium.data.remote.ApiTokenDto
+import dev.mohak.scrinium.ui.ConfirmDialog
+import dev.mohak.scrinium.ui.Divider
+import dev.mohak.scrinium.ui.FillButton
+import dev.mohak.scrinium.ui.GroupHeader
+import dev.mohak.scrinium.ui.InputBox
 import dev.mohak.scrinium.ui.MainViewModel
+import dev.mohak.scrinium.ui.MarkdownText
+import dev.mohak.scrinium.ui.MonoFont
+import dev.mohak.scrinium.ui.Sc
+import dev.mohak.scrinium.ui.Sym
+import dev.mohak.scrinium.ui.TasksViewModel
+import dev.mohak.scrinium.ui.TextAction
+import dev.mohak.scrinium.ui.TopBar
+import dev.mohak.scrinium.ui.Type
 import dev.mohak.scrinium.ui.relativeTime
+import java.text.DateFormat
+import java.util.Date
 
-@OptIn(ExperimentalMaterial3Api::class)
+private enum class Page(val title: String) { Index("Settings"), Sync("Sync"), Devices("Devices"), Template("New note template"), Reminders("Reminders") }
+
+/** Settings: a list with one status line per row, each opening its own page. */
 @Composable
-fun SettingsScreen(vm: MainViewModel) {
-    val email by vm.email.collectAsStateWithLifecycle()
-    val sync by vm.sync.collectAsStateWithLifecycle()
-    val unsynced by vm.unsyncedCount.collectAsStateWithLifecycle()
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Settings") },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background
-                ),
-                navigationIcon = {
-                    IconButton(onClick = { vm.closeSettings() }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                }
-            )
-        }
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp)
-        ) {
-            SectionLabel("Account")
-            Text(
-                text = email ?: "",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Spacer(Modifier.height(24.dp))
-
-            SectionLabel("Server")
-            Text(
-                text = BuildConfig.SCRINIUM_API_URL,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.height(24.dp))
-
-            SectionLabel("Sync")
-            val status = when {
-                sync.syncing -> "Syncing\u2026"
-                sync.lastSyncAt != null -> "Last synced ${relativeTime(sync.lastSyncAt!!)}"
-                else -> "Never synced"
-            }
-            Text(
-                text = status,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            if (unsynced > 0) {
-                Text(
-                    text = "$unsynced unsynced change${if (unsynced == 1) "" else "s"}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            sync.error?.let { error ->
-                Text(
-                    text = error,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-            }
-            Spacer(Modifier.height(12.dp))
-            Button(
-                onClick = { vm.syncNow(force = true) },
-                enabled = !sync.syncing
-            ) {
-                if (sync.syncing) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.height(18.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.onPrimary
-                    )
-                } else {
-                    Text("Sync now")
-                }
-            }
-            Spacer(Modifier.height(24.dp))
-
-            SectionLabel("Vault")
-            OutlinedButton(onClick = { vm.openTrash() }) {
-                Text("Trash")
-            }
-            Spacer(Modifier.height(24.dp))
-
-            SectionLabel("Devices")
-            val devices by vm.devices.collectAsStateWithLifecycle()
-            LaunchedEffect(Unit) { vm.loadDevices() }
-            val current = vm.currentDeviceHash
-            var revoking by remember { mutableStateOf<ApiTokenDto?>(null) }
-            if (devices.isEmpty()) {
-                Text(
-                    text = "No devices loaded",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            for (d in devices) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = (if (d.tokenHash == current) "This phone" else "Device") + "  " + d.tokenHash.take(8),
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Text(
-                            text = "Signed in ${relativeTime(d.createdAt)}" +
-                                (d.lastUsedAt?.let { ", last used ${relativeTime(it)}" } ?: ""),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    TextButton(onClick = { revoking = d }) { Text("Revoke") }
-                }
-            }
-            revoking?.let { d ->
-                AlertDialog(
-                    onDismissRequest = { revoking = null },
-                    title = { Text("Revoke device?") },
-                    text = {
-                        Text(
-                            if (d.tokenHash == current) "This phone will be signed out."
-                            else "That device will have to sign in again."
-                        )
-                    },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            revoking = null
-                            vm.revokeDevice(d.tokenHash)
-                        }) { Text("Revoke") }
-                    },
-                    dismissButton = { TextButton(onClick = { revoking = null }) { Text("Cancel") } }
-                )
-            }
-            Spacer(Modifier.height(24.dp))
-
-            SectionLabel("New note template")
-            var template by remember { mutableStateOf(vm.template.value) }
-            OutlinedTextField(
-                value = template,
-                onValueChange = {
-                    template = it
-                    vm.setTemplate(it)
-                },
-                placeholder = { Text("# {{title}}") },
-                minLines = 3,
-                modifier = Modifier.fillMaxWidth()
-            )
-            Text(
-                text = "Used when it contains {{title}}. This phone only.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.height(24.dp))
-
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Spacer(Modifier.height(16.dp))
-
-            OutlinedButton(onClick = { vm.signOut() }) {
-                Text("Sign out")
+fun SettingsScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
+    var page by rememberSaveable { mutableStateOf(Page.Index) }
+    BackHandler(enabled = page != Page.Index) { page = Page.Index }
+    LaunchedEffect(Unit) {
+        vm.loadDevices()
+        vm.refreshTrash()
+    }
+    Column(Modifier.fillMaxSize()) {
+        TopBar(page.title, onBack = { if (page == Page.Index) vm.closeSettings() else page = Page.Index })
+        Box(Modifier.weight(1f)) {
+            when (page) {
+                Page.Index -> IndexPage(vm, tasksVm) { page = it }
+                Page.Sync -> SyncPage(vm)
+                Page.Devices -> DevicesPage(vm)
+                Page.Template -> TemplatePage(vm)
+                Page.Reminders -> RemindersPage(tasksVm)
             }
         }
     }
 }
 
 @Composable
-private fun SectionLabel(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(bottom = 4.dp)
-    )
+private fun IndexPage(vm: MainViewModel, tasksVm: TasksViewModel, open: (Page) -> Unit) {
+    val email by vm.email.collectAsStateWithLifecycle()
+    val sync by vm.sync.collectAsStateWithLifecycle()
+    val unsynced by vm.unsyncedCount.collectAsStateWithLifecycle()
+    val devices by vm.devices.collectAsStateWithLifecycle()
+    val template by vm.template.collectAsStateWithLifecycle()
+    val trash by vm.trash.collectAsStateWithLifecycle()
+    val remindersOn by tasksVm.remindersOn.collectAsStateWithLifecycle()
+    var confirmSignOut by remember { mutableStateOf(false) }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(44.dp).clip(CircleShape).background(Sc.fill), contentAlignment = Alignment.Center) {
+                Text(email?.firstOrNull()?.uppercase() ?: "?", style = Type.title.copy(color = Sc.onFill))
+            }
+            Column(Modifier.padding(start = 14.dp).weight(1f)) {
+                Text(email ?: "", style = Type.body.copy(fontWeight = FontWeight.SemiBold), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(BuildConfig.SCRINIUM_API_URL.substringAfter("://"), style = Type.meta)
+            }
+        }
+        Divider()
+        val failed = sync.report?.errors ?: 0
+        PageRow(R.drawable.ms_sync, "Sync", buildList {
+            add(
+                when {
+                    sync.syncing -> "Syncing"
+                    sync.lastSyncAt != null -> "Synced ${relativeTime(sync.lastSyncAt!!)}"
+                    else -> "Never synced"
+                }
+            )
+            if (unsynced > 0) add("$unsynced waiting to upload")
+            if (failed > 0) add("$failed failed")
+        }.joinToString("  ·  ")) { open(Page.Sync) }
+        PageRow(R.drawable.ms_devices, "Devices", if (devices.isEmpty()) "Phones signed in to your vault" else "${devices.size} signed in") { open(Page.Devices) }
+        PageRow(R.drawable.ms_note_add, "New note template", template.lineSequence().firstOrNull { it.isNotBlank() }?.takeIf { "{{title}}" in template } ?: "# {{title}}  (default)") { open(Page.Template) }
+        PageRow(R.drawable.ms_notifications, "Reminders", if (remindersOn) "On  ·  ${tasksVm.scheduledReminders().size} scheduled" else "Off") { open(Page.Reminders) }
+        PageRow(R.drawable.ms_delete, "Trash", if (trash.isEmpty()) "Empty" else "${trash.size} item${if (trash.size == 1) "" else "s"}") { vm.openTrash() }
+        Divider()
+        PageRow(R.drawable.ms_info, "About", "Version ${BuildConfig.VERSION_NAME}", onClick = null)
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable { confirmSignOut = true }.padding(horizontal = 20.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Sym(R.drawable.ms_logout, tint = Sc.red)
+            Text("Sign out", style = Type.body.copy(color = Sc.red), modifier = Modifier.padding(start = 18.dp))
+        }
+    }
+    if (confirmSignOut) {
+        ConfirmDialog(
+            "Sign out?",
+            "Notes not yet synced stay on the phone and upload after you sign in again.",
+            "Sign out",
+            onConfirm = { vm.signOut() },
+            onDismiss = { confirmSignOut = false }
+        )
+    }
+}
+
+@Composable
+private fun PageRow(icon: Int, title: String, status: String, onClick: (() -> Unit)?) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 60.dp)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 20.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Sym(icon, tint = Sc.text2)
+        Column(Modifier.weight(1f).padding(start = 18.dp)) {
+            Text(title, style = Type.body)
+            Text(status, style = Type.meta, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        if (onClick != null) Sym(R.drawable.ms_chevron_right, tint = Sc.text3, size = 18.dp)
+    }
+}
+
+@Composable
+private fun SyncPage(vm: MainViewModel) {
+    val sync by vm.sync.collectAsStateWithLifecycle()
+    val notes by vm.notesFlow.collectAsStateWithLifecycle()
+    val pending = notes.filter { it.localModifiedAt != null }.sortedByDescending { it.localModifiedAt }
+    val failures = sync.report?.failures.orEmpty()
+    val healthy = !sync.syncing && failures.isEmpty() && pending.isEmpty() && sync.error == null
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Sym(
+                    when {
+                        sync.error != null || failures.isNotEmpty() -> R.drawable.ms_error
+                        healthy -> R.drawable.ms_cloud_done_fill
+                        else -> R.drawable.ms_cloud_upload
+                    },
+                    tint = if (sync.error != null || failures.isNotEmpty()) Sc.red else Sc.accent
+                )
+                Text(
+                    when {
+                        sync.syncing -> "Syncing"
+                        sync.error != null -> "Last sync failed"
+                        failures.isNotEmpty() -> "Some notes didn't sync"
+                        pending.isNotEmpty() -> "Changes waiting to upload"
+                        else -> "Up to date"
+                    },
+                    style = Type.title.copy(fontSize = 16.sp),
+                    modifier = Modifier.padding(start = 10.dp)
+                )
+            }
+            Text(
+                sync.lastSyncAt?.let { "last sync " + DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(it)) } ?: "never synced",
+                style = Type.mono,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+            sync.error?.let { Text(it, style = Type.meta.copy(color = Sc.red), modifier = Modifier.padding(top = 4.dp)) }
+        }
+        FillButton(if (sync.syncing) "Syncing" else "Sync now", { vm.syncNow(force = true) }, Modifier.fillMaxWidth().padding(horizontal = 16.dp), enabled = !sync.syncing)
+        if (pending.isNotEmpty()) {
+            GroupHeader("Waiting to upload", "${pending.size}")
+            pending.forEach { n ->
+                Row(Modifier.fillMaxWidth().height(36.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Sym(R.drawable.ms_description, tint = Sc.text3, size = 17.dp)
+                    Text(n.path.removeSuffix(".md"), style = Type.body, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = 8.dp))
+                    Text(relativeTime(n.localModifiedAt!!), style = Type.mono)
+                }
+            }
+        }
+        if (failures.isNotEmpty()) {
+            GroupHeader("Failed", "${failures.size}", color = Sc.red)
+            failures.forEach { f ->
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
+                    Sym(R.drawable.ms_error, tint = Sc.red, size = 17.dp)
+                    Text(f, style = Type.meta.copy(color = Sc.text2), modifier = Modifier.padding(start = 8.dp))
+                }
+            }
+        }
+        GroupHeader("Server")
+        Text(BuildConfig.SCRINIUM_API_URL, style = Type.mono.copy(color = Sc.text2), modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+        Text(
+            "Sync runs only while the app is open: when it opens, every minute, and 5 seconds after you stop typing.",
+            style = Type.meta,
+            modifier = Modifier.padding(16.dp)
+        )
+    }
+}
+
+@Composable
+private fun DevicesPage(vm: MainViewModel) {
+    val devices by vm.devices.collectAsStateWithLifecycle()
+    val current = vm.currentDeviceHash
+    var revoking by remember { mutableStateOf<ApiTokenDto?>(null) }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        Text(
+            "Phones signed in to your vault. Revoke one you no longer use; it is signed out on its next sync.",
+            style = Type.meta.copy(color = Sc.text2),
+            modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 10.dp)
+        )
+        if (devices.isEmpty()) Text("No devices loaded. Check your connection.", style = Type.meta, modifier = Modifier.padding(20.dp))
+        devices.forEachIndexed { i, d ->
+            if (i > 0) Divider()
+            val me = d.tokenHash == current
+            Row(Modifier.fillMaxWidth().heightIn(min = 60.dp).padding(start = 20.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Sym(R.drawable.ms_smartphone, tint = if (me) Sc.accent else Sc.text2)
+                Column(Modifier.weight(1f).padding(start = 16.dp)) {
+                    Text(if (me) "This phone" else "Phone ${d.tokenHash.take(4)}", style = Type.body)
+                    Text(
+                        (d.lastUsedAt?.let { if (me) "active now" else "last used ${relativeTime(it)}" } ?: "never used") + "  ·  since " +
+                            DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(d.createdAt)),
+                        style = Type.mono
+                    )
+                }
+                if (!me) TextAction("Revoke", { revoking = d }, danger = true)
+            }
+        }
+    }
+    revoking?.let { d ->
+        ConfirmDialog(
+            "Revoke device?",
+            "That phone will have to sign in again.",
+            "Revoke",
+            onConfirm = { vm.revokeDevice(d.tokenHash) },
+            onDismiss = { revoking = null }
+        )
+    }
+}
+
+@Composable
+private fun TemplatePage(vm: MainViewModel) {
+    val saved by vm.template.collectAsStateWithLifecycle()
+    var text by remember { mutableStateOf(saved) }
+    fun set(v: String) {
+        text = v
+        vm.setTemplate(v)
+    }
+    val body = if ("{{title}}" in text) text.replace("{{title}}", "Untitled") else "# Untitled\n\n"
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        InputBox(
+            text,
+            { set(it) },
+            "# {{title}}",
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            singleLine = false,
+            minHeight = 150.dp,
+            style = Type.body.copy(fontFamily = MonoFont, fontSize = 13.sp)
+        )
+        Row(Modifier.padding(horizontal = 8.dp)) {
+            TextAction("Insert {{title}}", { set(text + "{{title}}") })
+            TextAction("Reset", { set("") }, enabled = text.isNotEmpty())
+        }
+        Text(
+            "Used for notes made on this phone when it contains {{title}}, which becomes the note's name. Otherwise a note starts with its name as a heading.",
+            style = Type.meta,
+            modifier = Modifier.padding(horizontal = 16.dp)
+        )
+        GroupHeader("Preview")
+        Box(Modifier.padding(horizontal = 18.dp, vertical = 4.dp)) { MarkdownText(body) }
+    }
+}
+
+@Composable
+private fun RemindersPage(tasksVm: TasksViewModel) {
+    val on by tasksVm.remindersOn.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    // Re-read the schedule when the switch flips.
+    var tick by remember { mutableLongStateOf(0L) }
+    val scheduled = remember(on, tick) { tasksVm.scheduledReminders() }
+    val allowed = NotificationManagerCompat.from(context).areNotificationsEnabled()
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 60.dp).padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Reminder notifications", style = Type.body)
+                Text("A notification at each task's reminder time", style = Type.meta)
+            }
+            Switch(
+                checked = on,
+                onCheckedChange = {
+                    tasksVm.setRemindersOn(it)
+                    tick++
+                },
+                colors = SwitchDefaults.colors(
+                    checkedTrackColor = Sc.fill,
+                    checkedThumbColor = Sc.onFill,
+                    uncheckedTrackColor = Sc.press,
+                    uncheckedThumbColor = Sc.text3,
+                    uncheckedBorderColor = Sc.line3
+                )
+            )
+        }
+        if (on && !allowed) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Notifications are off for Scrinium in Android settings.", style = Type.meta.copy(color = Sc.orange), modifier = Modifier.weight(1f))
+                TextAction("Open", {
+                    context.startActivity(
+                        Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                    )
+                })
+            }
+        }
+        if (on) {
+            GroupHeader("Scheduled", "${scheduled.size}")
+            if (scheduled.isEmpty()) Text("No upcoming reminders. Set one on a task.", style = Type.meta, modifier = Modifier.padding(16.dp))
+            scheduled.forEach { r ->
+                Row(Modifier.fillMaxWidth().heightIn(min = 40.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Sym(R.drawable.ms_alarm, tint = Sc.text3, size = 17.dp)
+                    Text(r.title.ifBlank { "Task" }, style = Type.body, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = 10.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(r.at)), style = Type.mono)
+                }
+            }
+        }
+    }
 }
