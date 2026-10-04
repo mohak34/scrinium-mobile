@@ -114,6 +114,12 @@ class MainViewModel(
         _collapsedFolders.update { if (path in it) it - path else it + path }
     }
 
+    // Tags for editor autocomplete, from Room so they work offline.
+    val vaultTags: StateFlow<List<String>> = notesFlow
+        .map { list -> vaultTags(list.map { it.content }) }
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     // Pinned notes and folders sort first at their level of the tree.
     val pinned: StateFlow<Set<String>> = prefs.pinned
     val template: StateFlow<String> = prefs.template

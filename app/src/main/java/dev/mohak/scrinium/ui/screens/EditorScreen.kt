@@ -41,6 +41,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
@@ -57,6 +62,9 @@ import dev.mohak.scrinium.ui.MainViewModel
 import dev.mohak.scrinium.ui.MarkdownText
 import dev.mohak.scrinium.ui.TasksViewModel
 import dev.mohak.scrinium.ui.lineStartOffset
+import dev.mohak.scrinium.ui.LiveMarkdownTransformation
+import dev.mohak.scrinium.ui.LivePalette
+import dev.mohak.scrinium.ui.completions
 import dev.mohak.scrinium.ui.printHtml
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -96,6 +104,24 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
             text = state.text,
             selection = TextRange(field.selection.start.coerceAtMost(end), field.selection.end.coerceAtMost(end))
         )
+    }
+
+    var focused by remember { mutableStateOf(false) }
+    val notes by vm.notesFlow.collectAsStateWithLifecycle()
+    val tags by vm.vaultTags.collectAsStateWithLifecycle()
+    val colors = MaterialTheme.colorScheme
+    val palette = remember(colors) {
+        LivePalette(colors.primary, colors.outline, colors.surfaceContainerHigh, colors.tertiary.copy(alpha = 0.3f))
+    }
+    // Marks show on the cursor's lines only while the field has focus.
+    val live = if (focused) {
+        LiveMarkdownTransformation(field.selection.min, field.selection.max, palette)
+    } else {
+        LiveMarkdownTransformation(-1, -1, palette)
+    }
+    val suggestions = remember(field.text, field.selection, notes, tags, focused) {
+        if (!focused || !field.selection.collapsed) emptyList()
+        else completions(field.text, field.selection.start, notes.map { it.path }, tags)
     }
 
     val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -211,17 +237,19 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                     loadImage = { vm.loadImage(state.path, it) },
                     onHeadingPositioned = { line, y -> headingY[line] = y }
                 )
-            } else {
+            } else Column(modifier = Modifier.fillMaxSize().imePadding()) {
                 BasicTextField(
                     value = field,
                     onValueChange = {
                         field = it
                         if (it.text != state.text) vm.updateEditorText(it.text)
                     },
+                    visualTransformation = live,
                     modifier = Modifier
-                        .fillMaxSize()
-                        .imePadding()
+                        .fillMaxWidth()
+                        .weight(1f)
                         .focusRequester(focus)
+                        .onFocusChanged { focused = it.isFocused }
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                     textStyle = TextStyle(
                         fontSize = 15.sp,
@@ -243,6 +271,25 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                         innerTextField()
                     }
                 )
+                if (suggestions.isNotEmpty()) {
+                    LazyRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(colors.surfaceContainer),
+                        contentPadding = PaddingValues(horizontal = 8.dp)
+                    ) {
+                        items(suggestions, key = { it.label + it.detail }) { s ->
+                            TextButton(onClick = {
+                                val cursor = field.selection.start
+                                val text = field.text.substring(0, s.from) + s.insert + field.text.substring(cursor)
+                                field = TextFieldValue(text, TextRange(s.from + s.insert.length))
+                                vm.updateEditorText(text)
+                            }) {
+                                Text(s.label, maxLines = 1)
+                            }
+                        }
+                    }
+                }
             }
         }
     }
