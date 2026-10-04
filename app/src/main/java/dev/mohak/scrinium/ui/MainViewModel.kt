@@ -29,6 +29,7 @@ import dev.mohak.scrinium.sync.SyncReport
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -76,7 +77,11 @@ data class SyncUiState(
     val report: SyncReport? = null
 )
 
-data class EditorState(val path: String, val text: String)
+private var nextEditorId = 0L
+
+// [id] names one open-note session: a fresh one per note opened, kept by
+// renames (copy), so the editor field survives its note changing path.
+data class EditorState(val path: String, val text: String, val id: Long = ++nextEditorId)
 
 class MainViewModel(
     private val session: SessionRepository,
@@ -581,30 +586,16 @@ class MainViewModel(
         val target = targetRaw.substringBefore('#').trim()
         if (target.isEmpty()) return
         viewModelScope.launch {
-            val all = notes.observeAll().first().filter { !it.isDeleted }
-            val current = _editor.value
-            val dir = current?.path?.substringBeforeLast('/', "") ?: ""
-            val candidates = buildList {
-                if (dir.isNotBlank()) add("$dir/$target")
-                if (dir.isNotBlank()) add("$dir/$target.md")
-                add(target)
-                add(if (target.endsWith(".md", ignoreCase = true)) target else "$target.md")
-            }
-            val direct = candidates.firstOrNull { c -> all.any { it.path == c } }
-            if (direct != null) {
-                openNote(direct)
+            val paths = notes.observeAll().first().filter { !it.isDeleted }.map { it.path }
+            val hit = resolveWikilink(target, _editor.value?.path ?: "", paths)
+            if (hit != null) {
+                openNote(hit)
                 return@launch
             }
             val stem = target.substringAfterLast('/').removeSuffix(".md")
-            val matches = all.filter {
-                it.path.substringAfterLast('/').removeSuffix(".md").equals(stem, ignoreCase = true)
-            }
-            if (matches.size == 1) {
-                openNote(matches[0].path)
-            } else {
-                _sync.update {
-                    it.copy(error = if (matches.isEmpty()) "Note not found: $target" else "Multiple notes match: $target")
-                }
+            val matches = paths.count { it.substringAfterLast('/').removeSuffix(".md").equals(stem, ignoreCase = true) }
+            _sync.update {
+                it.copy(error = if (matches == 0) "Note not found: $target" else "Multiple notes match: $target")
             }
         }
     }
@@ -731,6 +722,8 @@ class MainViewModel(
             val ext = mime.substringAfter('/').replace("jpeg", "jpg")
             val stored = notes.uploadAttachment(body, mime, "image.$ext", ATTACHMENTS_FOLDER)
             "![${name.substringBeforeLast('.').ifBlank { "image" }}](${noteRelative(notePath, stored)})"
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             _sync.update { it.copy(error = "Image upload failed: ${e.message}") }
             null
@@ -797,7 +790,7 @@ class MainViewModel(
                         notes.saveLocally(newPath, updated)
                     }
                 }
-                _editor.value = EditorState(newPath, text)
+                _editor.value = current.copy(path = newPath, text = text)
                 editorEdits.value = null
                 titleSyncEdits.value = null
                 _screen.value = Screen.Editor(newPath)
@@ -937,6 +930,10 @@ class MainViewModel(
 
     fun dismissSyncError() {
         _sync.update { it.copy(error = null) }
+    }
+
+    fun reportError(message: String) {
+        _sync.update { it.copy(error = message) }
     }
 
     companion object {

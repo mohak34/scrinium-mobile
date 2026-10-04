@@ -8,11 +8,32 @@ class BacklinksTest {
     private val paths = listOf("Ideas.md", "deep/Ideas.md", "projects/Plan.md", "Journal.md")
 
     @Test
-    fun resolvesExactPathThenShortestStem() {
-        assertEquals("deep/Ideas.md", resolveWikilink("deep/Ideas", paths))
-        assertEquals("Ideas.md", resolveWikilink("ideas", paths))
-        assertEquals("projects/Plan.md", resolveWikilink("Plan.md", paths))
-        assertNull(resolveWikilink("Missing", paths))
+    fun resolvesVaultPathThenSourceFolderThenUniqueStem() {
+        assertEquals("deep/Ideas.md", resolveWikilink("deep/Ideas", "Journal.md", paths))
+        assertEquals("Ideas.md", resolveWikilink("ideas", "deep/Other.md", paths))
+        assertEquals("projects/Plan.md", resolveWikilink("Plan.md", "Journal.md", paths))
+        assertEquals("projects/Plan.md", resolveWikilink("Plan#Goals", "Journal.md", paths))
+        assertNull(resolveWikilink("Missing", "Journal.md", paths))
+    }
+
+    @Test
+    fun sameNameInTwoFoldersResolvesFromTheSourceFolderOnly() {
+        val two = listOf("work/Plan.md", "personal/Plan.md", "personal/Source.md", "Root.md")
+        assertEquals("personal/Plan.md", resolveWikilink("Plan", "personal/Source.md", two))
+        assertEquals("work/Plan.md", resolveWikilink("work/Plan", "personal/Source.md", two))
+        assertNull(resolveWikilink("Plan", "Root.md", two))
+    }
+
+    @Test
+    fun backlinksFollowWhereTheLinkOpens() {
+        val notes = listOf(
+            "work/Plan.md" to "# Plan",
+            "personal/Plan.md" to "# Plan",
+            "personal/Source.md" to "See [[Plan]]",
+            "Root.md" to "ambiguous [[Plan]], explicit [[work/Plan]]"
+        )
+        assertEquals(listOf("Root.md"), findBacklinks("work/Plan.md", notes).linked.map { it.path })
+        assertEquals(listOf("personal/Source.md"), findBacklinks("personal/Plan.md", notes).linked.map { it.path })
     }
 
     @Test
