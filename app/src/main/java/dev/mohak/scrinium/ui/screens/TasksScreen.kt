@@ -94,6 +94,8 @@ fun TasksScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
     val all by tasksVm.tasks.collectAsStateWithLifecycle()
     val loading by tasksVm.loading.collectAsStateWithLifecycle()
     val error by tasksVm.error.collectAsStateWithLifecycle()
+    val askNotify = rememberNotificationAsk()
+    LaunchedEffect(Unit) { askNotify() }
 
     var view by rememberSaveable { mutableStateOf(TasksView.List) }
     var areaKey by rememberSaveable { mutableStateOf<String?>(null) }

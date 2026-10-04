@@ -1,5 +1,6 @@
 package dev.mohak.scrinium
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -27,6 +28,11 @@ import dev.mohak.scrinium.ui.screens.TagsScreen
 import dev.mohak.scrinium.ui.screens.TrashScreen
 
 class MainActivity : ComponentActivity() {
+    companion object {
+        // Set by a reminder notification: open that task on launch.
+        const val EXTRA_TASK_ID = "taskId"
+    }
+
     private val container by lazy { (application as ScriniumApplication).container }
     private val vm: MainViewModel by viewModels { MainViewModel.factory(container) }
     private val tasksVm: TasksViewModel by viewModels { TasksViewModel.factory(container) }
@@ -38,8 +44,10 @@ class MainActivity : ComponentActivity() {
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
                 vm.syncOnForeground()
+                if (vm.signedIn.value) tasksVm.refresh(quiet = true)
             }
         })
+        if (savedInstanceState == null) openTaskFrom(intent)
         setContent {
             ScriniumTheme {
                 val signedIn by vm.signedIn.collectAsStateWithLifecycle()
@@ -50,6 +58,17 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        openTaskFrom(intent)
+    }
+
+    private fun openTaskFrom(intent: Intent?) {
+        val id = intent?.getStringExtra(EXTRA_TASK_ID) ?: return
+        intent.removeExtra(EXTRA_TASK_ID)
+        if (vm.signedIn.value) tasksVm.openTask(id)
     }
 }
 

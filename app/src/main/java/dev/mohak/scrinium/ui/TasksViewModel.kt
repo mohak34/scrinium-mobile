@@ -10,6 +10,7 @@ import dev.mohak.scrinium.data.remote.NewTaskRequest
 import dev.mohak.scrinium.data.remote.ScriniumApi
 import dev.mohak.scrinium.data.remote.TaskDto
 import dev.mohak.scrinium.di.AppContainer
+import dev.mohak.scrinium.reminders.Reminders
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -27,7 +28,7 @@ import kotlinx.serialization.json.JsonPrimitive
  * optimistically and roll back on failure, like the web store. Offline means
  * a visible error, never a silent queue.
  */
-class TasksViewModel(private val api: ScriniumApi) : ViewModel() {
+class TasksViewModel(private val api: ScriniumApi, private val reminders: Reminders) : ViewModel() {
 
     private val _tasks = MutableStateFlow<List<TaskDto>>(emptyList())
     val tasks: StateFlow<List<TaskDto>> = _tasks.asStateFlow()
@@ -72,13 +73,32 @@ class TasksViewModel(private val api: ScriniumApi) : ViewModel() {
         _error.value = null
     }
 
-    fun refresh() {
+    // Phone alarms follow the task list, but only once a full list has
+    // loaded: a partial list (one task added from a note) must not cancel
+    // every other reminder.
+    private var loaded = false
+
+    init {
         viewModelScope.launch {
-            _loading.value = true
+            _tasks.collect { if (loaded) reminders.sync(it) }
+        }
+    }
+
+    private suspend fun load() {
+        val list = api.fetchTasks()
+        loaded = true
+        _tasks.value = list
+    }
+
+    // [quiet] is the app-foreground refresh that keeps reminders current:
+    // offline then is not an error worth showing.
+    fun refresh(quiet: Boolean = false) {
+        viewModelScope.launch {
+            if (!quiet) _loading.value = true
             try {
-                _tasks.value = api.fetchTasks()
+                load()
             } catch (e: Exception) {
-                _error.value = "Couldn't load tasks: ${e.message}"
+                if (!quiet) _error.value = "Couldn't load tasks: ${e.message}"
             } finally {
                 _loading.value = false
             }
@@ -92,7 +112,7 @@ class TasksViewModel(private val api: ScriniumApi) : ViewModel() {
             // A task opened from a note panel may not be in the list yet.
             if (_tasks.value.none { it.id == id }) {
                 try {
-                    _tasks.value = api.fetchTasks()
+                    load()
                 } catch (e: Exception) {
                     _error.value = "Couldn't load task: ${e.message}"
                 }
@@ -262,7 +282,7 @@ class TasksViewModel(private val api: ScriniumApi) : ViewModel() {
 
     companion object {
         fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
-            initializer { TasksViewModel(container.api) }
+            initializer { TasksViewModel(container.api, container.reminders) }
         }
     }
 }

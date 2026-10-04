@@ -1,5 +1,13 @@
 package dev.mohak.scrinium.ui.screens
 
+import androidx.compose.runtime.remember
+import androidx.core.content.ContextCompat
+import androidx.compose.ui.platform.LocalContext
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.rememberLauncherForActivityResult
+import android.os.Build
+import android.content.pm.PackageManager
+import android.Manifest
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
@@ -80,3 +88,24 @@ fun atMinutes(dayMs: Long, minutes: Int): Long = Calendar.getInstance().apply {
     set(Calendar.SECOND, 0)
     set(Calendar.MILLISECOND, 0)
 }.timeInMillis
+
+/**
+ * Returns a callback that asks for the notification permission (Android 13+)
+ * if it isn't granted yet. Reminders need it; the system stops showing the
+ * prompt by itself after the user declines twice.
+ */
+@Composable
+fun rememberNotificationAsk(): () -> Unit {
+    val context = LocalContext.current
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    return remember(context) {
+        {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
+}

@@ -65,6 +65,7 @@ fun TaskDetailScreen(vm: MainViewModel, tasksVm: TasksViewModel, id: String) {
     val all by tasksVm.tasks.collectAsStateWithLifecycle()
     val links by tasksVm.openLinks.collectAsStateWithLifecycle()
     val error by tasksVm.error.collectAsStateWithLifecycle()
+    val askNotify = rememberNotificationAsk()
     val notes by vm.notesFlow.collectAsStateWithLifecycle()
     val task = all.firstOrNull { it.id == id }
 
@@ -312,6 +313,7 @@ fun TaskDetailScreen(vm: MainViewModel, tasksVm: TasksViewModel, id: String) {
             onPick = { m ->
                 pickRemindDay = null
                 tasksVm.setReminder(task.id, atMinutes(day, m))
+                askNotify()
             }
         )
     }

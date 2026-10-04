@@ -12,6 +12,7 @@ import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import dev.mohak.scrinium.BuildConfig
 import dev.mohak.scrinium.data.remote.ApiTokenDto
 import dev.mohak.scrinium.data.remote.ScriniumApi
+import dev.mohak.scrinium.reminders.Reminders
 import java.security.MessageDigest
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,7 +21,8 @@ import kotlinx.coroutines.flow.asStateFlow
 class SessionRepository(
     context: Context,
     private val tokenStore: SecureTokenStore,
-    private val api: ScriniumApi
+    private val api: ScriniumApi,
+    private val reminders: Reminders
 ) {
     private val credentialManager = CredentialManager.create(context)
 
@@ -89,6 +91,7 @@ class SessionRepository(
     }
 
     suspend fun forceSignOut() {
+        reminders.clearAll()
         tokenStore.setToken(null)
         tokenStore.setEmail(null)
         _email.value = null
