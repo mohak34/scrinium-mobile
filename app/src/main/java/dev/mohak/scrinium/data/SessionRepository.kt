@@ -86,6 +86,14 @@ class SessionRepository(
         }
     }
 
+    /** Debug builds only: sign in with a token minted on a dev server, skipping Google. */
+    suspend fun useDevToken(token: String, email: String) {
+        tokenStore.setToken(token)
+        tokenStore.setEmail(email)
+        _email.value = email
+        _signedIn.value = true
+    }
+
     suspend fun updateLastSyncAt(value: Long) {
         tokenStore.setLastSyncAt(value)
     }

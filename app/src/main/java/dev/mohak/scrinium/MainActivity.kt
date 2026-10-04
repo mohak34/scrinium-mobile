@@ -38,6 +38,8 @@ import dev.mohak.scrinium.ui.screens.TaskDetailScreen
 import dev.mohak.scrinium.ui.screens.TasksScreen
 import dev.mohak.scrinium.ui.screens.TagsScreen
 import dev.mohak.scrinium.ui.screens.TrashScreen
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     companion object {
@@ -64,6 +66,10 @@ class MainActivity : ComponentActivity() {
             }
         })
         if (savedInstanceState == null) openTaskFrom(intent)
+        // Emulator testing without Google: `am start --es dev_token <raw token>`.
+        if (BuildConfig.DEBUG) intent?.getStringExtra("dev_token")?.let { token ->
+            lifecycleScope.launch { container.sessionRepository.useDevToken(token, intent.getStringExtra("dev_email") ?: "dev") }
+        }
         setContent {
             ScriniumTheme {
                 val signedIn by vm.signedIn.collectAsStateWithLifecycle()
