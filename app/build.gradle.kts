@@ -22,8 +22,9 @@ android {
         applicationId = "dev.mohak.scrinium"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.2.0-beta"
+        // CI passes these from the release tag; local builds use the fallback.
+        versionCode = (project.findProperty("scriniumVersionCode") as String?)?.toInt() ?: 2
+        versionName = project.findProperty("scriniumVersionName") as String? ?: "0.2.0-beta"
 
         buildConfigField(
             "String",
