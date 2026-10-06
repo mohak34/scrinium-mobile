@@ -93,20 +93,3 @@ and the repo variable `SCRINIUM_API_URL`.
 
 Android only installs an update signed with the same key as the installed
 app, so the in-app updater can't replace a debug build.
-
-## Testing without Google sign-in
-
-Debug builds accept an API token at launch, so an emulator can skip Google.
-Release builds ignore it.
-
-1. Run the backend on `localhost:5173`, ideally with a throwaway
-   `VAULT_DIR` and `DATABASE_PATH`.
-2. Add a row to `api_tokens` with `token_hash` set to the SHA-256 hex of a
-   random token and `user_email` set to an allowed email. Add a matching
-   `user` row too, or the calendar route returns 401 and the app signs out.
-3. Install and launch with the token:
-
-   ```bash
-   ./gradlew installDebug
-   adb shell am start -n dev.mohak.scrinium/.MainActivity --es dev_token <raw> --es dev_email <email>
-   ```
