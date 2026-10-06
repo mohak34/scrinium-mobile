@@ -6,7 +6,7 @@ server's disk. The mobile client is **local-first**: Room is the source of
 truth the UI observes, and a sync engine reconciles with the server in the
 background.
 
-`ARCHITECTURE.md` is the design spec — read it before touching anything. The
+`docs/ARCHITECTURE.md` is the design spec — read it before touching anything. The
 rules below are the decisions that keep it small and battery-friendly.
 
 ## Non-negotiables
@@ -58,8 +58,8 @@ Manager for Google Sign-In. MVVM, manual DI via an `AppContainer`.
 ## API contract
 
 Base URL is a BuildConfig field (`SCRINIUM_API_URL`), `http://10.0.2.2:5173`
-in debug (host `localhost:5173` from the emulator), `https://scrinium.mohak.dev`
-in release.
+in debug (host `localhost:5173` from the emulator). Release builds take it
+from `scriniumApiUrl` and fail without it; no server is hardcoded.
 
 - `GET /api/notes/manifest` → `[{ path, updatedAt, contentHash }]` for every
   `.md` note; `contentHash` = `"<size>:<mtimeMs>"` fingerprint (stat only).
@@ -80,9 +80,10 @@ in release.
 - `GET /api/calendar/events?from=&to=` (epoch ms, at most 93 days) →
   `{ events: [{ id, title, start, end, allDay }], needsConnect? }`, the
   Google Calendar linked by the web sign-in.
-- In-app updates do not use the backend: Settings reads
-  `api.github.com/repos/mohak34/scrinium-mobile/releases/latest` and installs
-  the release APK via PackageInstaller (`update/Updater.kt`).
+- In-app updates do not use the backend: Settings reads the latest GitHub
+  release of `BuildConfig.UPDATE_REPO` (the repo CI built from; empty in
+  local builds, which skip the check) and installs its APK via
+  PackageInstaller (`update/Updater.kt`).
 - `GET /api/assets/<path>` → image bytes; `POST /api/attachments` (multipart
   `file` + `folder`) → `{ path }`. Phone uploads go to `attachments/`, the
   web default, and the note gets a note-relative `![name](path)`.

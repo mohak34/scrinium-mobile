@@ -28,8 +28,9 @@ private data class Release(@SerialName("tag_name") val tagName: String, val asse
 private data class Asset(val name: String, @SerialName("browser_download_url") val url: String)
 
 /**
- * In-app updates from this repo's GitHub releases (published by
- * `.github/workflows/release.yml`). Settings calls [check] when it opens and
+ * In-app updates from the GitHub releases of the repo that built this APK
+ * (`BuildConfig.UPDATE_REPO`, set by `.github/workflows/release.yml`; empty
+ * in local builds, which never check). Settings calls [check] when it opens and
  * [install] on tap; the APK streams straight into a PackageInstaller
  * session and Android shows its own install prompt.
  */
@@ -51,10 +52,12 @@ class Updater(private val context: Context) {
     private val json = Json { ignoreUnknownKeys = true }
 
     suspend fun check() {
+        if (BuildConfig.UPDATE_REPO.isEmpty()) return
         _state.value = State.Checking
         _state.value = try {
             withContext(Dispatchers.IO) {
-                val request = Request.Builder().url(LATEST_RELEASE).header("Accept", "application/vnd.github+json").build()
+                val url = "https://api.github.com/repos/${BuildConfig.UPDATE_REPO}/releases/latest"
+                val request = Request.Builder().url(url).header("Accept", "application/vnd.github+json").build()
                 http.newCall(request).execute().use { res ->
                     if (res.code == 404) return@withContext State.UpToDate // no release yet
                     if (!res.isSuccessful) error("GitHub answered ${res.code}")
@@ -114,10 +117,6 @@ class Updater(private val context: Context) {
 
     internal fun failed(message: String) {
         _state.value = State.Failed(message)
-    }
-
-    private companion object {
-        const val LATEST_RELEASE = "https://api.github.com/repos/mohak34/scrinium-mobile/releases/latest"
     }
 }
 

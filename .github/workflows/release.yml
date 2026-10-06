@@ -24,6 +24,7 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          API_URL: ${{ vars.SCRINIUM_API_URL }}
         run: |
           echo "$KEYSTORE_BASE64" | base64 -d > release.jks
           {
@@ -32,13 +33,15 @@ jobs:
             echo "keyAlias=$KEY_ALIAS"
             echo "keyPassword=$KEY_PASSWORD"
             echo "scriniumGoogleClientId=$GOOGLE_CLIENT_ID"
+            echo "scriniumApiUrl=$API_URL"
           } > keystore.properties
 
       - name: Build
         run: |
           ./gradlew assembleRelease \
             -PscriniumVersionName="${GITHUB_REF_NAME#v}" \
-            -PscriniumVersionCode="$(git rev-list --count HEAD)"
+            -PscriniumVersionCode="$(git rev-list --count HEAD)" \
+            -PscriniumUpdateRepo="$GITHUB_REPOSITORY"
 
       - name: Publish
         env:
