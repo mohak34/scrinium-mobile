@@ -86,6 +86,24 @@ keystore described in `keystore.properties`:
 ./gradlew assembleRelease
 ```
 
+## Releases and updates
+
+Pushing a `v*` tag runs `.github/workflows/release.yml`: it builds a signed
+APK (`versionName` from the tag, `versionCode` the commit count) and
+publishes it as a GitHub release. It needs these repo secrets:
+`KEYSTORE_BASE64` (the `.jks`, base64), `STORE_PASSWORD`, `KEY_ALIAS`,
+`KEY_PASSWORD`, `GOOGLE_CLIENT_ID`.
+
+```bash
+git tag v0.3.0 && git push origin v0.3.0
+```
+
+The app checks the latest release when Settings opens. If its tag differs
+from the installed version, the About row turns into "Update to X"; a tap
+downloads the APK and hands it to Android's installer. The first time,
+Android asks to allow installs from Scrinium. Updates only install over a
+build signed with the same key, so not over a debug build.
+
 `ANDROID_HOME` must point at an Android SDK, e.g.
 `export ANDROID_HOME=~/Android/Sdk`.
 

@@ -11,6 +11,7 @@ import dev.mohak.scrinium.data.local.AppDatabase
 import dev.mohak.scrinium.data.remote.ScriniumApi
 import dev.mohak.scrinium.reminders.Reminders
 import dev.mohak.scrinium.sync.SyncEngine
+import dev.mohak.scrinium.update.Updater
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -24,6 +25,7 @@ class AppContainer(context: Context) {
     val tokenStore = SecureTokenStore(appContext)
     val prefs = Prefs(appContext)
     val reminders = Reminders(appContext)
+    val updater = Updater(appContext)
 
     lateinit var sessionRepository: SessionRepository
     lateinit var api: ScriniumApi

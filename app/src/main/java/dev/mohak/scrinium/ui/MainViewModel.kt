@@ -25,6 +25,7 @@ import dev.mohak.scrinium.data.remote.TaggedHit
 import dev.mohak.scrinium.data.remote.TrashEntry
 import dev.mohak.scrinium.di.AppContainer
 import dev.mohak.scrinium.reminders.Reminders
+import dev.mohak.scrinium.update.Updater
 import dev.mohak.scrinium.sync.SyncEngine
 import dev.mohak.scrinium.sync.SyncReport
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -95,7 +96,8 @@ class MainViewModel(
     private val syncEngine: SyncEngine,
     private val images: ImageLoader,
     private val prefs: Prefs,
-    private val reminders: Reminders
+    private val reminders: Reminders,
+    private val updater: Updater
 ) : ViewModel() {
 
     val signedIn: StateFlow<Boolean> = session.signedIn
@@ -1008,6 +1010,16 @@ class MainViewModel(
         }
     }
 
+    val update: StateFlow<Updater.State> = updater.state
+
+    fun checkUpdate() {
+        viewModelScope.launch { updater.check() }
+    }
+
+    fun installUpdate(update: Updater.State.Available) {
+        viewModelScope.launch { updater.install(update) }
+    }
+
     // Revoking this phone's own token is a sign-out.
     fun revokeDevice(tokenHash: String) {
         viewModelScope.launch {
@@ -1046,7 +1058,8 @@ class MainViewModel(
                     syncEngine = container.syncEngine,
                     images = container.imageLoader,
                     prefs = container.prefs,
-                    reminders = container.reminders
+                    reminders = container.reminders,
+                    updater = container.updater
                 )
             }
         }
