@@ -1,129 +1,99 @@
 # Scrinium Mobile
 
-Native Android client for [Scrinium](https://github.com/mohak/scrinium), a
-self-hosted, Obsidian-style notes app where notes are plain `.md` files on
-the server's disk.
+Android client for [Scrinium](https://github.com/mohak34/scrinium), a
+self-hosted notes app that keeps notes as plain `.md` files on the server.
 
-Local-first: Room is the source of truth the UI observes. A sync engine
-reconciles with the server in the background while the app is open. See
-`ARCHITECTURE.md` for the design and `AGENTS.md` for repo rules.
+Notes live in a local database on the phone, so the app works offline.
+While it is open, it syncs with the server: on launch, every minute, and a
+few seconds after you stop typing. Nothing runs in the background except
+task reminders.
 
-## Features
+Design notes are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Rules
+for working in this repo are in [`AGENTS.md`](AGENTS.md).
 
-- Five bottom tabs: Notes, Tasks, Search (center), Board, Calendar.
-  Look ported from the web app: true black, teal accent, Space Grotesk,
-  Atkinson Hyperlegible Next and JetBrains Mono, Material Symbols icons
-- File tree with folders: create, rename, move, delete, drag and drop
-- Live-preview markdown editor: marks hide except on the cursor's line,
-  `[[` note and `#tag` autocomplete. Rich preview mode too: headings,
-  lists, task checkboxes, code, math, blockquotes, kind-colored callouts,
-  wikilinks, tag pills. A format bar above the keyboard (bold, italic,
-  link, tag, checkbox, list, image) with undo
-- Pinned notes and folders, new-note template (`{{title}}`), both kept on
-  the phone like the web keeps them in the browser
-- PDF export through the Android print dialog
-- Title-filename two-way sync (first `# ` heading and frontmatter `title:`)
-- Search tab: notes (server full-text with snippets, title-ranked like the
-  web client) and tasks, recent searches, tag shortcuts
-- Tag browsing via the server tags API
-- Server trash with restore, purge, empty, restore all. Swipe right to
-  restore, left to delete forever
-- Public share links with optional passwords
-- Tasks: list grouped by status with area tabs, board paged by status
-  (long-press to move), month calendar by due date with Google Calendar
-  events, area filter.
-  Detail screen with status, area, priority, due date and time, reminder,
-  waiting-on, subtasks and linked notes. Online only. Reminders become
-  phone notifications; ones set on the web arm the next time the app opens.
-  Settings can turn reminders off and lists the scheduled ones
-- Note panel: outline, frontmatter properties, tasks linked to the note,
-  backlinks, unlinked mentions you can turn into links, word count
-- Settings: sync status with notes waiting to upload, devices (list and
-  revoke signed-in phones), template editor with preview
-- Images in preview (vault images through the asset API, disk-cached for
-  an hour), and image upload from the editor into `attachments/`
-- Foreground-only sync: 5s auto-push after edits settle, 60s pull tick,
-  sync on foreground and pull-to-refresh. Killing the app stops sync;
-  only reminder alarms outlive it.
+## What it does
 
-## Getting started
+- Notes and folders: create, rename, move, delete, pin
+- Markdown editor with live preview, `[[wikilink]]` and `#tag` completion,
+  and a format bar
+- Backlinks, outline, frontmatter and word count per note
+- Full-text search, tags, trash, share links
+- Tasks with a list, board and calendar view, plus reminders as
+  notifications. Tasks need a connection
+- Image upload and preview
+- PDF export
+- Updates itself from GitHub releases
 
-Needs the Scrinium backend running (it provides auth, manifest, search,
-tags, trash and share endpoints).
+## Install
 
-1. Copy the Google web client ID into `keystore.properties`:
+Download the APK from the
+[latest release](https://github.com/mohak34/scrinium-mobile/releases/latest)
+and open it on the phone. After that, update from Settings: when a newer
+release exists, the About row offers it.
+
+## Build
+
+Needs JDK 17+, an Android SDK (`export ANDROID_HOME=~/Android/Sdk`) and a
+running Scrinium backend.
+
+1. Put the backend's Google web client ID in `keystore.properties` (not
+   committed):
 
    ```properties
    scriniumGoogleClientId=<GOOGLE_CLIENT_ID>
    ```
 
-   The app requests its Google ID token with this as `serverClientId`, so
-   the token audience matches what the server verifies. No separate
-   Android credential.
+   The app asks Google for an ID token issued to this client, which is the
+   one the server checks. No separate Android client is needed.
 
-2. Point the debug build at your backend (default is the emulator
-   loopback):
+2. Build a debug APK and install it:
 
    ```bash
    ./gradlew assembleDebug -PscriniumApiUrl="http://10.0.2.2:5173"
-   ```
-
-   Physical device on the same LAN: pass your machine's LAN IP instead,
-   e.g. `-PscriniumApiUrl="http://10.0.0.71:5173"`. The debug network
-   security config allowlists `10.0.2.2`, `localhost` and that IP for
-   cleartext HTTP.
-
-3. Install:
-
-   ```bash
    adb install -r app/build/outputs/apk/debug/app-debug.apk
    ```
 
-Release builds point at `https://scrinium.mohak.dev` and need the release
-keystore described in `keystore.properties`:
+   `10.0.2.2` is the host machine as seen from the emulator. For a real
+   phone on your Wi-Fi, use your computer's LAN IP and add it to
+   `app/src/debug/res/xml/network_security_config.xml`, since debug builds
+   only allow plain HTTP to listed hosts.
+
+Release builds talk to `https://scrinium.mohak.dev` and are signed with the
+keystore named in `keystore.properties`:
 
 ```bash
 ./gradlew assembleRelease
 ```
 
-## Releases and updates
+## Release
 
-Pushing a `v*` tag runs `.github/workflows/release.yml`: it builds a signed
-APK (`versionName` from the tag, `versionCode` the commit count) and
-publishes it as a GitHub release. It needs these repo secrets:
-`KEYSTORE_BASE64` (the `.jks`, base64), `STORE_PASSWORD`, `KEY_ALIAS`,
-`KEY_PASSWORD`, `GOOGLE_CLIENT_ID`.
+Push a version tag:
 
 ```bash
 git tag v0.3.0 && git push origin v0.3.0
 ```
 
-The app checks the latest release when Settings opens. If its tag differs
-from the installed version, the About row turns into "Update to X"; a tap
-downloads the APK and hands it to Android's installer. The first time,
-Android asks to allow installs from Scrinium. Updates only install over a
-build signed with the same key, so not over a debug build.
+`.github/workflows/release.yml` builds a signed APK and attaches it to a
+GitHub release. The version name comes from the tag. It reads these repo
+secrets: `KEYSTORE_BASE64` (the `.jks` file, base64), `STORE_PASSWORD`,
+`KEY_ALIAS`, `KEY_PASSWORD`, `GOOGLE_CLIENT_ID`.
 
-`ANDROID_HOME` must point at an Android SDK, e.g.
-`export ANDROID_HOME=~/Android/Sdk`.
+Android only installs an update signed with the same key as the installed
+app, so the in-app updater can't replace a debug build.
 
-## Testing on an emulator without Google
+## Testing without Google sign-in
 
-Debug builds accept an API token at launch, so the emulator can skip
-Google sign-in. Release builds strip this.
+Debug builds accept an API token at launch, so an emulator can skip Google.
+Release builds ignore it.
 
-1. Run the backend dev server on `localhost:5173`, ideally against a
-   throwaway `VAULT_DIR` and `DATABASE_PATH`.
-2. Insert a row into `api_tokens`: `token_hash` is the SHA-256 hex of a
-   random raw token, `user_email` an allowed email. Add a matching `user`
-   row too, or the calendar route answers 401 and the app signs out.
-3. `./gradlew installDebug`, then
-   `adb shell am start -n dev.mohak.scrinium/.MainActivity --es dev_token <raw> --es dev_email <email>`
+1. Run the backend on `localhost:5173`, ideally with a throwaway
+   `VAULT_DIR` and `DATABASE_PATH`.
+2. Add a row to `api_tokens` with `token_hash` set to the SHA-256 hex of a
+   random token and `user_email` set to an allowed email. Add a matching
+   `user` row too, or the calendar route returns 401 and the app signs out.
+3. Install and launch with the token:
 
-## Auth
-
-Credential Manager Google Sign-In, then `POST /api/auth/mobile`
-`{ googleIdToken }` gives a long-lived API token. Stored encrypted with a
-Keystore-backed AES-GCM key, sent as `Authorization: Bearer` per request.
-401 drops the token and re-runs sign-in.
-
+   ```bash
+   ./gradlew installDebug
+   adb shell am start -n dev.mohak.scrinium/.MainActivity --es dev_token <raw> --es dev_email <email>
+   ```

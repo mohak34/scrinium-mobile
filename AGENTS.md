@@ -6,7 +6,7 @@ server's disk. The mobile client is **local-first**: Room is the source of
 truth the UI observes, and a sync engine reconciles with the server in the
 background.
 
-`ARCHITECTURE.md` is the design spec — read it before touching anything. The
+`docs/ARCHITECTURE.md` is the design spec — read it before touching anything. The
 rules below are the decisions that keep it small and battery-friendly.
 
 ## Non-negotiables
