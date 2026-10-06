@@ -14,6 +14,11 @@ val localProps = Properties().apply {
     if (localPropsFile.exists()) load(FileInputStream(localPropsFile))
 }
 
+// Build settings come from -P flags or keystore.properties, never defaults
+// that point at someone else's server or releases.
+fun setting(name: String): String = project.findProperty(name) as String? ?: localProps.getProperty(name, "")
+val releaseApiUrl = setting("scriniumApiUrl")
+
 android {
     namespace = "dev.mohak.scrinium"
     compileSdk = 36
@@ -29,13 +34,12 @@ android {
         buildConfigField(
             "String",
             "SCRINIUM_API_URL",
-            "\"${project.findProperty("scriniumApiUrl") ?: "https://scrinium.mohak.dev"}\""
+            "\"$releaseApiUrl\""
         )
-        buildConfigField(
-            "String",
-            "SCRINIUM_GOOGLE_CLIENT_ID",
-            "\"${project.findProperty("scriniumGoogleClientId") ?: localProps.getProperty("scriniumGoogleClientId", "")}\""
-        )
+        buildConfigField("String", "SCRINIUM_GOOGLE_CLIENT_ID", "\"${setting("scriniumGoogleClientId")}\"")
+        // owner/name of the GitHub repo the in-app updater checks; CI passes
+        // its own repo, local builds leave it empty and skip update checks.
+        buildConfigField("String", "UPDATE_REPO", "\"${setting("scriniumUpdateRepo")}\"")
     }
 
     signingConfigs {
@@ -74,6 +78,12 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+}
+
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    doFirst {
+        check(releaseApiUrl.isNotEmpty()) { "Release builds need scriniumApiUrl in keystore.properties or as -PscriniumApiUrl" }
     }
 }
 

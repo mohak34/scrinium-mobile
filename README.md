@@ -58,12 +58,23 @@ running Scrinium backend.
    `app/src/debug/res/xml/network_security_config.xml`, since debug builds
    only allow plain HTTP to listed hosts.
 
-Release builds talk to `https://scrinium.mohak.dev` and are signed with the
-keystore named in `keystore.properties`:
+Release builds need your server's URL and a signing keystore, both in
+`keystore.properties`:
+
+```properties
+scriniumApiUrl=https://notes.example.com
+storeFile=release.jks
+storePassword=...
+keyAlias=...
+keyPassword=...
+```
 
 ```bash
 ./gradlew assembleRelease
 ```
+
+Local builds don't check for updates. Only CI builds know which GitHub repo
+to check.
 
 ## Release
 
@@ -74,9 +85,11 @@ git tag v0.3.0 && git push origin v0.3.0
 ```
 
 `.github/workflows/release.yml` builds a signed APK and attaches it to a
-GitHub release. The version name comes from the tag. It reads these repo
-secrets: `KEYSTORE_BASE64` (the `.jks` file, base64), `STORE_PASSWORD`,
-`KEY_ALIAS`, `KEY_PASSWORD`, `GOOGLE_CLIENT_ID`.
+GitHub release. The version name comes from the tag, and the app checks
+that same repo's releases for updates, so a fork updates from its own
+releases. It reads these repo secrets: `KEYSTORE_BASE64` (the `.jks` file,
+base64), `STORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`, `GOOGLE_CLIENT_ID`,
+and the repo variable `SCRINIUM_API_URL`.
 
 Android only installs an update signed with the same key as the installed
 app, so the in-app updater can't replace a debug build.
