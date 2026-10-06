@@ -80,6 +80,9 @@ in release.
 - `GET /api/calendar/events?from=&to=` (epoch ms, at most 93 days) →
   `{ events: [{ id, title, start, end, allDay }], needsConnect? }`, the
   Google Calendar linked by the web sign-in.
+- In-app updates do not use the backend: Settings reads
+  `api.github.com/repos/mohak34/scrinium-mobile/releases/latest` and installs
+  the release APK via PackageInstaller (`update/Updater.kt`).
 - `GET /api/assets/<path>` → image bytes; `POST /api/attachments` (multipart
   `file` + `folder`) → `{ path }`. Phone uploads go to `attachments/`, the
   web default, and the note gets a note-relative `![name](path)`.

@@ -57,6 +57,7 @@ import dev.mohak.scrinium.ui.TextAction
 import dev.mohak.scrinium.ui.TopBar
 import dev.mohak.scrinium.ui.Type
 import dev.mohak.scrinium.ui.relativeTime
+import dev.mohak.scrinium.update.Updater
 import java.text.DateFormat
 import java.util.Date
 
@@ -70,6 +71,7 @@ fun SettingsScreen(vm: MainViewModel) {
     LaunchedEffect(Unit) {
         vm.loadDevices()
         vm.refreshTrash()
+        vm.checkUpdate()
     }
     Column(Modifier.fillMaxSize()) {
         TopBar(page.title, onBack = { if (page == Page.Index) vm.closeSettings() else page = Page.Index })
@@ -95,6 +97,7 @@ private fun IndexPage(vm: MainViewModel, open: (Page) -> Unit) {
     val trash by vm.trash.collectAsStateWithLifecycle()
     val remindersOn by vm.remindersOn.collectAsStateWithLifecycle()
     val scheduledReminders by vm.scheduledReminders.collectAsStateWithLifecycle()
+    val update by vm.update.collectAsStateWithLifecycle()
     var confirmSignOut by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
@@ -125,7 +128,14 @@ private fun IndexPage(vm: MainViewModel, open: (Page) -> Unit) {
         PageRow(R.drawable.ms_notifications, "Reminders", if (remindersOn) "On  ·  ${scheduledReminders.size} scheduled" else "Off") { open(Page.Reminders) }
         PageRow(R.drawable.ms_delete, "Trash", if (trash.isEmpty()) "Empty" else "${trash.size} item${if (trash.size == 1) "" else "s"}") { vm.openTrash() }
         Divider()
-        PageRow(R.drawable.ms_info, "About", "Version ${BuildConfig.VERSION_NAME}", onClick = null)
+        val version = "Version ${BuildConfig.VERSION_NAME}"
+        when (val u = update) {
+            Updater.State.Idle, Updater.State.Checking -> PageRow(R.drawable.ms_info, "About", version, onClick = null)
+            Updater.State.UpToDate -> PageRow(R.drawable.ms_info, "About", "$version  ·  up to date") { vm.checkUpdate() }
+            is Updater.State.Available -> PageRow(R.drawable.ms_info, "Update to ${u.version}", "$version  ·  tap to install") { vm.installUpdate(u) }
+            Updater.State.Downloading -> PageRow(R.drawable.ms_info, "About", "$version  ·  downloading update", onClick = null)
+            is Updater.State.Failed -> PageRow(R.drawable.ms_info, "About", u.message) { vm.checkUpdate() }
+        }
         Row(
             Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable { confirmSignOut = true }.padding(horizontal = 20.dp),
             verticalAlignment = Alignment.CenterVertically
