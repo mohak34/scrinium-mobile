@@ -45,6 +45,9 @@ class MainActivity : ComponentActivity() {
     companion object {
         // Set by a reminder notification: open that task on launch.
         const val EXTRA_TASK_ID = "taskId"
+        // Set by the home screen widget: open that note, or start a new one.
+        const val EXTRA_NOTE_PATH = "notePath"
+        const val EXTRA_NEW_NOTE = "newNote"
     }
 
     private val container by lazy { (application as ScriniumApplication).container }
@@ -65,7 +68,7 @@ class MainActivity : ComponentActivity() {
                 if (vm.signedIn.value) tasksVm.refresh(quiet = true)
             }
         })
-        if (savedInstanceState == null) openTaskFrom(intent)
+        if (savedInstanceState == null) openFrom(intent)
         // Emulator testing without Google: `am start --es dev_token <raw token>`.
         if (BuildConfig.DEBUG) intent?.getStringExtra("dev_token")?.let { token ->
             lifecycleScope.launch { container.sessionRepository.useDevToken(token, intent.getStringExtra("dev_email") ?: "dev") }
@@ -84,13 +87,27 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        openTaskFrom(intent)
+        openFrom(intent)
     }
 
-    private fun openTaskFrom(intent: Intent?) {
-        val id = intent?.getStringExtra(EXTRA_TASK_ID) ?: return
-        intent.removeExtra(EXTRA_TASK_ID)
-        if (vm.signedIn.value) tasksVm.openTask(id)
+    private fun openFrom(intent: Intent?) {
+        intent ?: return
+        val taskId = intent.getStringExtra(EXTRA_TASK_ID)
+        val notePath = intent.getStringExtra(EXTRA_NOTE_PATH)
+        val newNote = intent.getBooleanExtra(EXTRA_NEW_NOTE, false)
+        listOf(EXTRA_TASK_ID, EXTRA_NOTE_PATH, EXTRA_NEW_NOTE).forEach(intent::removeExtra)
+        if (!vm.signedIn.value) return
+        when {
+            taskId != null -> tasksVm.openTask(taskId)
+            notePath != null -> {
+                tasksVm.closeTask()
+                vm.openNote(notePath)
+            }
+            newNote -> {
+                tasksVm.closeTask()
+                vm.createNote()
+            }
+        }
     }
 }
 
