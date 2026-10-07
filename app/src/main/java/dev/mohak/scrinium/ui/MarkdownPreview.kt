@@ -11,21 +11,31 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.ClickableText
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -34,6 +44,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.ratex.DisplayList
 
 private val wikilinkPattern = Regex("""\[\[([^|\]]+)(?:\|([^\]]+))?]]""")
 private val tagPattern = Regex("""(?<!\S)#([A-Za-z][A-Za-z0-9_-]*(?:/[A-Za-z][A-Za-z0-9_-]*)*)""")
@@ -78,7 +89,9 @@ fun MarkdownText(
             muted = Sc.text3
         )
     }
-    val blocks = remember(markdown) { renderer.parse(markdown) }
+    val parsed = remember(markdown) { renderer.parse(markdown) }
+    val blocks = parsed.blocks
+    val math = rememberMath(parsed.formulas)
     fun handleTap(offset: Int, rendered: AnnotatedString) {
         val annotations = rendered.getStringAnnotations(start = offset, end = offset)
         annotations.firstOrNull { it.tag == "toggle" }?.let {
@@ -97,12 +110,13 @@ fun MarkdownText(
     Column(modifier = modifier) {
         for (block in blocks) {
             when (block) {
-                is Block.Text -> ClickableText(
+                is Block.Text -> TappableText(
                     text = block.content,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(bottom = 12.dp),
                     style = bodyStyle,
+                    math = math,
                     onClick = { handleTap(it, block.content) }
                 )
                 is Block.Heading -> {
@@ -112,7 +126,7 @@ fun MarkdownText(
                         3 -> 17.sp
                         else -> 16.sp
                     }
-                    ClickableText(
+                    TappableText(
                         text = block.content,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -125,6 +139,7 @@ fun MarkdownText(
                                 fontWeight = FontWeight.SemiBold
                             )
                         ),
+                        math = math,
                         onClick = { handleTap(it, block.content) }
                     )
                 }
@@ -154,18 +169,26 @@ fun MarkdownText(
                         .padding(bottom = 12.dp)
                         .clip(RoundedCornerShape(6.dp))
                         .background(Sc.raise)
-                        .padding(12.dp)
+                        .padding(12.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    androidx.compose.material3.Text(
-                        text = block.text,
-                        style = bodyStyle.merge(
-                            androidx.compose.ui.text.TextStyle(
-                                fontFamily = MonoFont,
-                                fontStyle = FontStyle.Italic,
-                                fontSize = 14.sp
+                    // Source shows while parsing and when the LaTeX is invalid.
+                    val list = math[Formula(block.text, display = true)]
+                    if (list != null) {
+                        MathFormula(list, bodyStyle.fontSize, Modifier.horizontalScroll(rememberScrollState()))
+                    } else {
+                        androidx.compose.material3.Text(
+                            text = block.text,
+                            modifier = Modifier.fillMaxWidth(),
+                            style = bodyStyle.merge(
+                                androidx.compose.ui.text.TextStyle(
+                                    fontFamily = MonoFont,
+                                    fontStyle = FontStyle.Italic,
+                                    fontSize = 14.sp
+                                )
                             )
                         )
-                    )
+                    }
                 }
                 is Block.Quote -> Box(
                     modifier = Modifier
@@ -180,7 +203,7 @@ fun MarkdownText(
                                 .fillMaxHeight()
                                 .background(Sc.line3)
                         )
-                        ClickableText(
+                        TappableText(
                             text = block.content,
                             modifier = Modifier.weight(1f),
                             style = bodyStyle.merge(
@@ -189,6 +212,7 @@ fun MarkdownText(
                                     color = Sc.text2
                                 )
                             ),
+                            math = math,
                             onClick = { handleTap(it, block.content) }
                         )
                     }
@@ -227,7 +251,7 @@ fun MarkdownText(
                             }
                         }
                         block.content?.let {
-                            ClickableText(
+                            TappableText(
                                 text = it,
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -235,6 +259,7 @@ fun MarkdownText(
                                 style = bodyStyle.merge(
                                     androidx.compose.ui.text.TextStyle(color = Sc.text2)
                                 ),
+                                math = math,
                                 onClick = { offset -> handleTap(offset, it) }
                             )
                         }
@@ -250,6 +275,28 @@ fun MarkdownText(
             }
         }
     }
+}
+
+// ClickableText with inline content: a tap resolves to the character offset
+// under it, which carries the tap annotations.
+@Composable
+private fun TappableText(
+    text: AnnotatedString,
+    style: TextStyle,
+    math: Map<Formula, DisplayList>,
+    onClick: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    BasicText(
+        text = text,
+        modifier = modifier.pointerInput(onClick) {
+            detectTapGestures { pos -> layout?.let { onClick(it.getOffsetForPosition(pos)) } }
+        },
+        style = style,
+        onTextLayout = { layout = it },
+        inlineContent = inlineMath(math, style.fontSize)
+    )
 }
 
 // Loads through the caller (auth + cache live there). Alt text stands in
@@ -314,8 +361,14 @@ private class MarkdownRenderer(
         else -> "note"
     }
 
-    fun parse(raw: String): List<Block> {
+    class Parsed(val blocks: List<Block>, val formulas: Set<Formula>)
+
+    // Every formula seen by the current parse, block and inline.
+    private val formulas = mutableSetOf<Formula>()
+
+    fun parse(raw: String): Parsed {
         val out = mutableListOf<Block>()
+        formulas.clear()
         val lines = raw.lines()
         var i = 0
         // Frontmatter is metadata, not content — never preview it.
@@ -342,13 +395,13 @@ private class MarkdownRenderer(
                             i++
                         }
                     }.trimEnd('\n')
-                    if (lang == "math") out += Block.Math(code) else out += Block.Code(code)
+                    if (lang == "math") out += mathBlock(code) else out += Block.Code(code)
                     i++
                 }
                 trimmed.startsWith("$$") -> {
                     val single = Regex("""^\$\$(.*)\$\$\s*$""").matchEntire(trimmed)
                     if (single != null) {
-                        if (single.groupValues[1].isNotBlank()) out += Block.Math(single.groupValues[1].trim())
+                        if (single.groupValues[1].isNotBlank()) out += mathBlock(single.groupValues[1].trim())
                         i++
                     } else {
                         val math = buildString {
@@ -360,7 +413,7 @@ private class MarkdownRenderer(
                                 i++
                             }
                         }.trim().toString()
-                        if (math.isNotBlank()) out += Block.Math(math)
+                        if (math.isNotBlank()) out += mathBlock(math)
                         i++
                     }
                 }
@@ -436,7 +489,12 @@ private class MarkdownRenderer(
                 }
             }
         }
-        return out
+        return Parsed(out, formulas.toSet())
+    }
+
+    private fun mathBlock(text: String): Block {
+        formulas += Formula(text, display = true)
+        return Block.Math(text)
     }
 
     private fun headingStyle(level: Int): SpanStyle = SpanStyle(color = onSurface)
@@ -504,10 +562,10 @@ private class MarkdownRenderer(
         appendInlineMath(rest, base)
     }
 
-    // Inline `$…$`: styled distinctly, not typeset (that needs a WebView and
-    // is out of scope). Opening $ must not follow a space-adjacent pattern
-    // that screams currency: `$` with no space after it, closing with no
-    // space before it, same segment.
+    // Inline `$…$`: an inline-content slot typeset by RaTeX, with the source
+    // as its fallback text. Opening $ must not follow a space-adjacent
+    // pattern that screams currency: `$` with no space after it, closing
+    // with no space before it, same segment.
     private val inlineMathPattern = Regex("""\$(?!\s)([^$\n]+?)(?<!\s)\$""")
 
     private fun AnnotatedString.Builder.appendInlineMath(text: String, base: SpanStyle) {
@@ -523,7 +581,11 @@ private class MarkdownRenderer(
                         background = codeBackground
                     )
                 )
-            ) { append(m.groupValues[1]) }
+            ) {
+                val latex = m.groupValues[1]
+                formulas += Formula(latex, display = false)
+                appendInlineContent(id = latex, alternateText = latex)
+            }
             rest = rest.substring(m.range.last + 1)
         }
         appendInlineBasic(rest, base)
