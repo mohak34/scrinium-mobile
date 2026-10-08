@@ -29,7 +29,8 @@ for working in this repo are in [`AGENTS.md`](AGENTS.md).
 Download the APK from the
 [latest release](https://github.com/mohak34/scrinium-mobile/releases/latest)
 and open it on the phone. After that, update from Settings: when a newer
-release exists, the About row offers it.
+release exists, the About row offers it. On Android 12+ it installs without
+a confirm dialog and the app closes once the update is in.
 
 ## Build
 

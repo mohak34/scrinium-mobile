@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInstaller
 import android.net.Uri
+import android.os.Build
 import android.provider.Settings
 import androidx.core.content.IntentCompat
 import dev.mohak.scrinium.BuildConfig
@@ -32,7 +33,9 @@ private data class Asset(val name: String, @SerialName("browser_download_url") v
  * (`BuildConfig.UPDATE_REPO`, set by `.github/workflows/release.yml`; empty
  * in local builds, which never check). Settings calls [check] when it opens and
  * [install] on tap; the APK streams straight into a PackageInstaller
- * session and Android shows its own install prompt.
+ * session. On Android 12+ the update installs without a confirm dialog and
+ * the app closes when it lands; Android may still ask, and older versions
+ * always do.
  */
 class Updater(private val context: Context) {
     sealed interface State {
@@ -85,7 +88,11 @@ class Updater(private val context: Context) {
         _state.value = try {
             withContext(Dispatchers.IO) {
                 val installer = context.packageManager.packageInstaller
-                val id = installer.createSession(PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL))
+                val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
+                }
+                val id = installer.createSession(params)
                 installer.openSession(id).use { session ->
                     try {
                         http.newCall(Request.Builder().url(update.apkUrl).build()).execute().use { res ->
