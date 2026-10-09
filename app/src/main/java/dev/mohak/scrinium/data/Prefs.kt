@@ -6,9 +6,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Phone-only display preferences: pinned paths, the new-note template and
- * recent searches.
- * The web keeps both in localStorage, so neither syncs; the phone keeps its
+ * Phone-only display preferences: pinned paths, collapsed folders, the
+ * new-note template and recent searches.
+ * The web keeps these in localStorage, so none sync; the phone keeps its
  * own the same way. Plain SharedPreferences, read once at startup.
  */
 class Prefs(context: Context) {
@@ -16,6 +16,9 @@ class Prefs(context: Context) {
 
     private val _pinned = MutableStateFlow(sp.getStringSet(KEY_PINNED, emptySet())!!.toSet())
     val pinned: StateFlow<Set<String>> = _pinned.asStateFlow()
+
+    private val _collapsed = MutableStateFlow(sp.getStringSet(KEY_COLLAPSED, emptySet())!!.toSet())
+    val collapsed: StateFlow<Set<String>> = _collapsed.asStateFlow()
 
     private val _template = MutableStateFlow(sp.getString(KEY_TEMPLATE, "") ?: "")
     val template: StateFlow<String> = _template.asStateFlow()
@@ -37,6 +40,11 @@ class Prefs(context: Context) {
         sp.edit().putStringSet(KEY_PINNED, paths).apply()
     }
 
+    fun setCollapsed(paths: Set<String>) {
+        _collapsed.value = paths
+        sp.edit().putStringSet(KEY_COLLAPSED, paths).apply()
+    }
+
     fun setTemplate(value: String) {
         _template.value = value
         sp.edit().putString(KEY_TEMPLATE, value).apply()
@@ -50,6 +58,7 @@ class Prefs(context: Context) {
 
     private companion object {
         const val KEY_PINNED = "pinned"
+        const val KEY_COLLAPSED = "collapsed_folders"
         const val KEY_TEMPLATE = "new_note_template"
         const val KEY_RECENT = "recent_searches"
         const val MAX_RECENT = 6
