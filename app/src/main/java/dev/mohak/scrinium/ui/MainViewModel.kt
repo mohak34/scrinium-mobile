@@ -127,15 +127,16 @@ class MainViewModel(
     private val _editor = MutableStateFlow<EditorState?>(null)
     val editor: StateFlow<EditorState?> = _editor.asStateFlow()
 
-    private val _collapsedFolders = MutableStateFlow<Set<String>>(emptySet())
-    val collapsedFolders: StateFlow<Set<String>> = _collapsedFolders.asStateFlow()
+    // Persisted like pins, so the tree reopens the way it was left.
+    val collapsedFolders: StateFlow<Set<String>> = prefs.collapsed
 
     fun toggleFolder(path: String) {
-        _collapsedFolders.update { if (path in it) it - path else it + path }
+        val now = prefs.collapsed.value
+        prefs.setCollapsed(if (path in now) now - path else now + path)
     }
 
     fun collapseAll() {
-        _collapsedFolders.value = folderPaths(notesFlow.value).toSet()
+        prefs.setCollapsed(folderPaths(notesFlow.value).toSet())
     }
 
     // Tags for editor autocomplete, from Room so they work offline.
@@ -942,14 +943,14 @@ class MainViewModel(
         fun remap(paths: Set<String>) = paths.map { path ->
             if (path == oldPrefix || path.startsWith("$oldPrefix/")) newPrefix + path.removePrefix(oldPrefix) else path
         }.toSet()
-        _collapsedFolders.update(::remap)
+        prefs.collapsed.value.let { if (it.any { p -> p == oldPrefix || p.startsWith("$oldPrefix/") }) prefs.setCollapsed(remap(it)) }
         prefs.pinned.value.let { if (it.any { p -> p == oldPrefix || p.startsWith("$oldPrefix/") }) prefs.setPinned(remap(it)) }
     }
 
     fun deleteFolder(folder: String) {
         viewModelScope.launch {
             notes.deleteFolder(folder)
-            _collapsedFolders.update { it - folder }
+            prefs.setCollapsed(prefs.collapsed.value - folder)
             scheduleAutoSync()
         }
     }
