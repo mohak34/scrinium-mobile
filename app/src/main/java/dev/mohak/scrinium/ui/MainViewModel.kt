@@ -950,7 +950,7 @@ class MainViewModel(
     fun deleteFolder(folder: String) {
         viewModelScope.launch {
             notes.deleteFolder(folder)
-            prefs.setCollapsed(prefs.collapsed.value - folder)
+            prefs.setCollapsed(prefs.collapsed.value.filterTo(mutableSetOf()) { it != folder && !it.startsWith("$folder/") })
             scheduleAutoSync()
         }
     }
