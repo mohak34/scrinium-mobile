@@ -53,5 +53,9 @@ class TasksWidgetTest {
         assertEquals("", rowMeta(local(2026, 10, 17), SectionKind.Day, now))
         assertEquals("9:00 AM", rowMeta(local(2026, 10, 17, 9), SectionKind.Day, now))
         assertEquals("Oct 28", rowMeta(local(2026, 10, 28), SectionKind.Rest, now))
+        // Vietnamese weekday abbreviations contain a space ("Th 7").
+        Locale.setDefault(Locale.forLanguageTag("vi-VN"))
+        assertEquals("", rowMeta(local(2026, 10, 17), SectionKind.Day, now))
+        assertEquals("09:00", rowMeta(local(2026, 10, 17, 9), SectionKind.Day, now))
     }
 }

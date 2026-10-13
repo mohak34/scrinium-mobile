@@ -30,6 +30,7 @@ import kotlinx.serialization.json.Json
 import java.io.File
 import java.text.DateFormat
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
@@ -204,7 +205,11 @@ fun agenda(tasks: List<TaskDto>, now: Long): List<AgendaSection> {
 // A day section already names the day, so its rows show only a set time;
 // overdue and later rows show "Oct 11". Undated rows show nothing.
 fun rowMeta(dueAt: Long, kind: SectionKind, now: Long): String = when (kind) {
-    SectionKind.Day -> shortDue(dueAt, now).substringAfter(' ', "")
+    SectionKind.Day -> {
+        val cal = Calendar.getInstance().apply { timeInMillis = dueAt }
+        if (cal.get(Calendar.HOUR_OF_DAY) == 0 && cal.get(Calendar.MINUTE) == 0) ""
+        else DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(dueAt))
+    }
     SectionKind.Overdue, SectionKind.Rest -> shortDue(dueAt, now)
 }
 
