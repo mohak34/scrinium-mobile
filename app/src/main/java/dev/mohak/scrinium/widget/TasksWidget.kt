@@ -29,12 +29,13 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.text.DateFormat
+import java.text.SimpleDateFormat
 import java.util.Date
+import java.util.Locale
 
 /**
- * Home screen widget: overdue tasks, today, tomorrow and the rest of the
- * week (dated tasks plus the app's "This week" column), with the inbox count
- * below. Tasks are online-only, so it draws the
+ * Home screen widget: overdue tasks, each of the next seven days, then the
+ * rest of the app's "This week" column, with the inbox count below. Tasks are online-only, so it draws the
  * last full list the app loaded, saved to a file by [save]; nothing fetches
  * for it. One non-waking alarm redraws it after midnight so "Today" moves on
  * while the app is closed; it fires when the phone next wakes up anyway.
@@ -82,9 +83,9 @@ object TasksWidget {
         val sections = agenda(tasks, now)
         val rows = sections.flatMap { section ->
             val header = RemoteViews(context.packageName, R.layout.widget_task_section)
-            header.setTextViewText(R.id.section, section.bucket.label)
-            header.setTextColor(R.id.section, if (section.bucket == Bucket.Overdue) RED else DIM)
-            listOf(header) + section.rows.map { row(context, it, section.bucket, now) }
+            header.setTextViewText(R.id.section, section.label)
+            header.setTextColor(R.id.section, if (section.kind == SectionKind.Overdue) RED else DIM)
+            listOf(header) + section.rows.map { row(context, it, section.kind, now) }
         }
         val items = RemoteViewsCompat.RemoteCollectionItems.Builder().setViewTypeCount(2)
         rows.forEachIndexed { i, row -> items.addItem(i.toLong(), row) }
@@ -104,14 +105,14 @@ object TasksWidget {
         context.getSystemService(AlarmManager::class.java).cancel(midnightIntent(context, IntArray(0)))
     }
 
-    private fun row(context: Context, task: TaskDto, bucket: Bucket, now: Long): RemoteViews {
+    private fun row(context: Context, task: TaskDto, kind: SectionKind, now: Long): RemoteViews {
         val row = RemoteViews(context.packageName, R.layout.widget_task_row)
         row.setTextViewText(R.id.row_title, task.title)
         val area = TaskArea.of(task.area)
         if (area != null) row.setInt(R.id.row_dot, "setColorFilter", area.color.toArgb())
         row.setViewVisibility(R.id.row_dot, if (area != null) View.VISIBLE else View.INVISIBLE)
-        row.setTextViewText(R.id.row_meta, task.dueAt?.let { rowMeta(it, bucket, now) } ?: "")
-        row.setTextColor(R.id.row_meta, if (bucket == Bucket.Overdue) RED else DIM)
+        row.setTextViewText(R.id.row_meta, task.dueAt?.let { rowMeta(it, kind, now) } ?: "")
+        row.setTextColor(R.id.row_meta, if (kind == SectionKind.Overdue) RED else DIM)
         row.setOnClickFillInIntent(R.id.row, Intent().putExtra(MainActivity.EXTRA_TASK_ID, task.id))
         return row
     }
@@ -132,7 +133,7 @@ object TasksWidget {
     // Time of the last load, or its date once that was another day.
     private fun stamp(savedAt: Long, now: Long): String =
         if (startOfDay(savedAt) == startOfDay(now)) DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(savedAt))
-        else java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault()).format(Date(savedAt))
+        else SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(savedAt))
 
     // Inexact and non-waking: a redraw a little late is fine, waking the
     // phone for it is not. Rescheduled on every render.
@@ -167,43 +168,44 @@ object TasksWidget {
     private const val DIM = 0xFF6C6965.toInt()
 }
 
-enum class Bucket(val label: String) { Overdue("Overdue"), Today("Today"), Tomorrow("Tomorrow"), Week("This week") }
+enum class SectionKind { Overdue, Day, Rest }
 
-data class AgendaSection(val bucket: Bucket, val rows: List<TaskDto>)
+data class AgendaSection(val kind: SectionKind, val label: String, val rows: List<TaskDto>)
 
 /**
- * Tasks due before a week from today by day bucket, soonest first, with the
- * rest of the "This week" status column (undated or due later) at the end of
- * the week. Empty buckets are left out.
+ * Overdue tasks, then one section per day for the next seven ("Today",
+ * "Tomorrow", then weekday names), then the rest of the app's "This week"
+ * status column (undated or due later). Soonest first; empty sections are
+ * left out.
  */
 fun agenda(tasks: List<TaskDto>, now: Long): List<AgendaSection> {
     val today = startOfDay(now)
-    val tomorrow = addDays(today, 1)
-    val dayAfter = addDays(today, 2)
     val weekEnd = addDays(today, 7)
-    return tasks
+    val shown = tasks
         .filter { (it.dueAt != null && it.dueAt < weekEnd) || it.status == TaskStatus.Todo.key }
         .sortedWith(compareBy({ it.dueAt ?: Long.MAX_VALUE }, { it.createdAt }))
-        .groupBy {
-            val due = it.dueAt
-            when {
-                due == null -> Bucket.Week
-                due < today -> Bucket.Overdue
-                due < tomorrow -> Bucket.Today
-                due < dayAfter -> Bucket.Tomorrow
-                else -> Bucket.Week
-            }
+    val days = (0 until 7).map { n ->
+        val start = addDays(today, n)
+        val end = addDays(today, n + 1)
+        val label = when (n) {
+            0 -> "Today"
+            1 -> "Tomorrow"
+            else -> SimpleDateFormat("EEEE", Locale.getDefault()).format(Date(start))
         }
-        .map { (bucket, rows) -> AgendaSection(bucket, rows) }
-        .sortedBy { it.bucket }
+        AgendaSection(SectionKind.Day, label, shown.filter { it.dueAt != null && it.dueAt >= start && it.dueAt < end })
+    }
+    return (
+        listOf(AgendaSection(SectionKind.Overdue, "Overdue", shown.filter { it.dueAt != null && it.dueAt < today })) +
+            days +
+            AgendaSection(SectionKind.Rest, "This week", shown.filter { it.dueAt == null || it.dueAt >= weekEnd })
+        ).filter { it.rows.isNotEmpty() }
 }
 
-// The section already says the day for today and tomorrow, so those rows
-// show only a set time; overdue and later rows show "Oct 11" or "Thu".
-// Undated rows show nothing.
-fun rowMeta(dueAt: Long, bucket: Bucket, now: Long): String = when (bucket) {
-    Bucket.Today, Bucket.Tomorrow -> shortDue(dueAt, now).substringAfter(' ', "")
-    Bucket.Overdue, Bucket.Week -> shortDue(dueAt, now)
+// A day section already names the day, so its rows show only a set time;
+// overdue and later rows show "Oct 11". Undated rows show nothing.
+fun rowMeta(dueAt: Long, kind: SectionKind, now: Long): String = when (kind) {
+    SectionKind.Day -> shortDue(dueAt, now).substringAfter(' ', "")
+    SectionKind.Overdue, SectionKind.Rest -> shortDue(dueAt, now)
 }
 
 class TasksWidgetProvider : AppWidgetProvider() {
