@@ -20,8 +20,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.debounce
-import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class AppContainer(context: Context) {
     private val appContext = context.applicationContext
@@ -36,7 +37,8 @@ class AppContainer(context: Context) {
     lateinit var sessionRepository: SessionRepository
     lateinit var api: ScriniumApi
 
-    // The last full task list TasksViewModel loaded, saved for the tasks widget.
+    // The last full task list TasksViewModel loaded, saved for the tasks
+    // widget. Null after sign-out.
     val loadedTasks = MutableStateFlow<List<TaskDto>?>(null)
 
     val notesRepository: NotesRepository
@@ -52,7 +54,12 @@ class AppContainer(context: Context) {
             },
             cacheDir = appContext.cacheDir
         )
-        sessionRepository = SessionRepository(appContext, tokenStore, api, reminders)
+        // Sign-out clears the widget now (the list may already be null, which
+        // emits nothing) and resets the feed so a save still waiting is dropped.
+        sessionRepository = SessionRepository(appContext, tokenStore, api, reminders) {
+            loadedTasks.value = null
+            withContext(Dispatchers.IO) { TasksWidget.clear(appContext) }
+        }
         notesRepository = NotesRepository(database.noteDao(), api)
         imageLoader = ImageLoader(api)
         syncEngine = SyncEngine(database.noteDao(), api) { tokenStore.token.value }
@@ -60,8 +67,14 @@ class AppContainer(context: Context) {
         scope.launch {
             database.noteDao().observeAll().debounce(1000).collect { NotesWidget.render(appContext, it) }
         }
+        // A sign-out's null replaces a save still waiting on the debounce and
+        // clears again after one already running. The startup null is skipped
+        // so a cold start keeps the last list; a list landing after sign-out is not kept.
         scope.launch(Dispatchers.IO) {
-            loadedTasks.filterNotNull().debounce(1000).collect { TasksWidget.save(appContext, it) }
+            loadedTasks.drop(1).debounce(1000).collect { tasks ->
+                if (tasks == null || tokenStore.token.value == null) TasksWidget.clear(appContext)
+                else TasksWidget.save(appContext, tasks)
+            }
         }
     }
 }
