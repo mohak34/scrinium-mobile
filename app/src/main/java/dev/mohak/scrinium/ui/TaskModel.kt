@@ -68,11 +68,12 @@ fun startOfDay(ms: Long): Long = Calendar.getInstance().apply {
 }.timeInMillis
 
 // Local midnight [n] calendar days after the day [ms] falls on. Not n * 24h:
-// days across a daylight-saving change are 23 or 25 hours long.
-fun addDays(ms: Long, n: Int): Long = Calendar.getInstance().apply {
+// days across a daylight-saving change are 23 or 25 hours long, and where
+// the clocks jump at midnight a day starts at 01:00, so re-take its start.
+fun addDays(ms: Long, n: Int): Long = startOfDay(Calendar.getInstance().apply {
     timeInMillis = startOfDay(ms)
     add(Calendar.DAY_OF_MONTH, n)
-}.timeInMillis
+}.timeInMillis)
 
 fun TaskDto.isOverdue(): Boolean = !isDone && dueAt != null && dueAt < startOfToday()
 
