@@ -33,7 +33,8 @@ import java.util.Date
 
 /**
  * Home screen widget: overdue tasks, today, tomorrow and the rest of the
- * week, with the inbox count below. Tasks are online-only, so it draws the
+ * week (dated tasks plus the app's "This week" column), with the inbox count
+ * below. Tasks are online-only, so it draws the
  * last full list the app loaded, saved to a file by [save]; nothing fetches
  * for it. One non-waking alarm redraws it after midnight so "Today" moves on
  * while the app is closed; it fires when the phone next wakes up anyway.
@@ -109,7 +110,7 @@ object TasksWidget {
         val area = TaskArea.of(task.area)
         if (area != null) row.setInt(R.id.row_dot, "setColorFilter", area.color.toArgb())
         row.setViewVisibility(R.id.row_dot, if (area != null) View.VISIBLE else View.INVISIBLE)
-        row.setTextViewText(R.id.row_meta, rowMeta(task.dueAt!!, bucket, now))
+        row.setTextViewText(R.id.row_meta, task.dueAt?.let { rowMeta(it, bucket, now) } ?: "")
         row.setTextColor(R.id.row_meta, if (bucket == Bucket.Overdue) RED else DIM)
         row.setOnClickFillInIntent(R.id.row, Intent().putExtra(MainActivity.EXTRA_TASK_ID, task.id))
         return row
@@ -170,18 +171,23 @@ enum class Bucket(val label: String) { Overdue("Overdue"), Today("Today"), Tomor
 
 data class AgendaSection(val bucket: Bucket, val rows: List<TaskDto>)
 
-/** Dated tasks due before a week from today, by day bucket, soonest first. Empty buckets are left out. */
+/**
+ * Tasks due before a week from today by day bucket, soonest first, with the
+ * rest of the "This week" status column (undated or due later) at the end of
+ * the week. Empty buckets are left out.
+ */
 fun agenda(tasks: List<TaskDto>, now: Long): List<AgendaSection> {
     val today = startOfDay(now)
     val tomorrow = addDays(today, 1)
     val dayAfter = addDays(today, 2)
     val weekEnd = addDays(today, 7)
     return tasks
-        .filter { it.dueAt != null && it.dueAt < weekEnd }
-        .sortedWith(compareBy({ it.dueAt }, { it.createdAt }))
+        .filter { (it.dueAt != null && it.dueAt < weekEnd) || it.status == TaskStatus.Todo.key }
+        .sortedWith(compareBy({ it.dueAt ?: Long.MAX_VALUE }, { it.createdAt }))
         .groupBy {
-            val due = it.dueAt!!
+            val due = it.dueAt
             when {
+                due == null -> Bucket.Week
                 due < today -> Bucket.Overdue
                 due < tomorrow -> Bucket.Today
                 due < dayAfter -> Bucket.Tomorrow
@@ -194,6 +200,7 @@ fun agenda(tasks: List<TaskDto>, now: Long): List<AgendaSection> {
 
 // The section already says the day for today and tomorrow, so those rows
 // show only a set time; overdue and later rows show "Oct 11" or "Thu".
+// Undated rows show nothing.
 fun rowMeta(dueAt: Long, bucket: Bucket, now: Long): String = when (bucket) {
     Bucket.Today, Bucket.Tomorrow -> shortDue(dueAt, now).substringAfter(' ', "")
     Bucket.Overdue, Bucket.Week -> shortDue(dueAt, now)

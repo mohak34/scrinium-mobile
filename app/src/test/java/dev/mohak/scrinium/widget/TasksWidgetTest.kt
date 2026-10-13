@@ -10,10 +10,11 @@ class TasksWidgetTest {
     private fun local(y: Int, m: Int, d: Int, h: Int = 0) =
         Calendar.getInstance().apply { clear(); set(y, m - 1, d, h, 0) }.timeInMillis
 
-    private fun task(id: String, due: Long?) = TaskDto(id = id, title = id, status = "todo", dueAt = due)
+    private fun task(id: String, due: Long?, status: String = "doing") =
+        TaskDto(id = id, title = id, status = status, dueAt = due)
 
     @Test
-    fun bucketsByDayAndDropsLaterAndUndated() {
+    fun bucketsByDayAndKeepsTheWholeThisWeekColumn() {
         TimeZone.setDefault(TimeZone.getTimeZone("America/New_York"))
         val now = local(2026, 10, 13, 15)
         val tasks = listOf(
@@ -22,7 +23,9 @@ class TasksWidgetTest {
             task("tomorrow", local(2026, 10, 14)),
             task("sat", local(2026, 10, 17)),
             task("nextTue", local(2026, 10, 20)),
-            task("undated", null)
+            task("undated", null),
+            task("weekUndated", null, status = "todo"),
+            task("weekLater", local(2026, 10, 28), status = "todo")
         )
         val got = agenda(tasks, now).map { s -> s.bucket to s.rows.map { it.id } }
         assertEquals(
@@ -30,7 +33,7 @@ class TasksWidgetTest {
                 Bucket.Overdue to listOf("late"),
                 Bucket.Today to listOf("todayTimed"),
                 Bucket.Tomorrow to listOf("tomorrow"),
-                Bucket.Week to listOf("sat")
+                Bucket.Week to listOf("sat", "weekLater", "weekUndated")
             ),
             got
         )
