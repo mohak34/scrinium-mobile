@@ -45,6 +45,17 @@ class TasksWidgetTest {
     }
 
     @Test
+    fun dayBoundariesHoldWhereClocksJumpAtMidnight() {
+        // Santiago springs forward at midnight: Sep 6 2026 starts at 01:00.
+        TimeZone.setDefault(TimeZone.getTimeZone("America/Santiago"))
+        Locale.setDefault(Locale.US)
+        val now = local(2026, 9, 6, 12)
+        val wed = Calendar.getInstance().apply { clear(); set(2026, 8, 9, 0, 30) }.timeInMillis
+        val got = agenda(listOf(task("wed", wed)), now).map { s -> s.label to s.rows.map { it.id } }
+        assertEquals(listOf("Wednesday" to listOf("wed")), got)
+    }
+
+    @Test
     fun dayRowsShowOnlyTheirTime() {
         TimeZone.setDefault(TimeZone.getTimeZone("America/New_York"))
         Locale.setDefault(Locale.US)
