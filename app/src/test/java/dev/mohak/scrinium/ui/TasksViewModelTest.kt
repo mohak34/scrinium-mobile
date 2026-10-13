@@ -2,6 +2,7 @@ package dev.mohak.scrinium.ui
 
 import dev.mohak.scrinium.data.remote.CalendarResponse
 import dev.mohak.scrinium.data.remote.NewTaskRequest
+import dev.mohak.scrinium.data.remote.ProjectDto
 import dev.mohak.scrinium.data.remote.TaskDto
 import dev.mohak.scrinium.data.remote.TasksApi
 import java.io.IOException
@@ -66,6 +67,7 @@ class TasksViewModelTest {
         override suspend fun addTaskLink(id: String, notePath: String) = park(linkAdds, id to notePath)
         override suspend fun removeTaskLink(id: String, notePath: String): List<String> = error("unused")
         override suspend fun fetchCalendarEvents(from: Long, to: Long) = CalendarResponse()
+        override suspend fun fetchProjects() = emptyList<ProjectDto>()
     }
 
     private val api = FakeApi()

@@ -7,6 +7,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import dev.mohak.scrinium.data.remote.CalendarResponse
 import dev.mohak.scrinium.data.remote.NewTaskRequest
+import dev.mohak.scrinium.data.remote.ProjectDto
 import dev.mohak.scrinium.data.remote.TasksApi
 import dev.mohak.scrinium.data.remote.TaskDto
 import dev.mohak.scrinium.di.AppContainer
@@ -47,6 +48,18 @@ class TasksViewModel(
 
     fun setAreaFilter(key: String?) {
         _areaFilter.value = key
+    }
+
+    // Project boards (vault folders), and the one the Board tab shows. Null
+    // is the main board, which leaves project backlogs out (onMainBoard).
+    private val _projects = MutableStateFlow<List<ProjectDto>>(emptyList())
+    val projects: StateFlow<List<ProjectDto>> = _projects.asStateFlow()
+
+    private val _projectFilter = MutableStateFlow<String?>(null)
+    val projectFilter: StateFlow<String?> = _projectFilter.asStateFlow()
+
+    fun setProjectFilter(path: String?) {
+        _projectFilter.value = path
     }
 
     private val _loading = MutableStateFlow(false)
@@ -121,6 +134,17 @@ class TasksViewModel(
                 if (!quiet) _error.value = "Couldn't load tasks: ${e.message}"
             } finally {
                 _loading.value = false
+            }
+        }
+        // Quiet: without projects the board just has no project picker.
+        viewModelScope.launch {
+            try {
+                val rows = api.fetchProjects()
+                _projects.value = rows
+                if (rows.none { it.path == _projectFilter.value }) _projectFilter.value = null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
             }
         }
     }
@@ -204,6 +228,7 @@ class TasksViewModel(
         area: TaskArea? = null,
         dueAt: Long? = null,
         parentId: String? = null,
+        project: String? = null,
         status: TaskStatus? = null,
         linkPath: String? = null,
         open: Boolean = false,
@@ -219,7 +244,8 @@ class TasksViewModel(
                         status = (status ?: if (dueAt == null) TaskStatus.Inbox else TaskStatus.Todo).key,
                         area = area?.key,
                         dueAt = dueAt,
-                        parentId = parentId
+                        parentId = parentId,
+                        project = project
                     )
                 )
                 setTasks { it + row }
@@ -256,6 +282,24 @@ class TasksViewModel(
 
     fun setArea(id: String, area: TaskArea?) =
         patch(id, "area" to (area?.let { JsonPrimitive(it.key) } ?: JsonNull)) { it.copy(area = area?.key) }
+
+    // Subtasks follow their root's project on the server, so the list
+    // reloads once the change lands.
+    fun setProject(id: String, project: String?) =
+        patch(id, "project" to (project?.let { JsonPrimitive(it) } ?: JsonNull), ::reloadQuietly) { it.copy(project = project) }
+
+    // A new parent also hands the task (and its subtasks) its project.
+    fun setParent(id: String, parentId: String?) =
+        patch(id, "parent_id" to (parentId?.let { JsonPrimitive(it) } ?: JsonNull), ::reloadQuietly) { it.copy(parentId = parentId) }
+
+    private suspend fun reloadQuietly() {
+        try {
+            load()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+        }
+    }
 
     fun setPriority(id: String, priority: TaskPriority) =
         patch(id, "priority" to JsonPrimitive(priority.key)) { it.copy(priority = priority.key) }
@@ -366,7 +410,12 @@ class TasksViewModel(
     // server applied them, so the last one is the newest server row.
     private val patchLocks = mutableMapOf<String, Mutex>()
 
-    private fun patch(id: String, field: Pair<String, JsonElement>, local: (TaskDto) -> TaskDto) {
+    private fun patch(
+        id: String,
+        field: Pair<String, JsonElement>,
+        onSaved: (suspend () -> Unit)? = null,
+        local: (TaskDto) -> TaskDto
+    ) {
         val shown = _tasks.value.firstOrNull { it.id == id } ?: _noteTasks.value.firstOrNull { it.id == id }
         if (id !in confirmed && shown != null) confirmed[id] = shown
         val edit = Edit(local)
@@ -380,9 +429,13 @@ class TasksViewModel(
                 throw e
             } catch (e: Exception) {
                 _error.value = "Couldn't save task: ${e.message}"
+                pending[id]?.remove(edit)
+                settle(id)
+                return@launch
             }
             pending[id]?.remove(edit)
             settle(id)
+            onSaved?.invoke()
         }
     }
 

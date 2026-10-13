@@ -74,6 +74,11 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
   `PATCH|DELETE /api/tasks/<id>`, `GET|POST|DELETE /api/tasks/<id>/links`.
   Rows are snake_case. Tasks live in the server's SQLite, not the vault, so
   they are online-only: `TasksViewModel` calls the API directly, no Room.
+- `GET /api/projects` → `[{ path, area, created_at }]`, vault folders the
+  web registered as project boards. A task's `project` is that path;
+  subtasks follow their root's project. A project's Inbox is its backlog:
+  the main list and board leave it out (`onMainBoard`). Projects are
+  created and removed on the web; the phone only picks them.
 - `GET|DELETE /api/tokens` → API tokens `[{ token_hash, created_at,
   last_used_at, label }]`; DELETE body `{ token_hash }` revokes one.
   Settings lists only phones (`label` null; agent tokens are labeled). The

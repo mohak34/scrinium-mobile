@@ -51,6 +51,12 @@ const val DOING_LIMIT = 3
 val TaskDto.statusEnum: TaskStatus get() = TaskStatus.of(status)
 val TaskDto.isDone: Boolean get() = status == TaskStatus.Done.key
 
+// A project's Inbox is its backlog and stays on the project board; the
+// main list and board show a project task only once it is planned.
+val TaskDto.onMainBoard: Boolean get() = project == null || status != TaskStatus.Inbox.key
+
+fun projectName(path: String): String = path.substringAfterLast('/')
+
 fun startOfToday(): Long = startOfDay(System.currentTimeMillis())
 
 fun startOfDay(ms: Long): Long = Calendar.getInstance().apply {

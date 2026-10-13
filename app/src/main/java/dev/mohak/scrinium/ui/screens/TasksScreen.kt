@@ -79,6 +79,8 @@ import dev.mohak.scrinium.ui.groupByStatus
 import dev.mohak.scrinium.ui.isDone
 import dev.mohak.scrinium.ui.isOverdue
 import dev.mohak.scrinium.ui.isDueToday
+import dev.mohak.scrinium.ui.onMainBoard
+import dev.mohak.scrinium.ui.projectName
 import dev.mohak.scrinium.ui.shortDue
 import dev.mohak.scrinium.ui.startOfDay
 import dev.mohak.scrinium.ui.startOfToday
@@ -92,7 +94,8 @@ import java.util.Locale
 
 // The Tasks, Board and Calendar tabs. All three read TasksViewModel's list
 // and share its area filter. Subtasks live inside their parent's detail
-// screen, as on the web, so only top-level tasks show here.
+// screen, as on the web, so only top-level tasks show here. List and Board
+// leave project backlogs out (onMainBoard); the calendar shows every date.
 
 private fun topLevel(all: List<TaskDto>, area: String?) =
     all.filter { it.parentId == null && (area == null || it.area == area) }
@@ -117,7 +120,7 @@ fun TasksScreen(tasksVm: TasksViewModel) {
     var showAdd by remember { mutableStateOf(false) }
     var showDone by rememberSaveable { mutableStateOf(false) }
 
-    val groups = groupByStatus(topLevel(all, area))
+    val groups = groupByStatus(topLevel(all, area).filter { it.onMainBoard })
     val progress = subtaskProgress(all)
     val areaTabs = listOf<TaskArea?>(null) + TaskArea.entries
 
@@ -169,6 +172,8 @@ fun BoardScreen(tasksVm: TasksViewModel) {
     val loading by tasksVm.loading.collectAsStateWithLifecycle()
     val error by tasksVm.error.collectAsStateWithLifecycle()
     val area by tasksVm.areaFilter.collectAsStateWithLifecycle()
+    val projects by tasksVm.projects.collectAsStateWithLifecycle()
+    val project by tasksVm.projectFilter.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { tasksVm.refresh() }
     var showAdd by remember { mutableStateOf(false) }
     var moving by remember { mutableStateOf<TaskDto?>(null) }
@@ -176,7 +181,7 @@ fun BoardScreen(tasksVm: TasksViewModel) {
     val statuses = TaskStatus.entries
     val pager = rememberPagerState { statuses.size }
     val scope = rememberCoroutineScope()
-    val tasks = topLevel(all, area)
+    val tasks = topLevel(all, area).filter { if (project != null) it.project == project else it.onMainBoard }
     val progress = subtaskProgress(all)
     val columns = statuses.map { s ->
         tasks.filter { it.status == s.key }.let { rows ->
@@ -186,7 +191,10 @@ fun BoardScreen(tasksVm: TasksViewModel) {
     }
 
     Column(Modifier.fillMaxSize()) {
-        TopBar("Board") { AreaFilterButton(area) { tasksVm.setAreaFilter(it) } }
+        TopBar(project?.let(::projectName) ?: "Board") {
+            if (projects.isNotEmpty()) ProjectFilterButton(projects.map { it.path }, project) { tasksVm.setProjectFilter(it) }
+            AreaFilterButton(area) { tasksVm.setAreaFilter(it) }
+        }
         TextTabs(
             statuses.mapIndexed { i, s ->
                 val n = columns[i].size
@@ -233,7 +241,7 @@ fun BoardScreen(tasksVm: TasksViewModel) {
     if (showAdd) {
         val status = statuses[pager.currentPage]
         QuickAddSheet(TaskArea.of(area), null, onDismiss = { showAdd = false }) { title, a, due ->
-            tasksVm.create(title, area = a, dueAt = due, status = status)
+            tasksVm.create(title, area = a, dueAt = due, project = project, status = status)
         }
     }
 }
@@ -455,6 +463,29 @@ private fun AreaFilterButton(area: String?, onPick: (String?) -> Unit) {
     }
 }
 
+/** Board top-bar switch between the main board and a project board. */
+@Composable
+private fun ProjectFilterButton(projects: List<String>, project: String?, onPick: (String?) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconBtn(R.drawable.ms_folder_special, "Project board", { open = true }, tint = if (project != null) Sc.accent else Sc.text2, active = open)
+        Menu(open, { open = false }) {
+            MenuRow(null, "Main board", { open = false; onPick(null) }, trailing = { if (project == null) Sym(R.drawable.ms_check, tint = Sc.accent, size = 18.dp) })
+            projects.forEach { p ->
+                MenuRow(null, projectLabel(p, projects), { open = false; onPick(p) }, trailing = {
+                    if (project == p) Sym(R.drawable.ms_check, tint = Sc.accent, size = 18.dp)
+                })
+            }
+        }
+    }
+}
+
+// The folder name, or the whole path when two projects share a name.
+fun projectLabel(path: String, all: List<String>): String {
+    val name = projectName(path)
+    return if (all.count { projectName(it) == name } > 1) path else name
+}
+
 /**
  * One task: round checkbox, title, and a meta line (area, due, priority,
  * subtasks, reminder, linked notes). [progress] is (done, total) subtasks.
@@ -502,7 +533,7 @@ private fun TaskMeta(task: TaskDto, progress: Pair<Int, Int>?, showDue: Boolean,
     val due = task.dueAt?.takeIf { showDue }
     val waitingDays = task.waitingSince?.takeIf { task.status == TaskStatus.Waiting.key }
         ?.let { ((System.currentTimeMillis() - it) / 86_400_000L).toInt() }
-    val any = area != null || due != null || priority == TaskPriority.High || priority == TaskPriority.Urgent ||
+    val any = area != null || task.project != null || due != null || priority == TaskPriority.High || priority == TaskPriority.Urgent ||
         progress != null || task.remindAt != null || task.linkCount > 0 || waitingDays != null || showStatus
     if (!any) return
     Row(
@@ -514,6 +545,12 @@ private fun TaskMeta(task: TaskDto, progress: Pair<Int, Int>?, showDue: Boolean,
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 Dot(area.color)
                 Text(area.label, style = Type.meta)
+            }
+        }
+        task.project?.let {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Sym(R.drawable.ms_folder, tint = Sc.text3, size = 14.dp, desc = "Project")
+                Text(" " + projectName(it), style = Type.meta, maxLines = 1)
             }
         }
         if (showStatus) Text(TaskStatus.of(task.status).label, style = Type.meta)

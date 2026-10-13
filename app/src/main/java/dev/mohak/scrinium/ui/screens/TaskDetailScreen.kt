@@ -35,7 +35,6 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.mohak.scrinium.R
 import dev.mohak.scrinium.data.remote.TaskDto
-import dev.mohak.scrinium.ui.ConfirmDialog
 import dev.mohak.scrinium.ui.Dot
 import dev.mohak.scrinium.ui.ErrorStrip
 import dev.mohak.scrinium.ui.GroupHeader
@@ -71,16 +70,19 @@ fun TaskDetailScreen(vm: MainViewModel, tasksVm: TasksViewModel, id: String) {
     val notes by vm.notesFlow.collectAsStateWithLifecycle()
     val task = all.firstOrNull { it.id == id }
 
-    var confirmDelete by remember { mutableStateOf(false) }
+    val projects by tasksVm.projects.collectAsStateWithLifecycle()
     var pickDue by remember { mutableStateOf(false) }
     var pickDueTime by remember { mutableStateOf(false) }
     var pickRemindDay by remember { mutableStateOf<Long?>(null) }
     var pickRemindDate by remember { mutableStateOf(false) }
     var showLinkPicker by remember { mutableStateOf(false) }
+    var pickProject by remember { mutableStateOf(false) }
+    var pickParent by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize().imePadding()) {
         TopBar(if (task?.parentId != null) "Subtask" else "", onBack = { tasksVm.closeTask() }) {
-            if (task != null) IconBtn(R.drawable.ms_delete, "Delete task", { confirmDelete = true })
+            // No confirm, like the web: it deletes the subtasks too.
+            if (task != null) IconBtn(R.drawable.ms_delete, "Delete task", { tasksVm.delete(task.id) })
         }
         error?.let { ErrorStrip(it) { tasksVm.dismissError() } }
         if (task == null) {
@@ -131,6 +133,23 @@ fun TaskDetailScreen(vm: MainViewModel, tasksVm: TasksViewModel, id: String) {
                 onPick = { pickRemindDate = true },
                 onClear = { tasksVm.setReminder(task.id, null) }
             )
+            // Subtasks carry their root's project, so only roots pick one.
+            if (task.parentId == null && (projects.isNotEmpty() || task.project != null)) {
+                DateRow(
+                    R.drawable.ms_folder_special,
+                    task.project ?: "No project",
+                    set = task.project != null,
+                    onPick = { pickProject = true },
+                    onClear = { tasksVm.setProject(task.id, null) }
+                )
+            }
+            DateRow(
+                R.drawable.ms_account_tree,
+                task.parentId?.let { pid -> all.firstOrNull { it.id == pid }?.title ?: "Parent task" } ?: "No parent task",
+                set = task.parentId != null,
+                onPick = { pickParent = true },
+                onClear = { tasksVm.setParent(task.id, null) }
+            )
 
             if (task.parentId == null) Subtasks(task, all, tasksVm)
 
@@ -164,14 +183,28 @@ fun TaskDetailScreen(vm: MainViewModel, tasksVm: TasksViewModel, id: String) {
 
     if (task == null) return
 
-    if (confirmDelete) {
-        ConfirmDialog(
-            "Delete task?",
-            "Its subtasks are deleted too. This can't be undone.",
-            "Delete",
-            onConfirm = { tasksVm.delete(task.id) },
-            onDismiss = { confirmDelete = false }
-        )
+    if (pickProject) {
+        val paths = projects.map { it.path }
+        ChoiceSheet("Project", paths.map { it to projectLabel(it, paths) }, task.project, onDismiss = { pickProject = false }) {
+            pickProject = false
+            tasksVm.setProject(task.id, it)
+        }
+    }
+    if (pickParent) {
+        // Not itself or its own subtree (the server rejects cycles), and not
+        // done unless it already is the parent.
+        val own = mutableSetOf(task.id)
+        var grew = true
+        while (grew) {
+            grew = false
+            for (t in all) if (t.parentId in own && own.add(t.id)) grew = true
+        }
+        val choices = all.filter { it.id !in own && (!it.isDone || it.id == task.parentId) }
+            .sortedBy { it.title.lowercase() }
+        ChoiceSheet("Parent task", choices.map { it.id to it.title }, task.parentId, onDismiss = { pickParent = false }) {
+            pickParent = false
+            tasksVm.setParent(task.id, it)
+        }
     }
     if (pickDue) {
         LocalDatePickerDialog(
@@ -311,6 +344,31 @@ private fun DraftField(
 @Composable
 private fun FieldLabel(text: String) {
     Text(text, style = Type.meta, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 6.dp))
+}
+
+/** One of [options] (value to label), or None. Calls [onPick] with the value. */
+@Composable
+private fun ChoiceSheet(
+    title: String,
+    options: List<Pair<String, String>>,
+    selected: String?,
+    onDismiss: () -> Unit,
+    onPick: (String?) -> Unit
+) {
+    Sheet(onDismiss) {
+        SheetTitle(title)
+        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp).padding(top = 4.dp)) {
+            items(listOf<Pair<String?, String>>(null to "None") + options) { (value, label) ->
+                Row(
+                    Modifier.fillMaxWidth().clickable { onPick(value) }.padding(horizontal = 16.dp, vertical = 11.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(label, style = Type.body, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    if (value == selected) Sym(R.drawable.ms_check, tint = Sc.accent, size = 18.dp)
+                }
+            }
+        }
+    }
 }
 
 /** Pick a note to link: type to filter. */

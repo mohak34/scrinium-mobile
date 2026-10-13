@@ -88,6 +88,8 @@ data class TaskDto(
     @SerialName("waiting_on") val waitingOn: String? = null,
     @SerialName("waiting_since") val waitingSince: Long? = null,
     @SerialName("parent_id") val parentId: String? = null,
+    // Folder path of the project board the task belongs to.
+    val project: String? = null,
     @SerialName("due_at") val dueAt: Long? = null,
     @SerialName("remind_at") val remindAt: Long? = null,
     @SerialName("link_count") val linkCount: Int = 0,
@@ -104,7 +106,16 @@ data class NewTaskRequest(
     val status: String,
     val area: String?,
     @SerialName("due_at") val dueAt: Long?,
-    @SerialName("parent_id") val parentId: String?
+    @SerialName("parent_id") val parentId: String?,
+    val project: String?
+)
+
+// A vault folder registered as a project board on the web.
+@Serializable
+data class ProjectDto(
+    val path: String,
+    val area: String? = null,
+    @SerialName("created_at") val createdAt: Long = 0L
 )
 
 @Serializable
@@ -188,6 +199,9 @@ private interface ScriniumService {
     @DELETE("api/shares/{id}")
     suspend fun deleteShare(@Path("id") id: String): Response<ResponseBody>
 
+    @GET("api/projects")
+    suspend fun projects(): List<ProjectDto>
+
     @GET("api/tasks")
     suspend fun tasks(@Query("note") note: String? = null): List<TaskDto>
 
@@ -241,6 +255,7 @@ interface TasksApi {
     suspend fun addTaskLink(id: String, notePath: String): List<String>
     suspend fun removeTaskLink(id: String, notePath: String): List<String>
     suspend fun fetchCalendarEvents(from: Long, to: Long): CalendarResponse
+    suspend fun fetchProjects(): List<ProjectDto>
 }
 
 class ScriniumApi(
@@ -321,6 +336,8 @@ class ScriniumApi(
         val res = service.deleteShare(id)
         if (!res.isSuccessful) throw ApiException(res.code())
     }
+
+    override suspend fun fetchProjects(): List<ProjectDto> = service.projects()
 
     override suspend fun fetchTasks(): List<TaskDto> = service.tasks()
 
