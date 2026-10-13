@@ -25,6 +25,15 @@ class TablesTest {
     }
 
     @Test
+    fun keepsWikilinkAliasesAndStopsAtBlocks() {
+        val lines = listOf("| [[Note|Alias]] | b |", "|---|---|", "only", "# Next | Section")
+        val (table, end) = parseTable(lines, 0)!!
+        assertEquals(listOf("[[Note|Alias]]", "b"), table.rows[0])
+        assertEquals(listOf("only", ""), table.rows[1])
+        assertEquals(3, end)
+    }
+
+    @Test
     fun rejectsNonTables() {
         assertNull(parseTable(listOf("a | b", "not a delimiter"), 0))
         assertNull(parseTable(listOf("a | b | c", "--- | ---"), 0))

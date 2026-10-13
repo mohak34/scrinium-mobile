@@ -2,7 +2,7 @@ package dev.mohak.scrinium.ui
 
 // GFM pipe tables, shared by the reading view and PDF export. A table is a
 // header row, a delimiter row (`| --- | :-: |`), then body rows until a
-// blank line or a line without a pipe.
+// blank line or the start of another block.
 
 enum class ColumnAlign { Start, Center, End }
 
@@ -10,6 +10,7 @@ enum class ColumnAlign { Start, Center, End }
 class MdTable(val align: List<ColumnAlign>, val rows: List<List<String>>)
 
 private val delimiterCell = Regex("""^\s*(:?)-+(:?)\s*$""")
+private val blockStart = Regex("""^\s*(#{1,6}\s|```|~~~|>|\$\$|[-*+]\s|\d+[.)]\s|(-{3,}|\*{3,}|_{3,})\s*$)""")
 
 /** The table starting at [start] and the index after it, or null if none starts there. */
 fun parseTable(lines: List<String>, start: Int): Pair<MdTable, Int>? {
@@ -31,7 +32,7 @@ fun parseTable(lines: List<String>, start: Int): Pair<MdTable, Int>? {
     if (head.size != align.size) return null
     val rows = mutableListOf(head)
     var i = start + 2
-    while (i < lines.size && lines[i].isNotBlank() && '|' in lines[i]) {
+    while (i < lines.size && lines[i].isNotBlank() && !blockStart.containsMatchIn(lines[i])) {
         val cells = splitCells(lines[i])
         rows += List(align.size) { cells.getOrElse(it) { "" } }
         i++
@@ -39,8 +40,8 @@ fun parseTable(lines: List<String>, start: Int): Pair<MdTable, Int>? {
     return MdTable(align, rows) to i
 }
 
-// Cells of one row: outer pipes dropped, split on pipes that are neither
-// escaped (`\|`) nor inside inline code.
+// Cells of one row: outer pipes dropped, split on pipes that are not
+// escaped (`\|`) and not inside inline code or a `[[link|alias]]`.
 private fun splitCells(line: String): List<String> {
     var s = line.trim()
     if (s.startsWith("|")) s = s.drop(1)
@@ -48,6 +49,7 @@ private fun splitCells(line: String): List<String> {
     val cells = mutableListOf<String>()
     val cur = StringBuilder()
     var code = false
+    var link = false
     var i = 0
     while (i < s.length) {
         val c = s[i]
@@ -56,11 +58,21 @@ private fun splitCells(line: String): List<String> {
                 cur.append('|')
                 i++
             }
+            !code && !link && s.startsWith("[[", i) && s.indexOf("]]", i + 2) >= 0 -> {
+                link = true
+                cur.append("[[")
+                i++
+            }
+            !code && link && s.startsWith("]]", i) -> {
+                link = false
+                cur.append("]]")
+                i++
+            }
             c == '`' -> {
                 code = !code
                 cur.append(c)
             }
-            c == '|' && !code -> {
+            c == '|' && !code && !link -> {
                 cells += cur.toString().trim()
                 cur.clear()
             }
