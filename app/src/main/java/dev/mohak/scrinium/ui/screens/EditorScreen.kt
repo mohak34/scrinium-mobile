@@ -1,5 +1,7 @@
 package dev.mohak.scrinium.ui.screens
 
+import android.content.ContentResolver
+import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -70,6 +72,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody
+import okio.BufferedSink
+import okio.source
 
 @Composable
 fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
@@ -138,8 +145,9 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
         else completions(field.text, field.selection.start, state.path, notes.map { it.path }, tags)
     }
 
-    val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
+    // Images are downscaled/re-encoded in memory; other files stream from
+    // the provider. Either way the markdown lands at the cursor.
+    fun attach(uri: Uri) {
         val notePath = state.path
         val editorId = state.id
         scope.launch {
@@ -147,18 +155,25 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
             val markdown = try {
                 // Providers throw for unreadable picks (an offline cloud photo,
                 // a revoked grant); that is an upload error, not a crash.
-                val (bytes, mime, name) = withContext(Dispatchers.IO) {
-                    val resolver = context.contentResolver
-                    val name = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
-                        ?.use { c -> if (c.moveToFirst()) c.getString(0) else null } ?: "image"
-                    Triple(resolver.openInputStream(uri)?.use { it.readBytes() }, resolver.getType(uri), name)
+                val resolver = context.contentResolver
+                val (name, size) = withContext(Dispatchers.IO) {
+                    resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)
+                        ?.use { c -> if (c.moveToFirst()) c.getString(0) to (if (c.isNull(1)) -1L else c.getLong(1)) else null }
+                } ?: ("file" to -1L)
+                val mime = resolver.getType(uri)
+                if (mime?.startsWith("image/") == true) {
+                    val bytes = withContext(Dispatchers.IO) { resolver.openInputStream(uri)?.use { it.readBytes() } }
+                        ?: throw IOException("no data")
+                    vm.uploadImage(notePath, bytes, mime, name)
+                } else {
+                    if (size > MAX_ATTACHMENT_BYTES) throw IOException("over 100 MB")
+                    val type = (mime ?: "application/octet-stream").toMediaType()
+                    vm.uploadFile(notePath, UriBody(resolver, uri, type, size), name)
                 }
-                if (bytes == null) throw IOException("no data")
-                vm.uploadImage(notePath, bytes, mime, name)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                vm.reportError("Couldn't read image: ${e.message}")
+                vm.reportError("Couldn't read file: ${e.message}")
                 null
             } finally {
                 uploading = false
@@ -171,6 +186,8 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
             apply(TextFieldValue(field.text.substring(0, at) + insert + field.text.substring(at), TextRange(at + insert.length)))
         }
     }
+    val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> uri?.let(::attach) }
+    val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(::attach) }
 
     Column(Modifier.fillMaxSize()) {
         TopBar(
@@ -273,6 +290,7 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                     onCheckbox = { apply(toggleLinePrefix(field, "- [ ] ")) },
                     onList = { apply(toggleLinePrefix(field, "- ")) },
                     onImage = { pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                    onFile = { pickFile.launch(arrayOf("*/*")) },
                     onUndo = {
                         undo.removeLastOrNull()?.let { prev ->
                             field = prev
@@ -305,6 +323,24 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
     }
 }
 
+// The server's upload cap.
+private const val MAX_ATTACHMENT_BYTES = 100L * 1024 * 1024
+
+// Streams a picked document so large files never sit in memory. Opened per
+// write, so an OkHttp retry reads it again from the start.
+private class UriBody(
+    private val resolver: ContentResolver,
+    private val uri: Uri,
+    private val type: MediaType,
+    private val size: Long
+) : RequestBody() {
+    override fun contentType() = type
+    override fun contentLength() = size
+    override fun writeTo(sink: BufferedSink) {
+        resolver.openInputStream(uri)?.use { sink.writeAll(it.source()) } ?: throw IOException("no data")
+    }
+}
+
 private fun Modifier.topLine() = drawBehind { drawLine(Sc.line, Offset(0f, 0f), Offset(size.width, 0f), 1.dp.toPx()) }
 
 // "projects / scrinium / " dimmed, then the file name.
@@ -333,6 +369,7 @@ private fun FormatBar(
     onCheckbox: () -> Unit,
     onList: () -> Unit,
     onImage: () -> Unit,
+    onFile: () -> Unit,
     onUndo: () -> Unit
 ) {
     Row(
@@ -346,7 +383,8 @@ private fun FormatBar(
         IconBtn(R.drawable.ms_tag, "Tag", onTag)
         IconBtn(R.drawable.ms_check_box, "Checkbox", onCheckbox)
         IconBtn(R.drawable.ms_format_list_bulleted, "List", onList)
-        IconBtn(R.drawable.ms_image, if (uploading) "Uploading image" else "Insert image", { if (!uploading) onImage() }, tint = if (uploading) Sc.accent else Sc.text2)
+        IconBtn(R.drawable.ms_image, if (uploading) "Uploading" else "Insert image", { if (!uploading) onImage() }, tint = if (uploading) Sc.accent else Sc.text2)
+        IconBtn(R.drawable.ms_attach_file, if (uploading) "Uploading" else "Attach file", { if (!uploading) onFile() }, tint = if (uploading) Sc.accent else Sc.text2)
         IconBtn(R.drawable.ms_undo, "Undo", { if (canUndo) onUndo() }, tint = if (canUndo) Sc.text2 else Sc.text4)
     }
 }

@@ -4,6 +4,7 @@ import dev.mohak.scrinium.data.local.NoteDao
 import dev.mohak.scrinium.data.local.NoteEntity
 import dev.mohak.scrinium.data.remote.ScriniumApi
 import kotlinx.coroutines.flow.Flow
+import okhttp3.RequestBody
 
 // One path segment cleaned the same way the web client sanitizes titles for
 // filenames. Null means "nothing usable left".
@@ -114,8 +115,8 @@ class NotesRepository(
 
     suspend fun fetchAsset(path: String): ByteArray = api.fetchAsset(path)
 
-    suspend fun uploadAttachment(bytes: ByteArray, mimeType: String, fileName: String, folder: String) =
-        api.uploadAttachment(bytes, mimeType, fileName, folder)
+    suspend fun uploadAttachment(body: RequestBody, fileName: String, folder: String) =
+        api.uploadAttachment(body, fileName, folder)
 
     /**
      * Pulls a server-side note into Room with its manifest hash, so the next

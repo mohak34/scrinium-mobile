@@ -10,7 +10,6 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import okhttp3.Cache
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
@@ -23,11 +22,9 @@ import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.HTTP
-import retrofit2.http.Multipart
 import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.PUT
-import retrofit2.http.Part
 import retrofit2.http.Path
 import retrofit2.http.Query
 
@@ -220,11 +217,12 @@ private interface ScriniumService {
     @GET("api/calendar/events")
     suspend fun calendarEvents(@Query("from") from: Long, @Query("to") to: Long): CalendarResponse
 
-    @Multipart
+    // Raw body, not multipart: the server streams it straight to disk.
     @POST("api/attachments")
     suspend fun uploadAttachment(
-        @Part file: MultipartBody.Part,
-        @Part("folder") folder: RequestBody
+        @Query("name") name: String,
+        @Query("folder") folder: String,
+        @Body body: RequestBody
     ): AttachmentResponse
 }
 
@@ -352,15 +350,10 @@ class ScriniumApi(
         }
     }
 
-    // Returns the vault-relative path the server stored the image at.
-    suspend fun uploadAttachment(bytes: ByteArray, mimeType: String, fileName: String, folder: String): String {
-        val part = MultipartBody.Part.createFormData(
-            "file",
-            fileName,
-            bytes.toRequestBody(mimeType.toMediaType())
-        )
-        return service.uploadAttachment(part, folder.toRequestBody(textMediaType)).path
-    }
+    // Returns the vault-relative path the server stored the file at. The
+    // body needs a Content-Type: the server drops bodies without one.
+    suspend fun uploadAttachment(body: RequestBody, fileName: String, folder: String): String =
+        service.uploadAttachment(fileName, folder, body).path
 
     suspend fun fetchTokens(): List<ApiTokenDto> = service.tokens()
 

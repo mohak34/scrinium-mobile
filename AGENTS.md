@@ -84,9 +84,11 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
   release of `BuildConfig.UPDATE_REPO` (the repo CI built from; empty in
   local builds, which skip the check) and installs its APK via
   PackageInstaller (`update/Updater.kt`).
-- `GET /api/assets/<path>` → image bytes; `POST /api/attachments` (multipart
-  `file` + `folder`) → `{ path }`. Phone uploads go to `attachments/`, the
-  web default, and the note gets a note-relative `![name](path)`.
+- `GET /api/assets/<path>` → file bytes; `POST /api/attachments?name=&folder=`
+  with the file as the raw body (any type, a Content-Type is required, max
+  100 MB) → `{ path }`. Phone uploads go to `attachments/`, the web
+  default, and the note gets a note-relative `![name](path)` for images or
+  `[file](path)` for anything else.
 
 Paths are URL-encoded per segment. Backlinks are computed on the phone from
 Room (`ui/Backlinks.kt`, a port of the web's `wikilinks.ts`), not fetched.

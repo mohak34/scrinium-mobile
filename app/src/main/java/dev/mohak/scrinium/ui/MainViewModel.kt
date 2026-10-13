@@ -13,7 +13,7 @@ import dev.mohak.scrinium.data.ImageLoader
 import dev.mohak.scrinium.data.ImageSource
 import dev.mohak.scrinium.data.NotesRepository
 import dev.mohak.scrinium.data.Prefs
-import dev.mohak.scrinium.data.noteRelative
+import dev.mohak.scrinium.data.attachmentMarkdown
 import dev.mohak.scrinium.data.resolveImage
 import dev.mohak.scrinium.data.SessionRepository
 import dev.mohak.scrinium.data.local.NoteEntity
@@ -52,6 +52,9 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 
 sealed interface Screen {
     data object Notes : Screen
@@ -775,17 +778,26 @@ class MainViewModel(
      * default) and returns the markdown to insert, path relative to the note.
      * Online only; failures surface in the error banner.
      */
-    suspend fun uploadImage(notePath: String, bytes: ByteArray, mimeType: String?, name: String): String? {
-        return try {
+    suspend fun uploadImage(notePath: String, bytes: ByteArray, mimeType: String?, name: String): String? =
+        upload(notePath) {
             val (body, mime) = withContext(Dispatchers.Default) { ImageLoader.prepareUpload(bytes, mimeType) }
                 ?: throw IllegalArgumentException("Unsupported image")
             val ext = mime.substringAfter('/').replace("jpeg", "jpg")
-            val stored = notes.uploadAttachment(body, mime, "image.$ext", ATTACHMENTS_FOLDER)
-            "![${name.substringBeforeLast('.').ifBlank { "image" }}](${noteRelative(notePath, stored)})"
+            val base = name.substringBeforeLast('.').ifBlank { "image" }
+            notes.uploadAttachment(body.toRequestBody(mime.toMediaType()), "$base.$ext", ATTACHMENTS_FOLDER)
+        }
+
+    /** Any other file, streamed as-is; same contract as [uploadImage]. */
+    suspend fun uploadFile(notePath: String, body: RequestBody, name: String): String? =
+        upload(notePath) { notes.uploadAttachment(body, name, ATTACHMENTS_FOLDER) }
+
+    private suspend fun upload(notePath: String, send: suspend () -> String): String? {
+        return try {
+            attachmentMarkdown(notePath, send())
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            _sync.update { it.copy(error = "Image upload failed: ${e.message}") }
+            _sync.update { it.copy(error = "Upload failed: ${e.message}") }
             null
         }
     }
