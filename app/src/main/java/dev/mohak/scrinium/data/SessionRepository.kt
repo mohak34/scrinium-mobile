@@ -24,7 +24,7 @@ class SessionRepository(
     private val api: ScriniumApi,
     private val reminders: Reminders,
     // Clears what the tasks widget shows; see AppContainer.loadedTasks.
-    private val onSignOut: () -> Unit
+    private val onSignOut: suspend () -> Unit
 ) {
     private val credentialManager = CredentialManager.create(context)
 
