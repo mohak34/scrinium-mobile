@@ -20,7 +20,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.debounce
-import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 
 class AppContainer(context: Context) {
@@ -36,7 +36,8 @@ class AppContainer(context: Context) {
     lateinit var sessionRepository: SessionRepository
     lateinit var api: ScriniumApi
 
-    // The last full task list TasksViewModel loaded, saved for the tasks widget.
+    // The last full task list TasksViewModel loaded, saved for the tasks
+    // widget. Sign-out sets it back to null, which clears the widget.
     val loadedTasks = MutableStateFlow<List<TaskDto>?>(null)
 
     val notesRepository: NotesRepository
@@ -52,7 +53,7 @@ class AppContainer(context: Context) {
             },
             cacheDir = appContext.cacheDir
         )
-        sessionRepository = SessionRepository(appContext, tokenStore, api, reminders)
+        sessionRepository = SessionRepository(appContext, tokenStore, api, reminders) { loadedTasks.value = null }
         notesRepository = NotesRepository(database.noteDao(), api)
         imageLoader = ImageLoader(api)
         syncEngine = SyncEngine(database.noteDao(), api) { tokenStore.token.value }
@@ -60,8 +61,14 @@ class AppContainer(context: Context) {
         scope.launch {
             database.noteDao().observeAll().debounce(1000).collect { NotesWidget.render(appContext, it) }
         }
+        // One collector orders saves and sign-out clears: a sign-out drops a
+        // save still waiting on the debounce. The startup null is skipped so a
+        // cold start keeps the last list; a list landing after sign-out is not kept.
         scope.launch(Dispatchers.IO) {
-            loadedTasks.filterNotNull().debounce(1000).collect { TasksWidget.save(appContext, it) }
+            loadedTasks.drop(1).debounce(1000).collect { tasks ->
+                if (tasks == null || tokenStore.token.value == null) TasksWidget.clear(appContext)
+                else TasksWidget.save(appContext, tasks)
+            }
         }
     }
 }
