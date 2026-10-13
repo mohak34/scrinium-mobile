@@ -11,6 +11,7 @@ import android.net.Uri
 import android.view.View
 import android.widget.RemoteViews
 import androidx.compose.ui.graphics.toArgb
+import androidx.core.widget.RemoteViewsCompat
 import dev.mohak.scrinium.MainActivity
 import dev.mohak.scrinium.R
 import dev.mohak.scrinium.data.remote.TaskDto
@@ -38,7 +39,6 @@ import java.util.Date
  * while the app is closed; it fires when the phone next wakes up anyway.
  */
 object TasksWidget {
-    private const val MAX_ROWS = 14
     private const val FILE = "tasks_widget.json"
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -75,24 +75,27 @@ object TasksWidget {
             open(context, Uri.parse("scrinium:new-task")) { putExtra(MainActivity.EXTRA_NEW_TASK, true) }
         )
 
-        views.removeAllViews(R.id.widget_list)
+        // Only a collection view scrolls in a widget, so the rows go in a
+        // ListView; a row tap fills its task id into the shared template.
+        views.setPendingIntentTemplate(R.id.widget_list, rowTemplate(context))
         val sections = agenda(tasks, now)
-        var rows = 0
-        for (section in sections) {
-            if (rows >= MAX_ROWS) break
+        val rows = sections.flatMap { section ->
             val header = RemoteViews(context.packageName, R.layout.widget_task_section)
             header.setTextViewText(R.id.section, section.bucket.label)
-            if (section.bucket == Bucket.Overdue) header.setTextColor(R.id.section, RED)
-            views.addView(R.id.widget_list, header)
-            for (task in section.rows.take(MAX_ROWS - rows)) {
-                views.addView(R.id.widget_list, row(context, task, section.bucket, now))
-                rows++
-            }
+            header.setTextColor(R.id.section, if (section.bucket == Bucket.Overdue) RED else DIM)
+            listOf(header) + section.rows.map { row(context, it, section.bucket, now) }
         }
+        val items = RemoteViewsCompat.RemoteCollectionItems.Builder().setViewTypeCount(2)
+        rows.forEachIndexed { i, row -> items.addItem(i.toLong(), row) }
+        val list = items.build()
+
         views.setViewVisibility(R.id.widget_empty, if (sections.isEmpty()) View.VISIBLE else View.GONE)
         views.setTextViewText(R.id.widget_inbox_count, tasks.count { it.status == TaskStatus.Inbox.key }.toString())
         views.setTextViewText(R.id.widget_stamp, snap?.let { stamp(it.savedAt, now) } ?: "")
-        manager.updateAppWidget(ids, views)
+        for (id in ids) {
+            RemoteViewsCompat.setRemoteAdapter(context, views, id, R.id.widget_list, list)
+            manager.updateAppWidget(id, views)
+        }
         scheduleMidnight(context, ids)
     }
 
@@ -107,13 +110,19 @@ object TasksWidget {
         if (area != null) row.setInt(R.id.row_dot, "setColorFilter", area.color.toArgb())
         row.setViewVisibility(R.id.row_dot, if (area != null) View.VISIBLE else View.INVISIBLE)
         row.setTextViewText(R.id.row_meta, rowMeta(task.dueAt!!, bucket, now))
-        if (bucket == Bucket.Overdue) row.setTextColor(R.id.row_meta, RED)
-        row.setOnClickPendingIntent(
-            R.id.row,
-            open(context, Uri.fromParts("task", task.id, null)) { putExtra(MainActivity.EXTRA_TASK_ID, task.id) }
-        )
+        row.setTextColor(R.id.row_meta, if (bucket == Bucket.Overdue) RED else DIM)
+        row.setOnClickFillInIntent(R.id.row, Intent().putExtra(MainActivity.EXTRA_TASK_ID, task.id))
         return row
     }
+
+    // Mutable so each row can fill in its task id; explicit, so nothing else can claim it.
+    private fun rowTemplate(context: Context): PendingIntent = PendingIntent.getActivity(
+        context,
+        0,
+        Intent(context, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+        PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+    )
 
     private fun load(context: Context): Snapshot? = runCatching {
         json.decodeFromString<Snapshot>(File(context.filesDir, FILE).readText())
@@ -140,7 +149,7 @@ object TasksWidget {
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
     )
 
-    // Distinct data per target keeps each row's PendingIntent separate.
+    // Distinct data per target keeps each PendingIntent separate.
     private fun open(context: Context, data: Uri, extras: Intent.() -> Unit): PendingIntent =
         PendingIntent.getActivity(
             context,
@@ -152,7 +161,9 @@ object TasksWidget {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
+    // Every row sets its colors: the list reuses row views, so a color set once sticks.
     private const val RED = 0xFFFF7A85.toInt()
+    private const val DIM = 0xFF6C6965.toInt()
 }
 
 enum class Bucket(val label: String) { Overdue("Overdue"), Today("Today"), Tomorrow("Tomorrow"), Week("This week") }
