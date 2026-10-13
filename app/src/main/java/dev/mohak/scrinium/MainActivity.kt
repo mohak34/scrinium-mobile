@@ -37,7 +37,7 @@ import dev.mohak.scrinium.ui.screens.SettingsScreen
 import dev.mohak.scrinium.ui.screens.TaskDetailScreen
 import dev.mohak.scrinium.ui.screens.TasksScreen
 import dev.mohak.scrinium.ui.screens.TagsScreen
-import dev.mohak.scrinium.ui.screens.TrashScreen
+import dev.mohak.scrinium.ui.screens.BinsScreen
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 
@@ -140,7 +140,7 @@ private fun AppScreen(vm: MainViewModel, tasksVm: TasksViewModel, screen: Screen
             Screen.Search -> vm.closeSearch()
             Screen.Settings -> vm.closeSettings()
             Screen.Tags -> vm.closeTags()
-            Screen.Trash -> vm.closeTrash()
+            is Screen.Bins -> vm.closeBins()
             Screen.Tasks, Screen.Board, Screen.Calendar -> vm.openTab(Screen.Notes)
             Screen.Notes -> Unit
         }
@@ -151,7 +151,7 @@ private fun AppScreen(vm: MainViewModel, tasksVm: TasksViewModel, screen: Screen
         Screen.Search -> SearchScreen(vm, tasksVm)
         Screen.Settings -> SettingsScreen(vm)
         Screen.Tags -> TagsScreen(vm)
-        Screen.Trash -> TrashScreen(vm)
+        is Screen.Bins -> BinsScreen(vm, screen.tab)
         Screen.Tasks -> TasksScreen(tasksVm)
         Screen.Board -> BoardScreen(tasksVm)
         Screen.Calendar -> CalendarScreen(tasksVm)

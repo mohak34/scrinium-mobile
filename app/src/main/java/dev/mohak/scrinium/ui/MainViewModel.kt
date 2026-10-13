@@ -13,7 +13,7 @@ import dev.mohak.scrinium.data.ImageLoader
 import dev.mohak.scrinium.data.ImageSource
 import dev.mohak.scrinium.data.NotesRepository
 import dev.mohak.scrinium.data.Prefs
-import dev.mohak.scrinium.data.noteRelative
+import dev.mohak.scrinium.data.attachmentMarkdown
 import dev.mohak.scrinium.data.resolveImage
 import dev.mohak.scrinium.data.SessionRepository
 import dev.mohak.scrinium.data.local.NoteEntity
@@ -23,6 +23,9 @@ import dev.mohak.scrinium.data.remote.SearchResult
 import dev.mohak.scrinium.data.remote.TagCount
 import dev.mohak.scrinium.data.remote.TaggedHit
 import dev.mohak.scrinium.data.remote.TrashEntry
+import dev.mohak.scrinium.data.remote.UnusedFile
+import dev.mohak.scrinium.data.remote.ReviewNote
+import dev.mohak.scrinium.data.remote.ArchiveEntry
 import dev.mohak.scrinium.di.AppContainer
 import dev.mohak.scrinium.reminders.Reminders
 import dev.mohak.scrinium.update.Updater
@@ -52,6 +55,9 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 
 sealed interface Screen {
     data object Notes : Screen
@@ -59,11 +65,14 @@ sealed interface Screen {
     data object Search : Screen
     data object Settings : Screen
     data object Tags : Screen
-    data object Trash : Screen
+    data class Bins(val tab: BinTab) : Screen
     data object Tasks : Screen
     data object Board : Screen
     data object Calendar : Screen
 }
+
+/** Tabs of the Bins screen, the web's Archive / Trash / Review / Unused view. */
+enum class BinTab(val label: String) { Archive("Archive"), Trash("Trash"), Review("Review"), Unused("Unused") }
 
 /** The five screens behind the bottom tabs, in tab order. */
 val TabScreens: List<Screen> = listOf(Screen.Notes, Screen.Tasks, Screen.Search, Screen.Board, Screen.Calendar)
@@ -212,7 +221,7 @@ class MainViewModel(
             }
             Screen.Search -> pushHistory(History.Search(searchQuery.value, _searchOrigin.value))
             Screen.Tags -> pushHistory(History.Tags(_selectedTag.value))
-            Screen.Tasks, Screen.Board, Screen.Calendar -> pushHistory(History.Tab(s))
+            Screen.Tasks, Screen.Board, Screen.Calendar, is Screen.Bins -> pushHistory(History.Tab(s))
             else -> Unit
         }
     }
@@ -221,6 +230,7 @@ class MainViewModel(
     // openNote used to drop text typed right before a wikilink tap.
     private suspend fun flushEditor() {
         val current = _editor.value ?: return
+        if (isArchiving(current.path)) return
         val stored = notes.get(current.path)
         if (stored != null && !stored.isDeleted && stored.content != current.text) {
             notes.saveLocally(current.path, current.text)
@@ -284,12 +294,14 @@ class MainViewModel(
         // editor's latest text: a rename or move can land while an edit is
         // still pending, and writing to the old path would revive it.
         viewModelScope.launch {
+            // Debounce before dropping nulls: resetting to null cancels a
+            // pending save (closing or archiving the note).
             editorEdits
-                .filterNotNull()
                 .debounce(500)
-                .distinctUntilChanged()
+                .filterNotNull()
                 .collect { (path, text) ->
                     val target = currentPath(path)
+                    if (isArchiving(target)) return@collect
                     val stored = notes.get(target)
                     if (stored?.isDeleted == true) return@collect
                     val latest = _editor.value?.takeIf { it.path == target }?.text ?: text
@@ -300,9 +312,8 @@ class MainViewModel(
         }
         viewModelScope.launch {
             titleSyncEdits
-                .filterNotNull()
                 .debounce(1500)
-                .distinctUntilChanged()
+                .filterNotNull()
                 .collect { (path, text) ->
                     val target = currentPath(path)
                     maybeSyncTitleToFilename(target, _editor.value?.takeIf { it.path == target }?.text ?: text)
@@ -344,6 +355,10 @@ class MainViewModel(
 
     fun openNote(path: String) {
         viewModelScope.launch {
+            if (isArchiving(path)) {
+                _sync.update { it.copy(error = "Note is being archived") }
+                return@launch
+            }
             flushEditor()
             if (_editor.value?.path == path) {
                 _screen.value = Screen.Editor(path)
@@ -521,33 +536,150 @@ class MainViewModel(
         }
     }
 
-    // Trash is server-side (deletes move there on sync). Read-only list +
-    // restore/purge calls, then a quiet sync to converge Room.
+    // Trash and archive are server-side (deletes move to trash on sync).
+    // Read-only lists plus server calls, then a quiet sync to converge Room.
     private val _trash = MutableStateFlow<List<TrashEntry>>(emptyList())
     val trash: StateFlow<List<TrashEntry>> = _trash.asStateFlow()
-    private val _trashLoading = MutableStateFlow(false)
-    val trashLoading: StateFlow<Boolean> = _trashLoading.asStateFlow()
+    private val _archive = MutableStateFlow<List<ArchiveEntry>>(emptyList())
+    val archive: StateFlow<List<ArchiveEntry>> = _archive.asStateFlow()
+    private val _review = MutableStateFlow<List<ReviewNote>>(emptyList())
+    val review: StateFlow<List<ReviewNote>> = _review.asStateFlow()
+    private val _unused = MutableStateFlow<List<UnusedFile>>(emptyList())
+    val unused: StateFlow<List<UnusedFile>> = _unused.asStateFlow()
+    private val _binsLoading = MutableStateFlow(false)
+    val binsLoading: StateFlow<Boolean> = _binsLoading.asStateFlow()
 
-    // Trash opens from Notes and from Settings; back returns there.
-    private var trashOrigin: Screen = Screen.Notes
+    // The path archivePath is moving, if any. Its notes can't be opened or
+    // saved meanwhile, or the final sync would push them back.
+    private var archiving: String? = null
+    private var archiveRunning = false
 
-    fun openTrash() {
-        trashOrigin = _screen.value
-        _screen.update { Screen.Trash }
-        refreshTrash()
+    private fun isArchiving(path: String) =
+        archiving?.let { path == it || path.startsWith("$it/") } == true
+
+    // Bins open from Notes, Settings and task links; back returns there.
+    private var binsOrigin: Screen = Screen.Notes
+
+    fun openBins(tab: BinTab) {
+        if (_screen.value !is Screen.Bins) binsOrigin = _screen.value
+        _screen.value = Screen.Bins(tab)
+        refreshBin(tab)
     }
 
-    fun closeTrash() = _screen.update { trashOrigin }
+    fun closeBins() = _screen.update { binsOrigin }
 
-    fun refreshTrash() {
-        viewModelScope.launch(Dispatchers.IO) {
-            _trashLoading.value = true
+    fun refreshTrash() = refreshBin(BinTab.Trash)
+
+    fun refreshBin(tab: BinTab) {
+        viewModelScope.launch {
+            _binsLoading.value = true
             try {
-                _trash.value = notes.fetchTrash()
+                // Review and Unused are computed from server note content, so
+                // they only load once every local edit is pushed; otherwise a
+                // fresh link would not count.
+                if (tab == BinTab.Review || tab == BinTab.Unused) {
+                    // A stale list could trash something a new link uses.
+                    if (tab == BinTab.Review) _review.value = emptyList() else _unused.value = emptyList()
+                    flushEditor()
+                    runSync()
+                    if (notes.observeAll().first().any { it.localModifiedAt != null }) {
+                        throw IllegalStateException("some edits are not synced yet")
+                    }
+                }
+                when (tab) {
+                    BinTab.Archive -> _archive.value = notes.fetchArchive()
+                    BinTab.Trash -> _trash.value = notes.fetchTrash()
+                    // Pins are a phone preference, so the server can't skip them.
+                    BinTab.Review -> _review.value = notes.fetchReview(REVIEW_DAYS).filterNot { it.path in prefs.pinned.value }
+                    BinTab.Unused -> _unused.value = notes.fetchUnused()
+                }
             } catch (e: Exception) {
-                _sync.update { it.copy(error = "Couldn't load trash: ${e.message}") }
+                _sync.update { it.copy(error = "Couldn't load ${tab.label.lowercase()}: ${e.message}") }
             } finally {
-                _trashLoading.value = false
+                _binsLoading.value = false
+            }
+        }
+    }
+
+    /**
+     * Archives a note or folder on the server. The editor closes first so
+     * nothing is typed mid-archive, and the archive only goes ahead once a
+     * sync left no unsynced note under the path. A second sync then drops
+     * the archived notes from Room. Online only.
+     */
+    fun archivePath(path: String) {
+        if (archiveRunning) {
+            _sync.update { it.copy(error = "Another archive is still running") }
+            return
+        }
+        archiveRunning = true
+        viewModelScope.launch {
+            try {
+                flushEditor()
+                val target = currentPath(path)
+                val under = { p: String -> p == target || p.startsWith("$target/") }
+                archiving = target
+                if (_editor.value?.path?.let(under) == true) {
+                    _editor.value = null
+                    editorEdits.value = null
+                    titleSyncEdits.value = null
+                    if (_screen.value is Screen.Editor) _screen.value = Screen.Notes
+                }
+                runSync()
+                if (notes.observeAll().first().any { under(it.path) && it.localModifiedAt != null }) {
+                    throw IllegalStateException("some edits are not synced yet")
+                }
+                notes.archive(target)
+                prefs.setPinned(prefs.pinned.value.filterNotTo(mutableSetOf(), under))
+                prefs.setCollapsed(prefs.collapsed.value.filterNotTo(mutableSetOf(), under))
+                _review.update { list -> list.filterNot { under(it.path) } }
+                runSync()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _sync.update { it.copy(error = "Archive failed: ${e.message}") }
+            } finally {
+                archiving = null
+                archiveRunning = false
+            }
+        }
+    }
+
+    fun restoreArchived(entry: ArchiveEntry) {
+        viewModelScope.launch {
+            try {
+                notes.restoreArchive(entry.name)
+                _archive.update { list -> list.filterNot { it.name == entry.name } }
+                syncNow(force = true, quiet = true)
+            } catch (e: Exception) {
+                _sync.update { it.copy(error = "Restore failed: ${e.message}") }
+            }
+        }
+    }
+
+    fun trashArchived(entry: ArchiveEntry) {
+        viewModelScope.launch {
+            try {
+                notes.archiveToTrash(entry.name)
+                _archive.update { list -> list.filterNot { it.name == entry.name } }
+            } catch (e: Exception) {
+                _sync.update { it.copy(error = "Move to trash failed: ${e.message}") }
+            }
+        }
+    }
+
+    fun trashReviewNote(note: ReviewNote) {
+        _review.update { list -> list.filterNot { it.path == note.path } }
+        deleteNote(note.path)
+    }
+
+    fun trashUnused(file: UnusedFile) {
+        viewModelScope.launch {
+            try {
+                notes.trashRemote(file.path)
+                _unused.update { list -> list.filterNot { it.path == file.path } }
+            } catch (e: Exception) {
+                _sync.update { it.copy(error = "Move to trash failed: ${e.message}") }
             }
         }
     }
@@ -775,17 +907,26 @@ class MainViewModel(
      * default) and returns the markdown to insert, path relative to the note.
      * Online only; failures surface in the error banner.
      */
-    suspend fun uploadImage(notePath: String, bytes: ByteArray, mimeType: String?, name: String): String? {
-        return try {
+    suspend fun uploadImage(notePath: String, bytes: ByteArray, mimeType: String?, name: String): String? =
+        upload(notePath) {
             val (body, mime) = withContext(Dispatchers.Default) { ImageLoader.prepareUpload(bytes, mimeType) }
                 ?: throw IllegalArgumentException("Unsupported image")
             val ext = mime.substringAfter('/').replace("jpeg", "jpg")
-            val stored = notes.uploadAttachment(body, mime, "image.$ext", ATTACHMENTS_FOLDER)
-            "![${name.substringBeforeLast('.').ifBlank { "image" }}](${noteRelative(notePath, stored)})"
+            val base = name.substringBeforeLast('.').ifBlank { "image" }
+            notes.uploadAttachment(body.toRequestBody(mime.toMediaType()), "$base.$ext", ATTACHMENTS_FOLDER)
+        }
+
+    /** Any other file, streamed as-is; same contract as [uploadImage]. */
+    suspend fun uploadFile(notePath: String, body: RequestBody, name: String): String? =
+        upload(notePath) { notes.uploadAttachment(body, name, ATTACHMENTS_FOLDER) }
+
+    private suspend fun upload(notePath: String, send: suspend () -> String): String? {
+        return try {
+            attachmentMarkdown(notePath, send())
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            _sync.update { it.copy(error = "Image upload failed: ${e.message}") }
+            _sync.update { it.copy(error = "Upload failed: ${e.message}") }
             null
         }
     }
@@ -964,17 +1105,29 @@ class MainViewModel(
             if (last != null && System.currentTimeMillis() - last < 30_000) return
         }
         viewModelScope.launch {
-            _sync.update { it.copy(syncing = true, error = null) }
             try {
-                val report = syncEngine.syncOnce()
-                session.updateLastSyncAt(report.completedAt)
-                _sync.update { it.copy(syncing = false, lastSyncAt = report.completedAt, report = report) }
+                runSync()
             } catch (e: Exception) {
                 // Automatic syncs stay quiet: offline just leaves the unsynced
                 // count visible until the next attempt. Only user-triggered
                 // syncs raise the error banner.
-                _sync.update { it.copy(syncing = false, error = if (quiet) null else e.message ?: "Sync failed") }
+                _sync.update { it.copy(error = if (quiet) null else e.message ?: "Sync failed") }
             }
+        }
+    }
+
+    // One sync pass, after any running one finishes; throws on failure.
+    // Main-thread only, so the wait and the flag flip can't interleave.
+    private suspend fun runSync() {
+        _sync.first { !it.syncing }
+        _sync.update { it.copy(syncing = true, error = null) }
+        try {
+            val report = syncEngine.syncOnce()
+            session.updateLastSyncAt(report.completedAt)
+            _sync.update { it.copy(syncing = false, lastSyncAt = report.completedAt, report = report) }
+        } catch (e: Exception) {
+            _sync.update { it.copy(syncing = false) }
+            throw e
         }
     }
 
@@ -1004,7 +1157,9 @@ class MainViewModel(
     fun loadDevices() {
         viewModelScope.launch {
             try {
-                _devices.value = session.fetchDevices().sortedByDescending { it.lastUsedAt ?: it.createdAt }
+                _devices.value = session.fetchDevices()
+                    .filter { it.label == null }
+                    .sortedByDescending { it.lastUsedAt ?: it.createdAt }
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Couldn't load devices: ${e.message}") }
             }
@@ -1050,6 +1205,8 @@ class MainViewModel(
         private const val AUTO_PUSH_DELAY_MS = 5_000L
         private const val FOREGROUND_PULL_MS = 60_000L
         private const val ATTACHMENTS_FOLDER = "attachments"
+        // Review lists notes untouched this long, the web default.
+        private const val REVIEW_DAYS = 60
 
         fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
             initializer {

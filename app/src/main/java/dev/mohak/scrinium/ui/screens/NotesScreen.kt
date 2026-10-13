@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.mohak.scrinium.R
 import dev.mohak.scrinium.data.local.NoteEntity
+import dev.mohak.scrinium.ui.BinTab
 import dev.mohak.scrinium.ui.ConfirmDialog
 import dev.mohak.scrinium.ui.Divider
 import dev.mohak.scrinium.ui.EmptyState
@@ -243,7 +244,7 @@ fun NotesScreen(vm: MainViewModel) {
                     MenuRow(R.drawable.ms_create_new_folder, "New folder", { overflow = false; newFolder = true })
                     MenuRow(R.drawable.ms_unfold_less, "Collapse all", { overflow = false; vm.collapseAll() })
                     Divider()
-                    MenuRow(R.drawable.ms_delete, "Trash", { overflow = false; vm.openTrash() })
+                    MenuRow(R.drawable.ms_inventory_2, "Archive and trash", { overflow = false; vm.openBins(BinTab.Archive) })
                     MenuRow(R.drawable.ms_settings, "Settings", { overflow = false; vm.openSettings() })
                 }
             }
@@ -400,6 +401,7 @@ fun NotesScreen(vm: MainViewModel) {
             onMove = { actions.move = note.path },
             onShare = { actions.share = note.path },
             onExport = { exportPdf(context, scope, vm, note.path, note.content) },
+            onArchive = { vm.archivePath(note.path) },
             onDelete = { actions.delete = note.path }
         )
     }
@@ -415,6 +417,7 @@ fun NotesScreen(vm: MainViewModel) {
             MenuRow(if (isPinned) R.drawable.ms_star_fill else R.drawable.ms_star, if (isPinned) "Unpin" else "Pin", act { vm.togglePin(folder) }, tint = if (isPinned) Sc.accent else null)
             MenuRow(R.drawable.ms_edit, "Rename", act { renameFolderTarget = folder })
             MenuRow(R.drawable.ms_drive_file_move, "Move to folder", act { moveFolderTarget = folder })
+            MenuRow(R.drawable.ms_archive, "Archive", act { vm.archivePath(folder) })
             MenuRow(R.drawable.ms_delete, "Delete", act { deleteFolderTarget = folder }, danger = true)
         }
     }

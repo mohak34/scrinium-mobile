@@ -68,15 +68,31 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
 - `POST /api/notes/<path>` → `{ folder: true }` creates a folder
 - `PATCH /api/notes/<path>` → `{ newPath }` rename/move
 - `DELETE /api/notes/<path>` → move to trash (recovers to vault `.trash`)
+- `GET /api/trash`, `POST /api/trash/restore`, `DELETE /api/trash` → the
+  server trash. `GET /api/archive` → `[{ name, originalPath, archivedAt,
+  isDir, notes }]`; `POST /api/archive { path }` archives a note or folder
+  into `.archive`; `POST /api/archive/restore { name }` and
+  `POST /api/archive/trash { name }` move it back or on to the trash.
+  `GET /api/archive/review?days=` lists stale notes nothing links to,
+  `GET /api/archive/unused` vault files no note mentions. The Bins screen
+  shows all four. Archiving is a server move: the phone pushes pending
+  edits first, then syncs so the notes leave Room. Task links follow notes
+  into `.archive/` and `.trash/`; the phone never opens those paths as notes.
 - `GET /api/tree` → nested vault listing
 - `GET /api/search?q=` → `[{ path, title, snippet }]` (FTS5)
 - `GET /api/tasks` (`?note=<path>` for one note's tasks), `POST /api/tasks`,
   `PATCH|DELETE /api/tasks/<id>`, `GET|POST|DELETE /api/tasks/<id>/links`.
   Rows are snake_case. Tasks live in the server's SQLite, not the vault, so
   they are online-only: `TasksViewModel` calls the API directly, no Room.
-- `GET|DELETE /api/tokens` → signed-in devices `[{ token_hash, created_at,
-  last_used_at }]`; DELETE body `{ token_hash }` revokes one. The phone
-  finds its own row by hashing its token.
+- `GET /api/projects` → `[{ path, area, created_at }]`, vault folders the
+  web registered as project boards. A task's `project` is that path;
+  subtasks follow their root's project. A project's Inbox is its backlog:
+  the main list and board leave it out (`onMainBoard`). Projects are
+  created and removed on the web; the phone only picks them.
+- `GET|DELETE /api/tokens` → API tokens `[{ token_hash, created_at,
+  last_used_at, label }]`; DELETE body `{ token_hash }` revokes one.
+  Settings lists only phones (`label` null; agent tokens are labeled). The
+  phone finds its own row by hashing its token.
 - `GET /api/calendar/events?from=&to=` (epoch ms, at most 93 days) →
   `{ events: [{ id, title, start, end, allDay }], needsConnect? }`, the
   Google Calendar linked by the web sign-in.
@@ -84,9 +100,11 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
   release of `BuildConfig.UPDATE_REPO` (the repo CI built from; empty in
   local builds, which skip the check) and installs its APK via
   PackageInstaller (`update/Updater.kt`).
-- `GET /api/assets/<path>` → image bytes; `POST /api/attachments` (multipart
-  `file` + `folder`) → `{ path }`. Phone uploads go to `attachments/`, the
-  web default, and the note gets a note-relative `![name](path)`.
+- `GET /api/assets/<path>` → file bytes; `POST /api/attachments?name=&folder=`
+  with the file as the raw body (any type, a Content-Type is required, max
+  100 MB) → `{ path }`. Phone uploads go to `attachments/`, the web
+  default, and the note gets a note-relative `![name](path)` for images or
+  `[file](path)` for anything else.
 
 Paths are URL-encoded per segment. Backlinks are computed on the phone from
 Room (`ui/Backlinks.kt`, a port of the web's `wikilinks.ts`), not fetched.

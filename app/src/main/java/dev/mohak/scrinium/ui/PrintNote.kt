@@ -59,6 +59,7 @@ fun noteHtml(title: String, markdown: String, imageSrc: (String) -> String?): St
         val bullet = Regex("^[-*+]\\s+(\\[[ xX]]\\s+)?(.*)$").matchEntire(t)
         val ordered = Regex("^\\d+[.)]\\s+(.*)$").matchEntire(t)
         val image = printImageRe.matchEntire(t)
+        val table = if ('|' in t) parseTable(lines, i) else null
         when {
             t.startsWith("```") || t.startsWith("~~~") -> {
                 flushPara(); closeList()
@@ -67,6 +68,26 @@ fun noteHtml(title: String, markdown: String, imageSrc: (String) -> String?): St
                 i++
                 while (i < lines.size && !lines[i].trim().startsWith(fence)) code += lines[i++]
                 body.append("<pre><code>").append(esc(code.joinToString("\n"))).append("</code></pre>\n")
+            }
+            table != null -> {
+                flushPara(); closeList()
+                val (tbl, end) = table
+                body.append("<table>\n")
+                tbl.rows.forEachIndexed { r, row ->
+                    val tag = if (r == 0) "th" else "td"
+                    body.append("<tr>")
+                    row.forEachIndexed { c, cell ->
+                        val align = when (tbl.align[c]) {
+                            ColumnAlign.Start -> ""
+                            ColumnAlign.Center -> " style=\"text-align:center\""
+                            ColumnAlign.End -> " style=\"text-align:right\""
+                        }
+                        body.append("<$tag$align>").append(inlineHtml(cell)).append("</$tag>")
+                    }
+                    body.append("</tr>\n")
+                }
+                body.append("</table>\n")
+                i = end - 1
             }
             heading != null -> {
                 flushPara(); closeList()
@@ -126,6 +147,9 @@ pre{background:#f3f3f3;padding:8px;white-space:pre-wrap;font-size:9pt}
 code{font-family:monospace}
 blockquote{border-left:3px solid #bbb;margin:0;padding-left:12px;color:#444}
 img{max-width:100%}
+table{border-collapse:collapse;margin:8px 0}
+th,td{border:1px solid #bbb;padding:4px 8px;text-align:left;vertical-align:top}
+th{background:#f3f3f3}
 </style></head><body>
 $body</body></html>"""
 }

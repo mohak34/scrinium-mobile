@@ -23,10 +23,10 @@ enum class TaskStatus(val key: String, val label: String) {
 }
 
 enum class TaskArea(val key: String, val label: String, val color: Color) {
-    College("college", "College", Color(0xFF8FB3FF)),
+    Uni("uni", "Uni", Color(0xFF8FB3FF)),
     Learning("learning", "Learning", Color(0xFFC4A8FF)),
     Work("work", "Work", Color(0xFFF0A35E)),
-    Life("life", "Life", Color(0xFFD6C3A1));
+    Quotidian("quotidian", "Quotidian", Color(0xFFD6C3A1));
 
     companion object {
         fun of(key: String?): TaskArea? = entries.firstOrNull { it.key == key }
@@ -50,6 +50,12 @@ const val DOING_LIMIT = 3
 
 val TaskDto.statusEnum: TaskStatus get() = TaskStatus.of(status)
 val TaskDto.isDone: Boolean get() = status == TaskStatus.Done.key
+
+// A project's Inbox is its backlog and stays on the project board; the
+// main list and board show a project task only once it is planned.
+val TaskDto.onMainBoard: Boolean get() = project == null || status != TaskStatus.Inbox.key
+
+fun projectName(path: String): String = path.substringAfterLast('/')
 
 fun startOfToday(): Long = startOfDay(System.currentTimeMillis())
 

@@ -10,7 +10,6 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import okhttp3.Cache
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
@@ -23,11 +22,9 @@ import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.HTTP
-import retrofit2.http.Multipart
 import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.PUT
-import retrofit2.http.Part
 import retrofit2.http.Path
 import retrofit2.http.Query
 
@@ -64,6 +61,30 @@ data class TrashEntry(
 @Serializable
 data class RestoreRequest(val trashName: String)
 
+// One archived note or folder. [notes] are its notes by original path.
+@Serializable
+data class ArchiveEntry(
+    val name: String,
+    val originalPath: String,
+    val archivedAt: Long = 0L,
+    val isDir: Boolean = false,
+    val notes: List<String> = emptyList()
+)
+
+// A note that looks abandoned: old, and nothing links or shares it.
+@Serializable
+data class ReviewNote(val path: String, val title: String, val updatedAt: Long = 0L, val words: Int = 0)
+
+// A vault file (not a note) that no note mentions.
+@Serializable
+data class UnusedFile(val path: String, val size: Long = 0L, val modifiedAt: Long = 0L)
+
+@Serializable
+data class ArchiveRequest(val path: String)
+
+@Serializable
+data class ArchiveNameRequest(val name: String)
+
 @Serializable
 data class RestoreResponse(val ok: Boolean = true, val path: String = "")
 
@@ -91,6 +112,8 @@ data class TaskDto(
     @SerialName("waiting_on") val waitingOn: String? = null,
     @SerialName("waiting_since") val waitingSince: Long? = null,
     @SerialName("parent_id") val parentId: String? = null,
+    // Folder path of the project board the task belongs to.
+    val project: String? = null,
     @SerialName("due_at") val dueAt: Long? = null,
     @SerialName("remind_at") val remindAt: Long? = null,
     @SerialName("link_count") val linkCount: Int = 0,
@@ -107,7 +130,16 @@ data class NewTaskRequest(
     val status: String,
     val area: String?,
     @SerialName("due_at") val dueAt: Long?,
-    @SerialName("parent_id") val parentId: String?
+    @SerialName("parent_id") val parentId: String?,
+    val project: String?
+)
+
+// A vault folder registered as a project board on the web.
+@Serializable
+data class ProjectDto(
+    val path: String,
+    val area: String? = null,
+    @SerialName("created_at") val createdAt: Long = 0L
 )
 
 @Serializable
@@ -121,7 +153,9 @@ data class AttachmentResponse(val path: String)
 data class ApiTokenDto(
     @SerialName("token_hash") val tokenHash: String,
     @SerialName("created_at") val createdAt: Long,
-    @SerialName("last_used_at") val lastUsedAt: Long? = null
+    @SerialName("last_used_at") val lastUsedAt: Long? = null,
+    // Set for agent (MCP) tokens; phones have none.
+    val label: String? = null
 )
 
 @Serializable
@@ -171,6 +205,24 @@ private interface ScriniumService {
     @GET("api/trash")
     suspend fun trash(): List<TrashEntry>
 
+    @GET("api/archive")
+    suspend fun archive(): List<ArchiveEntry>
+
+    @POST("api/archive")
+    suspend fun archivePath(@Body body: ArchiveRequest): ArchiveEntry
+
+    @POST("api/archive/restore")
+    suspend fun restoreArchive(@Body body: ArchiveNameRequest): RestoreResponse
+
+    @POST("api/archive/trash")
+    suspend fun archiveToTrash(@Body body: ArchiveNameRequest): Response<ResponseBody>
+
+    @GET("api/archive/review")
+    suspend fun review(@Query("days") days: Int): List<ReviewNote>
+
+    @GET("api/archive/unused")
+    suspend fun unused(): List<UnusedFile>
+
     @POST("api/trash/restore")
     suspend fun restoreTrash(@Body body: RestoreRequest): RestoreResponse
 
@@ -188,6 +240,9 @@ private interface ScriniumService {
 
     @DELETE("api/shares/{id}")
     suspend fun deleteShare(@Path("id") id: String): Response<ResponseBody>
+
+    @GET("api/projects")
+    suspend fun projects(): List<ProjectDto>
 
     @GET("api/tasks")
     suspend fun tasks(@Query("note") note: String? = null): List<TaskDto>
@@ -220,11 +275,12 @@ private interface ScriniumService {
     @GET("api/calendar/events")
     suspend fun calendarEvents(@Query("from") from: Long, @Query("to") to: Long): CalendarResponse
 
-    @Multipart
+    // Raw body, not multipart: the server streams it straight to disk.
     @POST("api/attachments")
     suspend fun uploadAttachment(
-        @Part file: MultipartBody.Part,
-        @Part("folder") folder: RequestBody
+        @Query("name") name: String,
+        @Query("folder") folder: String,
+        @Body body: RequestBody
     ): AttachmentResponse
 }
 
@@ -241,6 +297,7 @@ interface TasksApi {
     suspend fun addTaskLink(id: String, notePath: String): List<String>
     suspend fun removeTaskLink(id: String, notePath: String): List<String>
     suspend fun fetchCalendarEvents(from: Long, to: Long): CalendarResponse
+    suspend fun fetchProjects(): List<ProjectDto>
 }
 
 class ScriniumApi(
@@ -299,6 +356,23 @@ class ScriniumApi(
 
     suspend fun fetchTrash(): List<TrashEntry> = service.trash()
 
+    suspend fun fetchArchive(): List<ArchiveEntry> = service.archive()
+
+    suspend fun archive(path: String) {
+        service.archivePath(ArchiveRequest(path))
+    }
+
+    suspend fun restoreArchive(name: String): String = service.restoreArchive(ArchiveNameRequest(name)).path
+
+    suspend fun archiveToTrash(name: String) {
+        val res = service.archiveToTrash(ArchiveNameRequest(name))
+        if (!res.isSuccessful) throw ApiException(res.code())
+    }
+
+    suspend fun fetchReview(days: Int): List<ReviewNote> = service.review(days)
+
+    suspend fun fetchUnused(): List<UnusedFile> = service.unused()
+
     suspend fun restoreTrash(trashName: String): String =
         service.restoreTrash(RestoreRequest(trashName)).path
 
@@ -321,6 +395,8 @@ class ScriniumApi(
         val res = service.deleteShare(id)
         if (!res.isSuccessful) throw ApiException(res.code())
     }
+
+    override suspend fun fetchProjects(): List<ProjectDto> = service.projects()
 
     override suspend fun fetchTasks(): List<TaskDto> = service.tasks()
 
@@ -352,15 +428,10 @@ class ScriniumApi(
         }
     }
 
-    // Returns the vault-relative path the server stored the image at.
-    suspend fun uploadAttachment(bytes: ByteArray, mimeType: String, fileName: String, folder: String): String {
-        val part = MultipartBody.Part.createFormData(
-            "file",
-            fileName,
-            bytes.toRequestBody(mimeType.toMediaType())
-        )
-        return service.uploadAttachment(part, folder.toRequestBody(textMediaType)).path
-    }
+    // Returns the vault-relative path the server stored the file at. The
+    // body needs a Content-Type: the server drops bodies without one.
+    suspend fun uploadAttachment(body: RequestBody, fileName: String, folder: String): String =
+        service.uploadAttachment(fileName, folder, body).path
 
     suspend fun fetchTokens(): List<ApiTokenDto> = service.tokens()
 

@@ -4,6 +4,7 @@ import dev.mohak.scrinium.data.local.NoteDao
 import dev.mohak.scrinium.data.local.NoteEntity
 import dev.mohak.scrinium.data.remote.ScriniumApi
 import kotlinx.coroutines.flow.Flow
+import okhttp3.RequestBody
 
 // One path segment cleaned the same way the web client sanitizes titles for
 // filenames. Null means "nothing usable left".
@@ -106,6 +107,21 @@ class NotesRepository(
 
     suspend fun emptyTrash() = api.emptyTrash()
 
+    suspend fun fetchArchive() = api.fetchArchive()
+
+    suspend fun archive(path: String) = api.archive(path)
+
+    suspend fun restoreArchive(name: String) = api.restoreArchive(name)
+
+    suspend fun archiveToTrash(name: String) = api.archiveToTrash(name)
+
+    suspend fun fetchReview(days: Int) = api.fetchReview(days)
+
+    suspend fun fetchUnused() = api.fetchUnused()
+
+    // Trashes any vault file on the server; for files Room doesn't hold.
+    suspend fun trashRemote(path: String) = api.deleteNote(path)
+
     suspend fun fetchShares(path: String) = api.fetchShares(path)
 
     suspend fun createShare(path: String, password: String?) = api.createShare(path, password)
@@ -114,8 +130,8 @@ class NotesRepository(
 
     suspend fun fetchAsset(path: String): ByteArray = api.fetchAsset(path)
 
-    suspend fun uploadAttachment(bytes: ByteArray, mimeType: String, fileName: String, folder: String) =
-        api.uploadAttachment(bytes, mimeType, fileName, folder)
+    suspend fun uploadAttachment(body: RequestBody, fileName: String, folder: String) =
+        api.uploadAttachment(body, fileName, folder)
 
     /**
      * Pulls a server-side note into Room with its manifest hash, so the next

@@ -57,6 +57,16 @@ fun noteRelative(notePath: String, vaultRel: String): String {
     return (List(from.size - i) { ".." } + to.drop(i)).joinToString("/").ifEmpty { vaultRel }
 }
 
+/** Files that render as images, matching the web's isImagePath. */
+fun isImagePath(path: String) = Regex("""\.(png|jpe?g|gif|webp|avif)$""", RegexOption.IGNORE_CASE).containsMatchIn(path)
+
+/** What to put in a note for an uploaded file: an embed for images, a link otherwise. */
+fun attachmentMarkdown(notePath: String, vaultRel: String): String {
+    val rel = noteRelative(notePath, vaultRel)
+    val file = vaultRel.substringAfterLast('/')
+    return if (isImagePath(vaultRel)) "![${file.substringBeforeLast('.')}]($rel)" else "[$file]($rel)"
+}
+
 /**
  * Loads note images into memory-bounded bitmaps. Vault images go through the
  * authed (disk-cached) asset client; external ones through a plain client so
@@ -97,8 +107,8 @@ class ImageLoader(private val api: ScriniumApi) {
         }
 
         /**
-         * The server takes png/jpeg/gif/webp up to 10 MB. Anything else
-         * (HEIC from the camera, huge photos) is re-encoded as JPEG.
+         * Browsers render png/jpeg/gif/webp; anything else (HEIC from the
+         * camera) and photos over 10 MB are re-encoded as JPEG.
          * Returns bytes and their mime type, or null if it can't be decoded.
          */
         fun prepareUpload(bytes: ByteArray, mimeType: String?): Pair<ByteArray, String>? {
