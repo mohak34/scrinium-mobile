@@ -145,8 +145,8 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
         else completions(field.text, field.selection.start, state.path, notes.map { it.path }, tags)
     }
 
-    // Images are downscaled/re-encoded in memory; other files stream from
-    // the provider. Either way the markdown lands at the cursor.
+    // Raster images are downscaled/re-encoded in memory; other files
+    // (SVG included, which can't be decoded) stream from the provider. Either way the markdown lands at the cursor.
     fun attach(uri: Uri) {
         val notePath = state.path
         val editorId = state.id
@@ -161,7 +161,7 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                         ?.use { c -> if (c.moveToFirst()) c.getString(0) to (if (c.isNull(1)) -1L else c.getLong(1)) else null }
                 } ?: ("file" to -1L)
                 val mime = resolver.getType(uri)
-                if (mime?.startsWith("image/") == true) {
+                if (mime?.startsWith("image/") == true && mime != "image/svg+xml") {
                     val bytes = withContext(Dispatchers.IO) { resolver.openInputStream(uri)?.use { it.readBytes() } }
                         ?: throw IOException("no data")
                     vm.uploadImage(notePath, bytes, mime, name)
