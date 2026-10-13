@@ -19,7 +19,9 @@ rules below are the decisions that keep it small and battery-friendly.
    exact `AlarmManager` alarm (`reminders/Reminders.kt`) that wakes the app
    once to post a notification, re-armed after reboot from local storage.
    The alarms are rebuilt from the task list whenever the app loads it; no
-   network happens outside the app.
+   network happens outside the app. The tasks widget (`widget/TasksWidget.kt`)
+   draws that same last-loaded list from a file, plus one non-waking alarm
+   to redraw it after midnight.
 2. **Manifest-first sync.** Sync fetches `GET /api/notes/manifest` (metadata
    only — path, mtime, size-fingerprint), diffs against Room, and only then
    fetches/pushes the notes that actually changed. Never download the whole

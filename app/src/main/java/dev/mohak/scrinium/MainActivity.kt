@@ -45,9 +45,12 @@ class MainActivity : ComponentActivity() {
     companion object {
         // Set by a reminder notification: open that task on launch.
         const val EXTRA_TASK_ID = "taskId"
-        // Set by the home screen widget: open that note, or start a new one.
+        // Set by the home screen widgets: open that note, or start a new one;
+        // open the Tasks tab, or start a new task there.
         const val EXTRA_NOTE_PATH = "notePath"
         const val EXTRA_NEW_NOTE = "newNote"
+        const val EXTRA_OPEN_TASKS = "openTasks"
+        const val EXTRA_NEW_TASK = "newTask"
     }
 
     private val container by lazy { (application as ScriniumApplication).container }
@@ -95,7 +98,9 @@ class MainActivity : ComponentActivity() {
         val taskId = intent.getStringExtra(EXTRA_TASK_ID)
         val notePath = intent.getStringExtra(EXTRA_NOTE_PATH)
         val newNote = intent.getBooleanExtra(EXTRA_NEW_NOTE, false)
-        listOf(EXTRA_TASK_ID, EXTRA_NOTE_PATH, EXTRA_NEW_NOTE).forEach(intent::removeExtra)
+        val openTasks = intent.getBooleanExtra(EXTRA_OPEN_TASKS, false)
+        val newTask = intent.getBooleanExtra(EXTRA_NEW_TASK, false)
+        listOf(EXTRA_TASK_ID, EXTRA_NOTE_PATH, EXTRA_NEW_NOTE, EXTRA_OPEN_TASKS, EXTRA_NEW_TASK).forEach(intent::removeExtra)
         if (!vm.signedIn.value) return
         when {
             taskId != null -> tasksVm.openTask(taskId)
@@ -106,6 +111,11 @@ class MainActivity : ComponentActivity() {
             newNote -> {
                 tasksVm.closeTask()
                 vm.createNote()
+            }
+            openTasks || newTask -> {
+                tasksVm.closeTask()
+                vm.openTab(Screen.Tasks)
+                if (newTask) tasksVm.requestQuickAdd()
             }
         }
     }
