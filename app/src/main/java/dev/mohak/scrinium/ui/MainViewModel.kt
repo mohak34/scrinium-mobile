@@ -230,6 +230,7 @@ class MainViewModel(
     // openNote used to drop text typed right before a wikilink tap.
     private suspend fun flushEditor() {
         val current = _editor.value ?: return
+        if (isArchiving(current.path)) return
         val stored = notes.get(current.path)
         if (stored != null && !stored.isDeleted && stored.content != current.text) {
             notes.saveLocally(current.path, current.text)
@@ -298,9 +299,9 @@ class MainViewModel(
             editorEdits
                 .debounce(500)
                 .filterNotNull()
-                .distinctUntilChanged()
                 .collect { (path, text) ->
                     val target = currentPath(path)
+                    if (isArchiving(target)) return@collect
                     val stored = notes.get(target)
                     if (stored?.isDeleted == true) return@collect
                     val latest = _editor.value?.takeIf { it.path == target }?.text ?: text
@@ -313,7 +314,6 @@ class MainViewModel(
             titleSyncEdits
                 .debounce(1500)
                 .filterNotNull()
-                .distinctUntilChanged()
                 .collect { (path, text) ->
                     val target = currentPath(path)
                     maybeSyncTitleToFilename(target, _editor.value?.takeIf { it.path == target }?.text ?: text)
@@ -355,6 +355,10 @@ class MainViewModel(
 
     fun openNote(path: String) {
         viewModelScope.launch {
+            if (isArchiving(path)) {
+                _sync.update { it.copy(error = "Note is being archived") }
+                return@launch
+            }
             flushEditor()
             if (_editor.value?.path == path) {
                 _screen.value = Screen.Editor(path)
@@ -545,6 +549,13 @@ class MainViewModel(
     private val _binsLoading = MutableStateFlow(false)
     val binsLoading: StateFlow<Boolean> = _binsLoading.asStateFlow()
 
+    // The path archivePath is moving, if any. Its notes can't be opened or
+    // saved meanwhile, or the final sync would push them back.
+    private var archiving: String? = null
+
+    private fun isArchiving(path: String) =
+        archiving?.let { path == it || path.startsWith("$it/") } == true
+
     // Bins open from Notes, Settings and task links; back returns there.
     private var binsOrigin: Screen = Screen.Notes
 
@@ -563,10 +574,14 @@ class MainViewModel(
             _binsLoading.value = true
             try {
                 // Review and Unused are computed from server note content, so
-                // push local edits first or a fresh link would not count.
+                // they only load once every local edit is pushed; otherwise a
+                // fresh link would not count.
                 if (tab == BinTab.Review || tab == BinTab.Unused) {
                     flushEditor()
-                    runCatching { runSync() }
+                    runSync()
+                    if (notes.observeAll().first().any { it.localModifiedAt != null }) {
+                        throw IllegalStateException("some edits are not synced yet")
+                    }
                 }
                 when (tab) {
                     BinTab.Archive -> _archive.value = notes.fetchArchive()
@@ -595,6 +610,7 @@ class MainViewModel(
                 flushEditor()
                 val target = currentPath(path)
                 val under = { p: String -> p == target || p.startsWith("$target/") }
+                archiving = target
                 if (_editor.value?.path?.let(under) == true) {
                     _editor.value = null
                     editorEdits.value = null
@@ -614,6 +630,8 @@ class MainViewModel(
                 throw e
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Archive failed: ${e.message}") }
+            } finally {
+                archiving = null
             }
         }
     }
