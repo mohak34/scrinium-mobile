@@ -293,9 +293,11 @@ class MainViewModel(
         // editor's latest text: a rename or move can land while an edit is
         // still pending, and writing to the old path would revive it.
         viewModelScope.launch {
+            // Debounce before dropping nulls: resetting to null cancels a
+            // pending save (closing or archiving the note).
             editorEdits
-                .filterNotNull()
                 .debounce(500)
+                .filterNotNull()
                 .distinctUntilChanged()
                 .collect { (path, text) ->
                     val target = currentPath(path)
@@ -309,8 +311,8 @@ class MainViewModel(
         }
         viewModelScope.launch {
             titleSyncEdits
-                .filterNotNull()
                 .debounce(1500)
+                .filterNotNull()
                 .distinctUntilChanged()
                 .collect { (path, text) ->
                     val target = currentPath(path)
@@ -557,9 +559,15 @@ class MainViewModel(
     fun refreshTrash() = refreshBin(BinTab.Trash)
 
     fun refreshBin(tab: BinTab) {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             _binsLoading.value = true
             try {
+                // Review and Unused are computed from server note content, so
+                // push local edits first or a fresh link would not count.
+                if (tab == BinTab.Review || tab == BinTab.Unused) {
+                    flushEditor()
+                    runCatching { runSync() }
+                }
                 when (tab) {
                     BinTab.Archive -> _archive.value = notes.fetchArchive()
                     BinTab.Trash -> _trash.value = notes.fetchTrash()
@@ -576,21 +584,26 @@ class MainViewModel(
     }
 
     /**
-     * Archives a note or folder on the server. Pending edits are pushed
-     * first so nothing unsynced stays behind, then a second sync drops the
-     * archived notes from Room. Online only.
+     * Archives a note or folder on the server. The editor closes first so
+     * nothing is typed mid-archive, and the archive only goes ahead once a
+     * sync left no unsynced note under the path. A second sync then drops
+     * the archived notes from Room. Online only.
      */
     fun archivePath(path: String) {
         viewModelScope.launch {
             try {
                 flushEditor()
                 val target = currentPath(path)
-                runSync()
                 val under = { p: String -> p == target || p.startsWith("$target/") }
                 if (_editor.value?.path?.let(under) == true) {
                     _editor.value = null
                     editorEdits.value = null
+                    titleSyncEdits.value = null
                     if (_screen.value is Screen.Editor) _screen.value = Screen.Notes
+                }
+                runSync()
+                if (notes.observeAll().first().any { under(it.path) && it.localModifiedAt != null }) {
+                    throw IllegalStateException("some edits are not synced yet")
                 }
                 notes.archive(target)
                 prefs.setPinned(prefs.pinned.value.filterNotTo(mutableSetOf(), under))
