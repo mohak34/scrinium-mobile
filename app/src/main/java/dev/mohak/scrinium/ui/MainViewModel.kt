@@ -552,6 +552,7 @@ class MainViewModel(
     // The path archivePath is moving, if any. Its notes can't be opened or
     // saved meanwhile, or the final sync would push them back.
     private var archiving: String? = null
+    private var archiveRunning = false
 
     private fun isArchiving(path: String) =
         archiving?.let { path == it || path.startsWith("$it/") } == true
@@ -577,6 +578,8 @@ class MainViewModel(
                 // they only load once every local edit is pushed; otherwise a
                 // fresh link would not count.
                 if (tab == BinTab.Review || tab == BinTab.Unused) {
+                    // A stale list could trash something a new link uses.
+                    if (tab == BinTab.Review) _review.value = emptyList() else _unused.value = emptyList()
                     flushEditor()
                     runSync()
                     if (notes.observeAll().first().any { it.localModifiedAt != null }) {
@@ -605,6 +608,11 @@ class MainViewModel(
      * the archived notes from Room. Online only.
      */
     fun archivePath(path: String) {
+        if (archiveRunning) {
+            _sync.update { it.copy(error = "Another archive is still running") }
+            return
+        }
+        archiveRunning = true
         viewModelScope.launch {
             try {
                 flushEditor()
@@ -632,6 +640,7 @@ class MainViewModel(
                 _sync.update { it.copy(error = "Archive failed: ${e.message}") }
             } finally {
                 archiving = null
+                archiveRunning = false
             }
         }
     }
