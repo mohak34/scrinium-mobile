@@ -152,7 +152,7 @@ fun TaskDetailScreen(vm: MainViewModel, tasksVm: TasksViewModel, id: String) {
                 onClear = { tasksVm.setParent(task.id, null) }
             )
 
-            if (task.parentId == null) Subtasks(task, all, tasksVm)
+            Subtasks(task, all, tasksVm)
 
             val linked = links.size
             GroupHeader("Linked notes", if (linked > 0) "$linked" else null)
