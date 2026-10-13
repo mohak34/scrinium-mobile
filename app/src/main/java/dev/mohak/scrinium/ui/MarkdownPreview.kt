@@ -26,10 +26,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.text.AnnotatedString
@@ -40,7 +43,9 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -63,6 +68,8 @@ private sealed interface Block {
     data class Callout(val kind: String, val title: String, val content: AnnotatedString?) : Block
     data class Image(val alt: String, val url: String) : Block
     data object Rule : Block
+    /** [rows] starts with the header row. */
+    data class Table(val align: List<ColumnAlign>, val rows: List<List<AnnotatedString>>) : Block
 }
 
 @Composable
@@ -266,6 +273,7 @@ fun MarkdownText(
                     }
                 }
                 is Block.Image -> MarkdownImage(block, imageBase, loadImage, Sc.text3)
+                is Block.Table -> MarkdownTable(block, bodyStyle, math, ::handleTap)
                 is Block.Rule -> HorizontalDivider(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -297,6 +305,78 @@ private fun TappableText(
         onTextLayout = { layout = it },
         inlineContent = inlineMath(math, style.fontSize)
     )
+}
+
+// Columns size to their widest cell (capped, longer cells wrap) and the
+// table scrolls sideways when it is wider than the screen.
+@Composable
+private fun MarkdownTable(
+    block: Block.Table,
+    style: TextStyle,
+    math: Map<Formula, DisplayList>,
+    onTap: (Int, AnnotatedString) -> Unit
+) {
+    val cols = block.align.size
+    val headStyle = style.merge(TextStyle(fontWeight = FontWeight.SemiBold))
+    Layout(
+        content = {
+            block.rows.forEachIndexed { r, row ->
+                row.forEachIndexed { c, cell ->
+                    val (box, text) = when (block.align[c]) {
+                        ColumnAlign.Start -> Alignment.TopStart to TextAlign.Start
+                        ColumnAlign.Center -> Alignment.TopCenter to TextAlign.Center
+                        ColumnAlign.End -> Alignment.TopEnd to TextAlign.End
+                    }
+                    Box(
+                        modifier = Modifier
+                            .background(if (r == 0) Sc.raise else Color.Transparent)
+                            .drawBehind {
+                                val w = 1.dp.toPx()
+                                drawLine(Sc.line, Offset(size.width - w / 2, 0f), Offset(size.width - w / 2, size.height), w)
+                                drawLine(Sc.line, Offset(0f, size.height - w / 2), Offset(size.width, size.height - w / 2), w)
+                            }
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        contentAlignment = box
+                    ) {
+                        TappableText(
+                            text = cell,
+                            style = (if (r == 0) headStyle else style).merge(TextStyle(textAlign = text)),
+                            math = math,
+                            onClick = { onTap(it, cell) }
+                        )
+                    }
+                }
+            }
+        },
+        modifier = Modifier
+            .padding(bottom = 12.dp)
+            .horizontalScroll(rememberScrollState())
+            .border(1.dp, Sc.line)
+    ) { measurables, _ ->
+        val cap = 240.dp.roundToPx()
+        val widths = IntArray(cols)
+        measurables.forEachIndexed { k, m ->
+            widths[k % cols] = maxOf(widths[k % cols], minOf(m.maxIntrinsicWidth(Constraints.Infinity), cap))
+        }
+        val heights = IntArray(block.rows.size)
+        measurables.forEachIndexed { k, m ->
+            heights[k / cols] = maxOf(heights[k / cols], m.minIntrinsicHeight(widths[k % cols]))
+        }
+        val placeables = measurables.mapIndexed { k, m ->
+            m.measure(Constraints.fixed(widths[k % cols], heights[k / cols]))
+        }
+        layout(widths.sum(), heights.sum()) {
+            var y = 0
+            for (r in block.rows.indices) {
+                var x = 0
+                for (c in 0 until cols) {
+                    placeables[r * cols + c].place(x, y)
+                    x += widths[c]
+                }
+                y += heights[r]
+            }
+        }
+    }
 }
 
 // Loads through the caller (auth + cache live there). Alt text stands in
@@ -384,6 +464,7 @@ private class MarkdownRenderer(
         while (i < lines.size) {
             val line = lines[i]
             val trimmed = line.trimStart()
+            val table = if ('|' in line) parseTable(lines, i) else null
             when {
                 trimmed.startsWith("```") -> {
                     val lang = trimmed.drop(3).trim().lowercase()
@@ -416,6 +497,11 @@ private class MarkdownRenderer(
                         if (math.isNotBlank()) out += mathBlock(math)
                         i++
                     }
+                }
+                table != null -> {
+                    val (t, end) = table
+                    out += Block.Table(t.align, t.rows.map { row -> row.map { inline(it) } })
+                    i = end
                 }
                 imageLinePattern.matches(trimmed.trimEnd()) -> {
                     val m = imageLinePattern.matchEntire(trimmed.trimEnd())!!
@@ -481,7 +567,10 @@ private class MarkdownRenderer(
                 }
                 else -> {
                     val paragraph = mutableListOf<String>()
-                    while (i < lines.size && !isBlockStart(lines[i].trimStart()) && lines[i].isNotBlank()) {
+                    while (
+                        i < lines.size && !isBlockStart(lines[i].trimStart()) && lines[i].isNotBlank() &&
+                        !('|' in lines[i] && parseTable(lines, i) != null)
+                    ) {
                         paragraph += lines[i].trim()
                         i++
                     }

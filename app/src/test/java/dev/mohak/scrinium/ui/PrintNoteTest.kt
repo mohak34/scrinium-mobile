@@ -30,4 +30,11 @@ class PrintNoteTest {
         assertFalse("b.png" in html)
         assertTrue("<pre><code>&lt;tag&gt;</code></pre>" in html)
     }
+
+    @Test
+    fun rendersTables() {
+        val html = noteHtml("T", "| a | b |\n|---|--:|\n| **x** | 1 |") { null }
+        assertTrue("<tr><th>a</th><th style=\"text-align:right\">b</th></tr>" in html)
+        assertTrue("<tr><td><strong>x</strong></td><td style=\"text-align:right\">1</td></tr>" in html)
+    }
 }
