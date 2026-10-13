@@ -118,7 +118,9 @@ data class AttachmentResponse(val path: String)
 data class ApiTokenDto(
     @SerialName("token_hash") val tokenHash: String,
     @SerialName("created_at") val createdAt: Long,
-    @SerialName("last_used_at") val lastUsedAt: Long? = null
+    @SerialName("last_used_at") val lastUsedAt: Long? = null,
+    // Set for agent (MCP) tokens; phones have none.
+    val label: String? = null
 )
 
 @Serializable

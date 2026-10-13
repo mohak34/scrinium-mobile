@@ -1016,7 +1016,9 @@ class MainViewModel(
     fun loadDevices() {
         viewModelScope.launch {
             try {
-                _devices.value = session.fetchDevices().sortedByDescending { it.lastUsedAt ?: it.createdAt }
+                _devices.value = session.fetchDevices()
+                    .filter { it.label == null }
+                    .sortedByDescending { it.lastUsedAt ?: it.createdAt }
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Couldn't load devices: ${e.message}") }
             }

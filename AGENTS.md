@@ -74,9 +74,10 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
   `PATCH|DELETE /api/tasks/<id>`, `GET|POST|DELETE /api/tasks/<id>/links`.
   Rows are snake_case. Tasks live in the server's SQLite, not the vault, so
   they are online-only: `TasksViewModel` calls the API directly, no Room.
-- `GET|DELETE /api/tokens` → signed-in devices `[{ token_hash, created_at,
-  last_used_at }]`; DELETE body `{ token_hash }` revokes one. The phone
-  finds its own row by hashing its token.
+- `GET|DELETE /api/tokens` → API tokens `[{ token_hash, created_at,
+  last_used_at, label }]`; DELETE body `{ token_hash }` revokes one.
+  Settings lists only phones (`label` null; agent tokens are labeled). The
+  phone finds its own row by hashing its token.
 - `GET /api/calendar/events?from=&to=` (epoch ms, at most 93 days) →
   `{ events: [{ id, title, start, end, allDay }], needsConnect? }`, the
   Google Calendar linked by the web sign-in.
