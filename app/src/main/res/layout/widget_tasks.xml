@@ -46,13 +46,15 @@
         android:textSize="14sp"
         android:visibility="gone" />
 
-    <!-- Rows past the widget's height are clipped; the footer stays put. -->
-    <LinearLayout
+    <!-- Scrolls between the header and the footer, which stay put. -->
+    <ListView
         android:id="@+id/widget_list"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:orientation="vertical" />
+        android:divider="@null"
+        android:dividerHeight="0dp"
+        android:scrollbars="none" />
 
     <FrameLayout
         android:layout_width="match_parent"
