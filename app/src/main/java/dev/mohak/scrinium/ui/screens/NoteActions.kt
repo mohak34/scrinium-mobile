@@ -202,6 +202,7 @@ fun NoteMenuSheet(
     onMove: () -> Unit,
     onShare: () -> Unit,
     onExport: () -> Unit,
+    onArchive: () -> Unit,
     onDelete: () -> Unit
 ) {
     fun act(f: () -> Unit) = { onDismiss(); f() }
@@ -213,6 +214,7 @@ fun NoteMenuSheet(
         dev.mohak.scrinium.ui.MenuRow(R.drawable.ms_drive_file_move, "Move to folder", act(onMove))
         dev.mohak.scrinium.ui.MenuRow(R.drawable.ms_link, "Share link", act(onShare))
         dev.mohak.scrinium.ui.MenuRow(R.drawable.ms_picture_as_pdf, "Export PDF", act(onExport))
+        dev.mohak.scrinium.ui.MenuRow(R.drawable.ms_archive, "Archive", act(onArchive))
         dev.mohak.scrinium.ui.MenuRow(R.drawable.ms_delete, "Delete", act(onDelete), danger = true)
     }
 }

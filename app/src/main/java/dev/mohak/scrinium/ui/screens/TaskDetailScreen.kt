@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.mohak.scrinium.R
 import dev.mohak.scrinium.data.remote.TaskDto
+import dev.mohak.scrinium.ui.BinTab
 import dev.mohak.scrinium.ui.Dot
 import dev.mohak.scrinium.ui.ErrorStrip
 import dev.mohak.scrinium.ui.GroupHeader
@@ -157,13 +158,15 @@ fun TaskDetailScreen(vm: MainViewModel, tasksVm: TasksViewModel, id: String) {
             GroupHeader("Linked notes", if (linked > 0) "$linked" else null)
             links.forEach { path ->
                 val note = notes.firstOrNull { it.path == path }
-                val title = note?.let { noteTitle(it.path, it.content) } ?: path.substringAfterLast('/').removeSuffix(".md")
+                val bin = binOf(path)
+                val title = note?.let { noteTitle(it.path, it.content) } ?: binnedName(path)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable {
                             tasksVm.closeTask()
-                            vm.openSearchHit(MainViewModel.SearchHit(path, title, null))
+                            // Opening a bin path would pull it into Room as a note.
+                            if (bin != null) vm.openBins(bin) else vm.openSearchHit(MainViewModel.SearchHit(path, title, null))
                         }
                         .padding(start = 16.dp, end = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -171,7 +174,16 @@ fun TaskDetailScreen(vm: MainViewModel, tasksVm: TasksViewModel, id: String) {
                     Sym(R.drawable.ms_description, tint = Sc.accent, size = 17.dp)
                     Column(Modifier.weight(1f).padding(start = 10.dp, top = 6.dp, bottom = 6.dp)) {
                         Text(title, style = Type.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(path.substringBeforeLast('/', "").ifBlank { "/" }, style = Type.meta, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            when (bin) {
+                                BinTab.Archive -> "Archived"
+                                BinTab.Trash -> "In trash"
+                                else -> path.substringBeforeLast('/', "").ifBlank { "/" }
+                            },
+                            style = Type.meta,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                     IconBtn(R.drawable.ms_close, "Unlink note", { tasksVm.removeLink(task.id, path) }, tint = Sc.text3)
                 }
@@ -344,6 +356,21 @@ private fun DraftField(
 @Composable
 private fun FieldLabel(text: String) {
     Text(text, style = Type.meta, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 6.dp))
+}
+
+// Task links follow notes into the archive and trash, as
+// ".archive/<stamp>-<name>[/inside]" (".trash/..." likewise).
+private fun binOf(path: String): BinTab? = when {
+    path.startsWith(".archive/") -> BinTab.Archive
+    path.startsWith(".trash/") -> BinTab.Trash
+    else -> null
+}
+
+// The note's name, without the bin's "<stamp>-" on the item itself.
+private fun binnedName(path: String): String {
+    val segs = path.split('/')
+    val name = segs.last().removeSuffix(".md")
+    return if (binOf(path) != null && segs.size == 2) name.replace(Regex("^\\d+-"), "") else name
 }
 
 /** One of [options] (value to label), or None. Calls [onPick] with the value. */

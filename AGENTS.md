@@ -68,6 +68,16 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
 - `POST /api/notes/<path>` → `{ folder: true }` creates a folder
 - `PATCH /api/notes/<path>` → `{ newPath }` rename/move
 - `DELETE /api/notes/<path>` → move to trash (recovers to vault `.trash`)
+- `GET /api/trash`, `POST /api/trash/restore`, `DELETE /api/trash` → the
+  server trash. `GET /api/archive` → `[{ name, originalPath, archivedAt,
+  isDir, notes }]`; `POST /api/archive { path }` archives a note or folder
+  into `.archive`; `POST /api/archive/restore { name }` and
+  `POST /api/archive/trash { name }` move it back or on to the trash.
+  `GET /api/archive/review?days=` lists stale notes nothing links to,
+  `GET /api/archive/unused` vault files no note mentions. The Bins screen
+  shows all four. Archiving is a server move: the phone pushes pending
+  edits first, then syncs so the notes leave Room. Task links follow notes
+  into `.archive/` and `.trash/`; the phone never opens those paths as notes.
 - `GET /api/tree` → nested vault listing
 - `GET /api/search?q=` → `[{ path, title, snippet }]` (FTS5)
 - `GET /api/tasks` (`?note=<path>` for one note's tasks), `POST /api/tasks`,

@@ -107,6 +107,21 @@ class NotesRepository(
 
     suspend fun emptyTrash() = api.emptyTrash()
 
+    suspend fun fetchArchive() = api.fetchArchive()
+
+    suspend fun archive(path: String) = api.archive(path)
+
+    suspend fun restoreArchive(name: String) = api.restoreArchive(name)
+
+    suspend fun archiveToTrash(name: String) = api.archiveToTrash(name)
+
+    suspend fun fetchReview(days: Int) = api.fetchReview(days)
+
+    suspend fun fetchUnused() = api.fetchUnused()
+
+    // Trashes any vault file on the server; for files Room doesn't hold.
+    suspend fun trashRemote(path: String) = api.deleteNote(path)
+
     suspend fun fetchShares(path: String) = api.fetchShares(path)
 
     suspend fun createShare(path: String, password: String?) = api.createShare(path, password)

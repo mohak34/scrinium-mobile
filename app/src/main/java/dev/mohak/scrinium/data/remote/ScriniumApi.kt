@@ -61,6 +61,30 @@ data class TrashEntry(
 @Serializable
 data class RestoreRequest(val trashName: String)
 
+// One archived note or folder. [notes] are its notes by original path.
+@Serializable
+data class ArchiveEntry(
+    val name: String,
+    val originalPath: String,
+    val archivedAt: Long = 0L,
+    val isDir: Boolean = false,
+    val notes: List<String> = emptyList()
+)
+
+// A note that looks abandoned: old, and nothing links or shares it.
+@Serializable
+data class ReviewNote(val path: String, val title: String, val updatedAt: Long = 0L, val words: Int = 0)
+
+// A vault file (not a note) that no note mentions.
+@Serializable
+data class UnusedFile(val path: String, val size: Long = 0L, val modifiedAt: Long = 0L)
+
+@Serializable
+data class ArchiveRequest(val path: String)
+
+@Serializable
+data class ArchiveNameRequest(val name: String)
+
 @Serializable
 data class RestoreResponse(val ok: Boolean = true, val path: String = "")
 
@@ -180,6 +204,24 @@ private interface ScriniumService {
 
     @GET("api/trash")
     suspend fun trash(): List<TrashEntry>
+
+    @GET("api/archive")
+    suspend fun archive(): List<ArchiveEntry>
+
+    @POST("api/archive")
+    suspend fun archivePath(@Body body: ArchiveRequest): ArchiveEntry
+
+    @POST("api/archive/restore")
+    suspend fun restoreArchive(@Body body: ArchiveNameRequest): RestoreResponse
+
+    @POST("api/archive/trash")
+    suspend fun archiveToTrash(@Body body: ArchiveNameRequest): Response<ResponseBody>
+
+    @GET("api/archive/review")
+    suspend fun review(@Query("days") days: Int): List<ReviewNote>
+
+    @GET("api/archive/unused")
+    suspend fun unused(): List<UnusedFile>
 
     @POST("api/trash/restore")
     suspend fun restoreTrash(@Body body: RestoreRequest): RestoreResponse
@@ -313,6 +355,23 @@ class ScriniumApi(
     suspend fun fetchTagged(tag: String): List<TaggedHit> = service.tagged(tag)
 
     suspend fun fetchTrash(): List<TrashEntry> = service.trash()
+
+    suspend fun fetchArchive(): List<ArchiveEntry> = service.archive()
+
+    suspend fun archive(path: String) {
+        service.archivePath(ArchiveRequest(path))
+    }
+
+    suspend fun restoreArchive(name: String): String = service.restoreArchive(ArchiveNameRequest(name)).path
+
+    suspend fun archiveToTrash(name: String) {
+        val res = service.archiveToTrash(ArchiveNameRequest(name))
+        if (!res.isSuccessful) throw ApiException(res.code())
+    }
+
+    suspend fun fetchReview(days: Int): List<ReviewNote> = service.review(days)
+
+    suspend fun fetchUnused(): List<UnusedFile> = service.unused()
 
     suspend fun restoreTrash(trashName: String): String =
         service.restoreTrash(RestoreRequest(trashName)).path

@@ -43,6 +43,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.mohak.scrinium.BuildConfig
 import dev.mohak.scrinium.R
 import dev.mohak.scrinium.data.remote.ApiTokenDto
+import dev.mohak.scrinium.ui.BinTab
 import dev.mohak.scrinium.ui.ConfirmDialog
 import dev.mohak.scrinium.ui.Divider
 import dev.mohak.scrinium.ui.FillButton
@@ -126,7 +127,7 @@ private fun IndexPage(vm: MainViewModel, open: (Page) -> Unit) {
         PageRow(R.drawable.ms_devices, "Devices", if (devices.isEmpty()) "Phones signed in to your vault" else "${devices.size} signed in") { open(Page.Devices) }
         PageRow(R.drawable.ms_note_add, "New note template", template.lineSequence().firstOrNull { it.isNotBlank() }?.takeIf { "{{title}}" in template } ?: "# {{title}}  (default)") { open(Page.Template) }
         PageRow(R.drawable.ms_notifications, "Reminders", if (remindersOn) "On  ·  ${scheduledReminders.size} scheduled" else "Off") { open(Page.Reminders) }
-        PageRow(R.drawable.ms_delete, "Trash", if (trash.isEmpty()) "Empty" else "${trash.size} item${if (trash.size == 1) "" else "s"}") { vm.openTrash() }
+        PageRow(R.drawable.ms_delete, "Trash", if (trash.isEmpty()) "Empty" else "${trash.size} item${if (trash.size == 1) "" else "s"}") { vm.openBins(BinTab.Trash) }
         Divider()
         val version = "Version ${BuildConfig.VERSION_NAME}"
         when (val u = update) {

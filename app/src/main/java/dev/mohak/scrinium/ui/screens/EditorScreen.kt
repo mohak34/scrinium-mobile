@@ -216,6 +216,7 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                     MenuRow(R.drawable.ms_link, "Share link", act { actions.share = state.path })
                     MenuRow(R.drawable.ms_picture_as_pdf, "Export PDF", act { exportPdf(context, scope, vm, state.path, field.text) })
                     Divider()
+                    MenuRow(R.drawable.ms_archive, "Archive", act { vm.archivePath(state.path) })
                     MenuRow(R.drawable.ms_delete, "Delete", act { actions.delete = state.path }, danger = true)
                 }
             }
