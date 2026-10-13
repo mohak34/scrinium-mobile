@@ -13,13 +13,16 @@ import dev.mohak.scrinium.BuildConfig
 import dev.mohak.scrinium.data.remote.ApiTokenDto
 import dev.mohak.scrinium.data.remote.ScriniumApi
 import dev.mohak.scrinium.reminders.Reminders
+import dev.mohak.scrinium.widget.TasksWidget
 import java.security.MessageDigest
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
 
 class SessionRepository(
-    context: Context,
+    private val context: Context,
     private val tokenStore: SecureTokenStore,
     private val api: ScriniumApi,
     private val reminders: Reminders
@@ -100,6 +103,7 @@ class SessionRepository(
 
     suspend fun forceSignOut() {
         reminders.clearAll()
+        withContext(Dispatchers.IO) { TasksWidget.clear(context) }
         tokenStore.setToken(null)
         tokenStore.setEmail(null)
         _email.value = null

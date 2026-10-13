@@ -32,11 +32,12 @@ import kotlinx.serialization.json.JsonPrimitive
  * optimistically and roll back on failure, like the web store. Offline means
  * a visible error, never a silent queue.
  *
- * [syncReminders] makes the phone's alarms match a full task list.
+ * [onFullList] gets every change to a full task list: the phone's alarms
+ * and the tasks widget follow it.
  */
 class TasksViewModel(
     private val api: TasksApi,
-    private val syncReminders: (List<TaskDto>) -> Unit
+    private val onFullList: (List<TaskDto>) -> Unit
 ) : ViewModel() {
 
     private val _tasks = MutableStateFlow<List<TaskDto>>(emptyList())
@@ -60,6 +61,18 @@ class TasksViewModel(
 
     fun setProjectFilter(path: String?) {
         _projectFilter.value = path
+    }
+
+    // Set by the tasks widget's +: the Tasks tab opens its quick-add sheet.
+    private val _quickAdd = MutableStateFlow(false)
+    val quickAdd: StateFlow<Boolean> = _quickAdd.asStateFlow()
+
+    fun requestQuickAdd() {
+        _quickAdd.value = true
+    }
+
+    fun quickAddShown() {
+        _quickAdd.value = false
     }
 
     private val _loading = MutableStateFlow(false)
@@ -110,7 +123,7 @@ class TasksViewModel(
 
     private fun setTasks(transform: (List<TaskDto>) -> List<TaskDto>) {
         _tasks.update(transform)
-        if (loaded) syncReminders(_tasks.value)
+        if (loaded) onFullList(_tasks.value)
     }
 
     private suspend fun load() {
@@ -467,7 +480,12 @@ class TasksViewModel(
         private const val DRAFT_DELAY_MS = 600L
 
         fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
-            initializer { TasksViewModel(container.api, container.reminders::sync) }
+            initializer {
+                TasksViewModel(container.api) {
+                    container.reminders.sync(it)
+                    container.loadedTasks.value = it
+                }
+            }
         }
     }
 }

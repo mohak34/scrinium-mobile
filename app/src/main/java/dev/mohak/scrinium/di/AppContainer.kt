@@ -12,11 +12,15 @@ import dev.mohak.scrinium.data.remote.ScriniumApi
 import dev.mohak.scrinium.reminders.Reminders
 import dev.mohak.scrinium.sync.SyncEngine
 import dev.mohak.scrinium.update.Updater
+import dev.mohak.scrinium.data.remote.TaskDto
 import dev.mohak.scrinium.widget.NotesWidget
+import dev.mohak.scrinium.widget.TasksWidget
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 
 class AppContainer(context: Context) {
@@ -31,6 +35,9 @@ class AppContainer(context: Context) {
 
     lateinit var sessionRepository: SessionRepository
     lateinit var api: ScriniumApi
+
+    // The last full task list TasksViewModel loaded, saved for the tasks widget.
+    val loadedTasks = MutableStateFlow<List<TaskDto>?>(null)
 
     val notesRepository: NotesRepository
     val imageLoader: ImageLoader
@@ -52,6 +59,9 @@ class AppContainer(context: Context) {
         // Keep the home screen widget in step with Room; no-op when none is placed.
         scope.launch {
             database.noteDao().observeAll().debounce(1000).collect { NotesWidget.render(appContext, it) }
+        }
+        scope.launch(Dispatchers.IO) {
+            loadedTasks.filterNotNull().debounce(1000).collect { TasksWidget.save(appContext, it) }
         }
     }
 }

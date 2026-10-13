@@ -119,6 +119,13 @@ fun TasksScreen(tasksVm: TasksViewModel) {
     }
     var showAdd by remember { mutableStateOf(false) }
     var showDone by rememberSaveable { mutableStateOf(false) }
+    val quickAdd by tasksVm.quickAdd.collectAsStateWithLifecycle()
+    LaunchedEffect(quickAdd) {
+        if (quickAdd) {
+            showAdd = true
+            tasksVm.quickAddShown()
+        }
+    }
 
     val groups = groupByStatus(topLevel(all, area).filter { it.onMainBoard })
     val progress = subtaskProgress(all)
