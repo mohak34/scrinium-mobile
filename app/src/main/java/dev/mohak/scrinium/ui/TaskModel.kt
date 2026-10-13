@@ -23,10 +23,10 @@ enum class TaskStatus(val key: String, val label: String) {
 }
 
 enum class TaskArea(val key: String, val label: String, val color: Color) {
-    College("college", "College", Color(0xFF8FB3FF)),
+    Uni("uni", "Uni", Color(0xFF8FB3FF)),
     Learning("learning", "Learning", Color(0xFFC4A8FF)),
     Work("work", "Work", Color(0xFFF0A35E)),
-    Life("life", "Life", Color(0xFFD6C3A1));
+    Quotidian("quotidian", "Quotidian", Color(0xFFD6C3A1));
 
     companion object {
         fun of(key: String?): TaskArea? = entries.firstOrNull { it.key == key }
