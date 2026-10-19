@@ -83,7 +83,9 @@ fun MarkdownText(
     // note's path): a new base reloads every image.
     imageBase: String = "",
     loadImage: suspend (String) -> ImageBitmap? = { null },
-    onHeadingPositioned: (line: Int, y: Int) -> Unit = { _, _ -> }
+    onHeadingPositioned: (line: Int, y: Int) -> Unit = { _, _ -> },
+    // Text tapped outside a task box, wikilink or tag.
+    onPlainTap: () -> Unit = {}
 ) {
     val renderer = remember {
         MarkdownRenderer(
@@ -111,7 +113,9 @@ fun MarkdownText(
         }
         annotations.firstOrNull { it.tag == "tag" }?.let {
             onTagClick(it.item)
+            return
         }
+        onPlainTap()
     }
     val bodyStyle = Type.read
     Column(modifier = modifier) {

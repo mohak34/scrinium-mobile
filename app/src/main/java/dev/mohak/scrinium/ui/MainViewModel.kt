@@ -97,7 +97,8 @@ private var nextEditorId = 0L
 
 // [id] names one open-note session: a fresh one per note opened, kept by
 // renames (copy), so the editor field survives its note changing path.
-data class EditorState(val path: String, val text: String, val id: Long = ++nextEditorId)
+// `isNew` notes open in edit mode; everything else opens in reading view.
+data class EditorState(val path: String, val text: String, val isNew: Boolean = false, val id: Long = ++nextEditorId)
 
 class MainViewModel(
     private val session: SessionRepository,
@@ -419,7 +420,7 @@ class MainViewModel(
             val existing = notes.observeAll().first().map { it.path }
             try {
                 val note = notes.createNote(existing, folder, prefs::newNoteBody)
-                _editor.value = EditorState(note.path, note.content)
+                _editor.value = EditorState(note.path, note.content, isNew = true)
                 editorEdits.value = null
                 titleSyncEdits.value = null
                 _screen.value = Screen.Editor(note.path)
