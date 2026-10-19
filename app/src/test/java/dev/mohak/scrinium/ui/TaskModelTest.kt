@@ -44,9 +44,9 @@ class TaskModelTest {
         val loose = TaskDto("1", "Loose", status = "inbox")
         val backlog = TaskDto("2", "Backlog", status = "inbox", project = "Jobs")
         val active = TaskDto("3", "Active", status = "todo", project = "Jobs")
-        assertEquals(listOf(loose, active), listOf(loose, backlog, active).filter { BoardView.All.shows(it) })
-        assertTrue(BoardView.Project(null).shows(loose))
-        assertFalse(BoardView.Project(null).shows(active))
-        assertEquals(listOf(backlog, active), listOf(loose, backlog, active).filter { BoardView.Project("Jobs").shows(it) })
+        assertEquals(listOf(loose, active), listOf(loose, backlog, active).filter { ProjectView.All.shows(it) })
+        assertTrue(ProjectView.Project(null).shows(loose))
+        assertFalse(ProjectView.Project(null).shows(active))
+        assertEquals(listOf(backlog, active), listOf(loose, backlog, active).filter { ProjectView.Project("Jobs").shows(it) })
     }
 }

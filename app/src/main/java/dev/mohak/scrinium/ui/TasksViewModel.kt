@@ -55,10 +55,10 @@ class TasksViewModel(
     private val _projects = MutableStateFlow<List<ProjectDto>>(emptyList())
     val projects: StateFlow<List<ProjectDto>> = _projects.asStateFlow()
 
-    private val _boardView = MutableStateFlow<BoardView>(BoardView.All)
-    val boardView: StateFlow<BoardView> = _boardView.asStateFlow()
+    private val _boardView = MutableStateFlow<ProjectView>(ProjectView.All)
+    val boardView: StateFlow<ProjectView> = _boardView.asStateFlow()
 
-    fun setBoardView(view: BoardView) {
+    fun setProjectView(view: ProjectView) {
         _boardView.value = view
     }
 
@@ -154,7 +154,7 @@ class TasksViewModel(
                 val rows = api.fetchProjects()
                 _projects.value = rows
                 val view = _boardView.value
-                if (view is BoardView.Project && view.path != null && rows.none { it.path == view.path }) _boardView.value = BoardView.All
+                if (view is ProjectView.Project && view.path != null && rows.none { it.path == view.path }) _boardView.value = ProjectView.All
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {

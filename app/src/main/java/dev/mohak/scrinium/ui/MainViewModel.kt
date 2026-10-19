@@ -136,6 +136,14 @@ class MainViewModel(
     private val _editor = MutableStateFlow<EditorState?>(null)
     val editor: StateFlow<EditorState?> = _editor.asStateFlow()
 
+    // The Notes tab's project tab. Projects come from TasksViewModel.
+    private val _notesView = MutableStateFlow<ProjectView>(ProjectView.All)
+    val notesView: StateFlow<ProjectView> = _notesView.asStateFlow()
+
+    fun setNotesView(view: ProjectView) {
+        _notesView.value = view
+    }
+
     // Persisted like pins, so the tree reopens the way it was left.
     val collapsedFolders: StateFlow<Set<String>> = prefs.collapsed
 

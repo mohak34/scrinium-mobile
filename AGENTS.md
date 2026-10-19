@@ -93,8 +93,10 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
   subtasks follow their root's project. A project's Inbox is its backlog:
   the main list and the All board leave it out (`onMainBoard`). Tasks with
   no project are Quotidian; the board shows All, Quotidian or one project
-  (`BoardView`). Projects are created and removed on the web; the phone
-  only picks them.
+  (`ProjectView`). The Notes tab has the same tabs: All lists project
+  folders first, a project tab roots the tree (and new notes) at its
+  folder, Quotidian is everything outside one. Projects are created and
+  removed on the web; the phone only picks them.
 - `GET /api/shares` (`?path=` for one note's links, none for every link),
   `POST /api/shares { path, password? }`, `PATCH /api/shares/<id>
   { password }` (null removes it), `DELETE /api/shares/<id>`. The note menu

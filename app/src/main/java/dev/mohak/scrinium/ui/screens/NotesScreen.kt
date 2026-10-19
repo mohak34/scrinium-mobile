@@ -63,11 +63,15 @@ import dev.mohak.scrinium.ui.IconBtn
 import dev.mohak.scrinium.ui.MainViewModel
 import dev.mohak.scrinium.ui.Menu
 import dev.mohak.scrinium.ui.MenuRow
+import dev.mohak.scrinium.ui.ProjectView
 import dev.mohak.scrinium.ui.PromptDialog
+import dev.mohak.scrinium.ui.QUOTIDIAN
 import dev.mohak.scrinium.ui.Sc
 import dev.mohak.scrinium.ui.Sheet
 import dev.mohak.scrinium.ui.SheetTitle
 import dev.mohak.scrinium.ui.Sym
+import dev.mohak.scrinium.ui.TasksViewModel
+import dev.mohak.scrinium.ui.TextTabs
 import dev.mohak.scrinium.ui.TopBar
 import dev.mohak.scrinium.ui.TreeItem
 import dev.mohak.scrinium.ui.Type
@@ -75,6 +79,7 @@ import dev.mohak.scrinium.ui.buildTree
 import dev.mohak.scrinium.ui.folderPaths
 import dev.mohak.scrinium.ui.name
 import dev.mohak.scrinium.ui.noteTitle
+import dev.mohak.scrinium.ui.projectName
 import dev.mohak.scrinium.ui.relativeTime
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -96,8 +101,15 @@ private class DragHolder {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NotesScreen(vm: MainViewModel) {
+fun NotesScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
     val notes by vm.notesFlow.collectAsStateWithLifecycle()
+    val projectRows by tasksVm.projects.collectAsStateWithLifecycle()
+    val projects = remember(projectRows) { projectRows.map { it.path } }
+    val chosenView by vm.notesView.collectAsStateWithLifecycle()
+    // A project removed on the web falls back to All.
+    val view = chosenView.takeIf { it !is ProjectView.Project || it.path == null || it.path in projects } ?: ProjectView.All
+    // Where the tab's tree starts: drops on empty space and new notes land here.
+    val root = (view as? ProjectView.Project)?.path ?: ""
     val collapsed by vm.collapsedFolders.collectAsStateWithLifecycle()
     val sync by vm.sync.collectAsStateWithLifecycle()
     val unsynced by vm.unsyncedCount.collectAsStateWithLifecycle()
@@ -121,7 +133,7 @@ fun NotesScreen(vm: MainViewModel) {
     var dragLabel by remember { mutableStateOf("") }
     var dragFingerY by remember { mutableFloatStateOf(0f) }
 
-    val items = remember(notes, collapsed, pinned) { buildTree(notes, collapsed, pinned) }
+    val items = remember(notes, collapsed, pinned, view, projects) { buildTree(notes, collapsed, pinned, view, projects.toSet()) }
     val folders = remember(notes) { folderPaths(notes) }
     var folderMenu by remember { mutableStateOf<String?>(null) }
     var noteMenu by remember { mutableStateOf<NoteEntity?>(null) }
@@ -147,9 +159,9 @@ fun NotesScreen(vm: MainViewModel) {
         val item = dragItem ?: return null
         // Past the edges (mid auto-scroll overshoot) resolves to nothing.
         if (relY < 0 || relY > drag.viewportH) return null
-        // Empty list space and the sync-status footer row count as the vault
+        // Empty list space and the sync-status footer row count as the tab's
         // root — the footer must not be a dead zone that swallows drops.
-        if (key == null) return ""
+        if (key == null) return root
         return when {
             key is String && key.startsWith("d:") -> {
                 val path = key.removePrefix("d:")
@@ -162,7 +174,7 @@ fun NotesScreen(vm: MainViewModel) {
                     null
                 } else parent
             }
-            else -> ""
+            else -> root
         }
     }
 
@@ -248,6 +260,13 @@ fun NotesScreen(vm: MainViewModel) {
                     MenuRow(R.drawable.ms_settings, "Settings", { overflow = false; vm.openSettings() })
                 }
             }
+        }
+        if (projects.isNotEmpty()) {
+            val tabs = listOf(ProjectView.All, ProjectView.Project(null)) + projects.map { ProjectView.Project(it) }
+            TextTabs(
+                tabs.map { v -> if (v is ProjectView.Project) v.path?.let { projectLabel(it, projects) } ?: QUOTIDIAN else "All" },
+                tabs.indexOf(view)
+            ) { vm.setNotesView(tabs[it]) }
         }
         sync.error?.let { ErrorStrip(it) { vm.dismissSyncError() } }
         Box(Modifier.weight(1f)) {
@@ -361,6 +380,7 @@ fun NotesScreen(vm: MainViewModel) {
                             val destLabel = when (dropTarget) {
                                 null -> null
                                 "" -> "Vault root"
+                                root -> projectName(root)
                                 else -> dropTarget
                             }
                             Text(
@@ -383,7 +403,7 @@ fun NotesScreen(vm: MainViewModel) {
                     }
                 }
             }
-            Fab(R.drawable.ms_edit_square, "New note", { vm.createNote() }, Modifier.align(Alignment.BottomEnd))
+            Fab(R.drawable.ms_edit_square, "New note", { vm.createNoteIn(root) }, Modifier.align(Alignment.BottomEnd))
         }
     }
 
@@ -488,7 +508,15 @@ private fun FolderRow(
     ) {
         Sym(if (expanded) R.drawable.ms_expand_more else R.drawable.ms_chevron_right, tint = Sc.text3, size = 17.dp, desc = if (expanded) "Collapse" else "Expand")
         Spacer(Modifier.width(6.dp))
-        Sym(if (expanded) R.drawable.ms_folder_open else R.drawable.ms_folder, tint = Sc.text3, size = 17.dp)
+        Sym(
+            when {
+                folder.project -> R.drawable.ms_folder_special
+                expanded -> R.drawable.ms_folder_open
+                else -> R.drawable.ms_folder
+            },
+            tint = Sc.text3,
+            size = 17.dp
+        )
         Column(Modifier.weight(1f).padding(start = 8.dp)) {
             Text(folder.name, style = Type.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
             folder.pathHint?.let { Text(it, style = Type.meta, maxLines = 1) }

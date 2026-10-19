@@ -80,7 +80,7 @@ import dev.mohak.scrinium.ui.isDone
 import dev.mohak.scrinium.ui.isOverdue
 import dev.mohak.scrinium.ui.isDueToday
 import dev.mohak.scrinium.ui.onMainBoard
-import dev.mohak.scrinium.ui.BoardView
+import dev.mohak.scrinium.ui.ProjectView
 import dev.mohak.scrinium.ui.QUOTIDIAN
 import dev.mohak.scrinium.ui.projectName
 import dev.mohak.scrinium.ui.shows
@@ -201,8 +201,8 @@ fun BoardScreen(tasksVm: TasksViewModel) {
     }
 
     Column(Modifier.fillMaxSize()) {
-        TopBar(when (val v = view) { BoardView.All -> "Board"; is BoardView.Project -> v.path?.let(::projectName) ?: QUOTIDIAN }) {
-            if (projects.isNotEmpty()) BoardViewButton(projects.map { it.path }, view) { tasksVm.setBoardView(it) }
+        TopBar(when (val v = view) { ProjectView.All -> "Board"; is ProjectView.Project -> v.path?.let(::projectName) ?: QUOTIDIAN }) {
+            if (projects.isNotEmpty()) ProjectViewButton(projects.map { it.path }, view) { tasksVm.setProjectView(it) }
             AreaFilterButton(area) { tasksVm.setAreaFilter(it) }
         }
         TextTabs(
@@ -251,7 +251,7 @@ fun BoardScreen(tasksVm: TasksViewModel) {
     if (showAdd) {
         val status = statuses[pager.currentPage]
         QuickAddSheet(TaskArea.of(area), null, onDismiss = { showAdd = false }) { title, a, due ->
-            tasksVm.create(title, area = a, dueAt = due, project = (view as? BoardView.Project)?.path, status = status)
+            tasksVm.create(title, area = a, dueAt = due, project = (view as? ProjectView.Project)?.path, status = status)
         }
     }
 }
@@ -475,13 +475,13 @@ private fun AreaFilterButton(area: String?, onPick: (String?) -> Unit) {
 
 /** Board top-bar switch between All, Quotidian and one project's board. */
 @Composable
-private fun BoardViewButton(projects: List<String>, view: BoardView, onPick: (BoardView) -> Unit) {
+private fun ProjectViewButton(projects: List<String>, view: ProjectView, onPick: (ProjectView) -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
-        IconBtn(R.drawable.ms_folder_special, "Project board", { open = true }, tint = if (view != BoardView.All) Sc.accent else Sc.text2, active = open)
+        IconBtn(R.drawable.ms_folder_special, "Project board", { open = true }, tint = if (view != ProjectView.All) Sc.accent else Sc.text2, active = open)
         Menu(open, { open = false }) {
-            val choices = listOf(BoardView.All to "All", BoardView.Project(null) to QUOTIDIAN) +
-                projects.map { BoardView.Project(it) to projectLabel(it, projects) }
+            val choices = listOf(ProjectView.All to "All", ProjectView.Project(null) to QUOTIDIAN) +
+                projects.map { ProjectView.Project(it) to projectLabel(it, projects) }
             choices.forEach { (v, label) ->
                 MenuRow(null, label, { open = false; onPick(v) }, trailing = {
                     if (view == v) Sym(R.drawable.ms_check, tint = Sc.accent, size = 18.dp)
