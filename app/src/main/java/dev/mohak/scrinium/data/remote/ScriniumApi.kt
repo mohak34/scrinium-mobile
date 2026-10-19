@@ -99,6 +99,10 @@ data class PublicShare(
 @Serializable
 data class CreateShareRequest(val path: String, val password: String? = null)
 
+// No default: a null password must reach the server to remove it.
+@Serializable
+data class SharePasswordRequest(val password: String?)
+
 // Row shape of the server's `tasks` table (snake_case on the wire). Tasks
 // live in the server's SQLite, not in .md files, so they never touch Room.
 @Serializable
@@ -232,8 +236,12 @@ private interface ScriniumService {
     @DELETE("api/trash")
     suspend fun emptyTrash(@Query("all") all: Int): Response<ResponseBody>
 
+    // Without a path, every link in the vault.
     @GET("api/shares")
-    suspend fun shares(@Query("path") path: String): List<PublicShare>
+    suspend fun shares(@Query("path") path: String?): List<PublicShare>
+
+    @PATCH("api/shares/{id}")
+    suspend fun setSharePassword(@Path("id") id: String, @Body body: SharePasswordRequest): PublicShare
 
     @POST("api/shares")
     suspend fun createShare(@Body body: CreateShareRequest): PublicShare
@@ -386,7 +394,10 @@ class ScriniumApi(
         if (!res.isSuccessful) throw ApiException(res.code())
     }
 
-    suspend fun fetchShares(path: String): List<PublicShare> = service.shares(path)
+    suspend fun fetchShares(path: String?): List<PublicShare> = service.shares(path)
+
+    suspend fun setSharePassword(id: String, password: String?): PublicShare =
+        service.setSharePassword(id, SharePasswordRequest(password))
 
     suspend fun createShare(path: String, password: String?): PublicShare =
         service.createShare(CreateShareRequest(path, password?.takeIf { it.isNotBlank() }))

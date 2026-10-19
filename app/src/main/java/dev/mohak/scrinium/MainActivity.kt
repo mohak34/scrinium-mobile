@@ -156,7 +156,7 @@ private fun AppScreen(vm: MainViewModel, tasksVm: TasksViewModel, screen: Screen
         }
     }
     when (screen) {
-        Screen.Notes -> NotesScreen(vm)
+        Screen.Notes -> NotesScreen(vm, tasksVm)
         is Screen.Editor -> EditorScreen(vm, tasksVm)
         Screen.Search -> SearchScreen(vm, tasksVm)
         Screen.Settings -> SettingsScreen(vm)

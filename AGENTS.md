@@ -86,11 +86,21 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
   `PATCH|DELETE /api/tasks/<id>`, `GET|POST|DELETE /api/tasks/<id>/links`.
   Rows are snake_case. Tasks live in the server's SQLite, not the vault, so
   they are online-only: `TasksViewModel` calls the API directly, no Room.
+  `waiting_since` is stamped on entering Waiting; a PATCH may set an
+  earlier start, never a future one.
 - `GET /api/projects` → `[{ path, area, created_at }]`, vault folders the
   web registered as project boards. A task's `project` is that path;
   subtasks follow their root's project. A project's Inbox is its backlog:
-  the main list and board leave it out (`onMainBoard`). Projects are
-  created and removed on the web; the phone only picks them.
+  the main list and the All board leave it out (`onMainBoard`). Tasks with
+  no project are Quotidian; the board shows All, Quotidian or one project
+  (`ProjectView`). The Notes tab has the same tabs: All lists project
+  folders first, a project tab roots the tree (and new notes) at its
+  folder, Quotidian is everything outside one. Projects are created and
+  removed on the web; the phone only picks them.
+- `GET /api/shares` (`?path=` for one note's links, none for every link),
+  `POST /api/shares { path, password? }`, `PATCH /api/shares/<id>
+  { password }` (null removes it), `DELETE /api/shares/<id>`. The note menu
+  manages one note's links, Settings > Shared links all of them.
 - `GET|DELETE /api/tokens` → API tokens `[{ token_hash, created_at,
   last_used_at, label }]`; DELETE body `{ token_hash }` revokes one.
   Settings lists only phones (`label` null; agent tokens are labeled). The

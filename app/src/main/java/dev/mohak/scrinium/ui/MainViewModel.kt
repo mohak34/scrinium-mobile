@@ -136,6 +136,14 @@ class MainViewModel(
     private val _editor = MutableStateFlow<EditorState?>(null)
     val editor: StateFlow<EditorState?> = _editor.asStateFlow()
 
+    // The Notes tab's project tab. Projects come from TasksViewModel.
+    private val _notesView = MutableStateFlow<ProjectView>(ProjectView.All)
+    val notesView: StateFlow<ProjectView> = _notesView.asStateFlow()
+
+    fun setNotesView(view: ProjectView) {
+        _notesView.value = view
+    }
+
     // Persisted like pins, so the tree reopens the way it was left.
     val collapsedFolders: StateFlow<Set<String>> = prefs.collapsed
 
@@ -815,8 +823,9 @@ class MainViewModel(
         _screen.update { Screen.Search }
     }
 
-    // Public share links for the open note. Server holds the links; the
-    // public URL is base + /s/<id>, same as the web client builds.
+    // Public share links: the open note's, or every link (null path) for
+    // Settings. Server holds the links; the public URL is base + /s/<id>,
+    // same as the web client builds.
     private val _shares = MutableStateFlow<List<PublicShare>>(emptyList())
     val shares: StateFlow<List<PublicShare>> = _shares.asStateFlow()
     private val _sharesLoading = MutableStateFlow(false)
@@ -825,7 +834,7 @@ class MainViewModel(
     fun shareUrl(id: String): String =
         "${BuildConfig.SCRINIUM_API_URL.trimEnd('/')}/s/$id"
 
-    fun loadShares(path: String) {
+    fun loadShares(path: String?) {
         viewModelScope.launch(Dispatchers.IO) {
             _sharesLoading.value = true
             try {
@@ -849,6 +858,22 @@ class MainViewModel(
                 _shares.update { listOf(share) + it }
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Share failed: ${e.message}") }
+            }
+        }
+    }
+
+    // Null removes the password.
+    fun setSharePassword(id: String, password: String?) {
+        if (password != null && password.length !in 4..200) {
+            _sync.update { it.copy(error = "Password needs 4 to 200 characters") }
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val share = notes.setSharePassword(id, password)
+                _shares.update { list -> list.map { if (it.id == id) share else it } }
+            } catch (e: Exception) {
+                _sync.update { it.copy(error = "Password change failed: ${e.message}") }
             }
         }
     }
