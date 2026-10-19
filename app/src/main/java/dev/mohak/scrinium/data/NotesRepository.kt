@@ -122,7 +122,9 @@ class NotesRepository(
     // Trashes any vault file on the server; for files Room doesn't hold.
     suspend fun trashRemote(path: String) = api.deleteNote(path)
 
-    suspend fun fetchShares(path: String) = api.fetchShares(path)
+    suspend fun fetchShares(path: String?) = api.fetchShares(path)
+
+    suspend fun setSharePassword(id: String, password: String?) = api.setSharePassword(id, password)
 
     suspend fun createShare(path: String, password: String?) = api.createShare(path, password)
 

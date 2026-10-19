@@ -1,5 +1,6 @@
 package dev.mohak.scrinium.ui.screens
 
+import android.content.ClipData
 import android.content.Intent
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
@@ -27,11 +28,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -43,6 +47,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.mohak.scrinium.BuildConfig
 import dev.mohak.scrinium.R
 import dev.mohak.scrinium.data.remote.ApiTokenDto
+import dev.mohak.scrinium.data.remote.PublicShare
 import dev.mohak.scrinium.ui.BinTab
 import dev.mohak.scrinium.ui.ConfirmDialog
 import dev.mohak.scrinium.ui.Divider
@@ -51,18 +56,23 @@ import dev.mohak.scrinium.ui.GroupHeader
 import dev.mohak.scrinium.ui.InputBox
 import dev.mohak.scrinium.ui.MainViewModel
 import dev.mohak.scrinium.ui.MarkdownText
+import dev.mohak.scrinium.ui.MenuRow
 import dev.mohak.scrinium.ui.MonoFont
+import dev.mohak.scrinium.ui.PromptDialog
 import dev.mohak.scrinium.ui.Sc
+import dev.mohak.scrinium.ui.Sheet
+import dev.mohak.scrinium.ui.SheetTitle
 import dev.mohak.scrinium.ui.Sym
 import dev.mohak.scrinium.ui.TextAction
 import dev.mohak.scrinium.ui.TopBar
 import dev.mohak.scrinium.ui.Type
 import dev.mohak.scrinium.ui.relativeTime
 import dev.mohak.scrinium.update.Updater
+import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
 
-private enum class Page(val title: String) { Index("Settings"), Sync("Sync"), Devices("Devices"), Template("New note template"), Reminders("Reminders") }
+private enum class Page(val title: String) { Index("Settings"), Sync("Sync"), Devices("Devices"), Shares("Shared links"), Template("New note template"), Reminders("Reminders") }
 
 /** Settings: a list with one status line per row, each opening its own page. */
 @Composable
@@ -71,6 +81,7 @@ fun SettingsScreen(vm: MainViewModel) {
     BackHandler(enabled = page != Page.Index) { page = Page.Index }
     LaunchedEffect(Unit) {
         vm.loadDevices()
+        vm.loadShares(null)
         vm.refreshTrash()
         vm.checkUpdate()
     }
@@ -81,6 +92,7 @@ fun SettingsScreen(vm: MainViewModel) {
                 Page.Index -> IndexPage(vm) { page = it }
                 Page.Sync -> SyncPage(vm)
                 Page.Devices -> DevicesPage(vm)
+                Page.Shares -> SharesPage(vm)
                 Page.Template -> TemplatePage(vm)
                 Page.Reminders -> RemindersPage(vm)
             }
@@ -94,6 +106,7 @@ private fun IndexPage(vm: MainViewModel, open: (Page) -> Unit) {
     val sync by vm.sync.collectAsStateWithLifecycle()
     val unsynced by vm.unsyncedCount.collectAsStateWithLifecycle()
     val devices by vm.devices.collectAsStateWithLifecycle()
+    val shares by vm.shares.collectAsStateWithLifecycle()
     val template by vm.template.collectAsStateWithLifecycle()
     val trash by vm.trash.collectAsStateWithLifecycle()
     val remindersOn by vm.remindersOn.collectAsStateWithLifecycle()
@@ -125,6 +138,7 @@ private fun IndexPage(vm: MainViewModel, open: (Page) -> Unit) {
             if (failed > 0) add("$failed failed")
         }.joinToString("  ·  ")) { open(Page.Sync) }
         PageRow(R.drawable.ms_devices, "Devices", if (devices.isEmpty()) "Phones signed in to your vault" else "${devices.size} signed in") { open(Page.Devices) }
+        PageRow(R.drawable.ms_link, "Shared links", if (shares.isEmpty()) "Public links to your notes" else "${shares.size} link${if (shares.size == 1) "" else "s"}") { open(Page.Shares) }
         PageRow(R.drawable.ms_note_add, "New note template", template.lineSequence().firstOrNull { it.isNotBlank() }?.takeIf { "{{title}}" in template } ?: "# {{title}}  (default)") { open(Page.Template) }
         PageRow(R.drawable.ms_notifications, "Reminders", if (remindersOn) "On  ·  ${scheduledReminders.size} scheduled" else "Off") { open(Page.Reminders) }
         PageRow(R.drawable.ms_delete, "Trash", if (trash.isEmpty()) "Empty" else "${trash.size} item${if (trash.size == 1) "" else "s"}") { vm.openBins(BinTab.Trash) }
@@ -276,6 +290,70 @@ private fun DevicesPage(vm: MainViewModel) {
             "That phone will have to sign in again.",
             "Revoke",
             onConfirm = { vm.revokeDevice(d.tokenHash) },
+            onDismiss = { revoking = null }
+        )
+    }
+}
+
+// Every public link in the vault, by note. Tapping one offers copy, password
+// and revoke; a password change signs out viewers who unlocked it.
+@Composable
+private fun SharesPage(vm: MainViewModel) {
+    val shares by vm.shares.collectAsStateWithLifecycle()
+    val loading by vm.sharesLoading.collectAsStateWithLifecycle()
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
+    var acting by remember { mutableStateOf<PublicShare?>(null) }
+    var settingPassword by remember { mutableStateOf<PublicShare?>(null) }
+    var revoking by remember { mutableStateOf<PublicShare?>(null) }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        if (shares.isEmpty()) Text(if (loading) "Loading links" else "No shared links. Share a note from its menu.", style = Type.meta, modifier = Modifier.padding(20.dp))
+        shares.forEachIndexed { i, share ->
+            if (i > 0) Divider()
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 60.dp).clickable { acting = share }.padding(horizontal = 20.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Sym(if (share.hasPassword) R.drawable.ms_lock else R.drawable.ms_link, tint = Sc.text2)
+                Column(Modifier.weight(1f).padding(start = 16.dp)) {
+                    Text(share.notePath.removeSuffix(".md"), style = Type.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        (if (share.hasPassword) "password" else "open") + "  ·  " + DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(share.createdAt)),
+                        style = Type.mono
+                    )
+                }
+            }
+        }
+    }
+    acting?.let { share ->
+        Sheet({ acting = null }) {
+            SheetTitle(share.notePath.removeSuffix(".md"), vm.shareUrl(share.id).substringAfter("://"))
+            Divider()
+            MenuRow(R.drawable.ms_content_copy, "Copy link", {
+                acting = null
+                scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("link", vm.shareUrl(share.id)))) }
+            })
+            MenuRow(R.drawable.ms_lock, if (share.hasPassword) "Change password" else "Set password", { acting = null; settingPassword = share })
+            if (share.hasPassword) MenuRow(R.drawable.ms_lock_open, "Remove password", { acting = null; vm.setSharePassword(share.id, null) })
+            MenuRow(R.drawable.ms_close, "Revoke link", { acting = null; revoking = share }, danger = true)
+        }
+    }
+    settingPassword?.let { share ->
+        PromptDialog(
+            if (share.hasPassword) "Change password" else "Set password",
+            "",
+            "Save",
+            onConfirm = { vm.setSharePassword(share.id, it) },
+            onDismiss = { settingPassword = null },
+            placeholder = "At least 4 characters"
+        )
+    }
+    revoking?.let { share ->
+        ConfirmDialog(
+            "Revoke link?",
+            "Anyone opening it will get a not found page.",
+            "Revoke",
+            onConfirm = { vm.deleteShareLink(share.id) },
             onDismiss = { revoking = null }
         )
     }
