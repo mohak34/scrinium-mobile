@@ -8,6 +8,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,6 +24,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -37,6 +39,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
@@ -62,11 +65,11 @@ import dev.mohak.scrinium.ui.TasksViewModel
 import dev.mohak.scrinium.ui.TopBar
 import dev.mohak.scrinium.ui.Type
 import dev.mohak.scrinium.ui.completions
+import dev.mohak.scrinium.ui.folderPaths
 import dev.mohak.scrinium.ui.insertText
+import dev.mohak.scrinium.ui.lineStartOffset
 import dev.mohak.scrinium.ui.toggleLinePrefix
 import dev.mohak.scrinium.ui.wrapSelection
-import dev.mohak.scrinium.ui.folderPaths
-import dev.mohak.scrinium.ui.lineStartOffset
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -83,7 +86,13 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
     val editor by vm.editor.collectAsStateWithLifecycle()
     val state = editor ?: return
 
-    var preview by remember { mutableStateOf(false) }
+    var preview by remember(state.id) { mutableStateOf(!state.isNew) }
+    // Set by a tap in reading view: the editor takes focus once it is shown.
+    var focusOnEdit by remember { mutableStateOf(false) }
+    fun edit() {
+        preview = false
+        focusOnEdit = true
+    }
     var showPanel by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
     val actions = rememberNoteActions()
@@ -227,6 +236,7 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                 markdown = state.text,
                 modifier = Modifier
                     .fillMaxSize()
+                    .pointerInput(Unit) { detectTapGestures { edit() } }
                     .verticalScroll(previewScroll)
                     .padding(horizontal = 18.dp, vertical = 8.dp),
                 onWikilinkClick = { vm.openWikilink(it) },
@@ -234,7 +244,8 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                 onTagClick = { vm.searchTag(it) },
                 imageBase = state.path,
                 loadImage = { vm.loadImage(state.path, it) },
-                onHeadingPositioned = { line, y -> headingY[line] = y }
+                onHeadingPositioned = { line, y -> headingY[line] = y },
+                onPlainTap = ::edit
             )
         } else Column(Modifier.fillMaxSize().imePadding()) {
             BasicTextField(
@@ -254,6 +265,12 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                     inner()
                 }
             )
+            LaunchedEffect(Unit) {
+                if (focusOnEdit) {
+                    focusOnEdit = false
+                    focus.requestFocus()
+                }
+            }
             if (focused && suggestions.isNotEmpty()) {
                 Row(
                     Modifier
