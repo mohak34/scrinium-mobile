@@ -1,10 +1,13 @@
 package dev.mohak.scrinium.ui
 
 import dev.mohak.scrinium.data.remote.CalendarEvent
+import dev.mohak.scrinium.data.remote.TaskDto
 import java.util.Calendar
 import java.util.TimeZone
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class TaskModelTest {
     private fun local(y: Int, m: Int, d: Int, h: Int = 0) =
@@ -34,5 +37,16 @@ class TaskModelTest {
         assertEquals("Tomorrow", shortDue(local(2026, 11, 2), now = local(2026, 11, 1, 12)))
         assertEquals("Tomorrow", shortDue(local(2027, 3, 15), now = local(2027, 3, 14, 12)))
         assertEquals("Tomorrow", shortDue(local(2026, 10, 6), now = local(2026, 10, 5, 12)))
+    }
+
+    @Test
+    fun boardViewsSplitQuotidianFromProjects() {
+        val loose = TaskDto("1", "Loose", status = "inbox")
+        val backlog = TaskDto("2", "Backlog", status = "inbox", project = "Jobs")
+        val active = TaskDto("3", "Active", status = "todo", project = "Jobs")
+        assertEquals(listOf(loose, active), listOf(loose, backlog, active).filter { BoardView.All.shows(it) })
+        assertTrue(BoardView.Project(null).shows(loose))
+        assertFalse(BoardView.Project(null).shows(active))
+        assertEquals(listOf(backlog, active), listOf(loose, backlog, active).filter { BoardView.Project("Jobs").shows(it) })
     }
 }

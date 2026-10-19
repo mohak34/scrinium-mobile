@@ -57,6 +57,21 @@ val TaskDto.onMainBoard: Boolean get() = project == null || status != TaskStatus
 
 fun projectName(path: String): String = path.substringAfterLast('/')
 
+// What the Board tab shows, like the web board's tabs: All leaves project
+// backlogs out (onMainBoard); a Project shows one, and a null path is
+// Quotidian, the tasks in no project.
+sealed interface BoardView {
+    data object All : BoardView
+    data class Project(val path: String?) : BoardView
+}
+
+fun BoardView.shows(t: TaskDto): Boolean = when (this) {
+    BoardView.All -> t.onMainBoard
+    is BoardView.Project -> t.project == path
+}
+
+const val QUOTIDIAN = "Quotidian"
+
 fun startOfToday(): Long = startOfDay(System.currentTimeMillis())
 
 fun startOfDay(ms: Long): Long = Calendar.getInstance().apply {

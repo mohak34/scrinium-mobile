@@ -51,16 +51,15 @@ class TasksViewModel(
         _areaFilter.value = key
     }
 
-    // Project boards (vault folders), and the one the Board tab shows. Null
-    // is the main board, which leaves project backlogs out (onMainBoard).
+    // Project boards (vault folders), and the view the Board tab shows.
     private val _projects = MutableStateFlow<List<ProjectDto>>(emptyList())
     val projects: StateFlow<List<ProjectDto>> = _projects.asStateFlow()
 
-    private val _projectFilter = MutableStateFlow<String?>(null)
-    val projectFilter: StateFlow<String?> = _projectFilter.asStateFlow()
+    private val _boardView = MutableStateFlow<BoardView>(BoardView.All)
+    val boardView: StateFlow<BoardView> = _boardView.asStateFlow()
 
-    fun setProjectFilter(path: String?) {
-        _projectFilter.value = path
+    fun setBoardView(view: BoardView) {
+        _boardView.value = view
     }
 
     // Set by the tasks widget's +: the Tasks tab opens its quick-add sheet.
@@ -154,7 +153,8 @@ class TasksViewModel(
             try {
                 val rows = api.fetchProjects()
                 _projects.value = rows
-                if (rows.none { it.path == _projectFilter.value }) _projectFilter.value = null
+                val view = _boardView.value
+                if (view is BoardView.Project && view.path != null && rows.none { it.path == view.path }) _boardView.value = BoardView.All
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
@@ -320,6 +320,12 @@ class TasksViewModel(
     fun setWaitingOn(id: String, who: String) {
         val clean = who.trim().ifEmpty { null }
         patch(id, "waiting_on" to (clean?.let { JsonPrimitive(it) } ?: JsonNull)) { it.copy(waitingOn = clean) }
+    }
+
+    // The server refuses a start in the future.
+    fun setWaitingSince(id: String, since: Long) {
+        val at = minOf(since, System.currentTimeMillis())
+        patch(id, "waiting_since" to JsonPrimitive(at)) { it.copy(waitingSince = at) }
     }
 
     fun setDue(id: String, dueAt: Long?) =

@@ -79,6 +79,7 @@ fun TaskDetailScreen(vm: MainViewModel, tasksVm: TasksViewModel, id: String) {
     var showLinkPicker by remember { mutableStateOf(false) }
     var pickProject by remember { mutableStateOf(false) }
     var pickParent by remember { mutableStateOf(false) }
+    var pickWaitingSince by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize().imePadding()) {
         TopBar(if (task?.parentId != null) "Subtask" else "", onBack = { tasksVm.closeTask() }) {
@@ -105,8 +106,8 @@ fun TaskDetailScreen(vm: MainViewModel, tasksVm: TasksViewModel, id: String) {
             if (task.status == TaskStatus.Waiting.key) {
                 Spacer(Modifier.height(8.dp))
                 DraftField(tasksVm, task.id, TasksViewModel.TextField.WaitingOn, task.waitingOn.orEmpty(), "Waiting on whom?", Type.body, singleLine = true, boxed = true)
-                task.waitingSince?.let {
-                    Text("Waiting since ${stampLabel(it)}", style = Type.meta, modifier = Modifier.padding(horizontal = 16.dp))
+                Row(Modifier.padding(horizontal = 8.dp)) {
+                    TextAction(task.waitingSince?.let { "Waiting since ${stampLabel(it)}" } ?: "Set when waiting started", { pickWaitingSince = true })
                 }
             }
 
@@ -217,6 +218,17 @@ fun TaskDetailScreen(vm: MainViewModel, tasksVm: TasksViewModel, id: String) {
             pickParent = false
             tasksVm.setParent(task.id, it)
         }
+    }
+    if (pickWaitingSince) {
+        LocalDatePickerDialog(
+            initial = task.waitingSince,
+            onDismiss = { pickWaitingSince = false },
+            onPick = { day ->
+                pickWaitingSince = false
+                // Keep the time of day; one still ahead today becomes now.
+                tasksVm.setWaitingSince(task.id, atMinutes(day, task.waitingSince?.let(::minutesOfDay) ?: 0))
+            }
+        )
     }
     if (pickDue) {
         LocalDatePickerDialog(

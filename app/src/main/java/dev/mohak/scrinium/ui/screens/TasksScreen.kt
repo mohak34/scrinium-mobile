@@ -80,7 +80,10 @@ import dev.mohak.scrinium.ui.isDone
 import dev.mohak.scrinium.ui.isOverdue
 import dev.mohak.scrinium.ui.isDueToday
 import dev.mohak.scrinium.ui.onMainBoard
+import dev.mohak.scrinium.ui.BoardView
+import dev.mohak.scrinium.ui.QUOTIDIAN
 import dev.mohak.scrinium.ui.projectName
+import dev.mohak.scrinium.ui.shows
 import dev.mohak.scrinium.ui.shortDue
 import dev.mohak.scrinium.ui.startOfDay
 import dev.mohak.scrinium.ui.startOfToday
@@ -180,7 +183,7 @@ fun BoardScreen(tasksVm: TasksViewModel) {
     val error by tasksVm.error.collectAsStateWithLifecycle()
     val area by tasksVm.areaFilter.collectAsStateWithLifecycle()
     val projects by tasksVm.projects.collectAsStateWithLifecycle()
-    val project by tasksVm.projectFilter.collectAsStateWithLifecycle()
+    val view by tasksVm.boardView.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { tasksVm.refresh() }
     var showAdd by remember { mutableStateOf(false) }
     var moving by remember { mutableStateOf<TaskDto?>(null) }
@@ -188,7 +191,7 @@ fun BoardScreen(tasksVm: TasksViewModel) {
     val statuses = TaskStatus.entries
     val pager = rememberPagerState { statuses.size }
     val scope = rememberCoroutineScope()
-    val tasks = topLevel(all, area).filter { if (project != null) it.project == project else it.onMainBoard }
+    val tasks = topLevel(all, area).filter { view.shows(it) }
     val progress = subtaskProgress(all)
     val columns = statuses.map { s ->
         tasks.filter { it.status == s.key }.let { rows ->
@@ -198,8 +201,8 @@ fun BoardScreen(tasksVm: TasksViewModel) {
     }
 
     Column(Modifier.fillMaxSize()) {
-        TopBar(project?.let(::projectName) ?: "Board") {
-            if (projects.isNotEmpty()) ProjectFilterButton(projects.map { it.path }, project) { tasksVm.setProjectFilter(it) }
+        TopBar(when (val v = view) { BoardView.All -> "Board"; is BoardView.Project -> v.path?.let(::projectName) ?: QUOTIDIAN }) {
+            if (projects.isNotEmpty()) BoardViewButton(projects.map { it.path }, view) { tasksVm.setBoardView(it) }
             AreaFilterButton(area) { tasksVm.setAreaFilter(it) }
         }
         TextTabs(
@@ -248,7 +251,7 @@ fun BoardScreen(tasksVm: TasksViewModel) {
     if (showAdd) {
         val status = statuses[pager.currentPage]
         QuickAddSheet(TaskArea.of(area), null, onDismiss = { showAdd = false }) { title, a, due ->
-            tasksVm.create(title, area = a, dueAt = due, project = project, status = status)
+            tasksVm.create(title, area = a, dueAt = due, project = (view as? BoardView.Project)?.path, status = status)
         }
     }
 }
@@ -470,17 +473,18 @@ private fun AreaFilterButton(area: String?, onPick: (String?) -> Unit) {
     }
 }
 
-/** Board top-bar switch between the main board and a project board. */
+/** Board top-bar switch between All, Quotidian and one project's board. */
 @Composable
-private fun ProjectFilterButton(projects: List<String>, project: String?, onPick: (String?) -> Unit) {
+private fun BoardViewButton(projects: List<String>, view: BoardView, onPick: (BoardView) -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
-        IconBtn(R.drawable.ms_folder_special, "Project board", { open = true }, tint = if (project != null) Sc.accent else Sc.text2, active = open)
+        IconBtn(R.drawable.ms_folder_special, "Project board", { open = true }, tint = if (view != BoardView.All) Sc.accent else Sc.text2, active = open)
         Menu(open, { open = false }) {
-            MenuRow(null, "Main board", { open = false; onPick(null) }, trailing = { if (project == null) Sym(R.drawable.ms_check, tint = Sc.accent, size = 18.dp) })
-            projects.forEach { p ->
-                MenuRow(null, projectLabel(p, projects), { open = false; onPick(p) }, trailing = {
-                    if (project == p) Sym(R.drawable.ms_check, tint = Sc.accent, size = 18.dp)
+            val choices = listOf(BoardView.All to "All", BoardView.Project(null) to QUOTIDIAN) +
+                projects.map { BoardView.Project(it) to projectLabel(it, projects) }
+            choices.forEach { (v, label) ->
+                MenuRow(null, label, { open = false; onPick(v) }, trailing = {
+                    if (view == v) Sym(R.drawable.ms_check, tint = Sc.accent, size = 18.dp)
                 })
             }
         }
