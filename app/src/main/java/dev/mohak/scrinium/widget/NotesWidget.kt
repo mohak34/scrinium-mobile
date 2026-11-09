@@ -12,7 +12,7 @@ import android.widget.RemoteViews
 import dev.mohak.scrinium.MainActivity
 import dev.mohak.scrinium.R
 import dev.mohak.scrinium.ScriniumApplication
-import dev.mohak.scrinium.data.local.NoteEntity
+import dev.mohak.scrinium.data.local.NoteMeta
 import dev.mohak.scrinium.ui.noteStem
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -25,9 +25,10 @@ import kotlinx.coroutines.launch
  * a widget is placed or the app is updated (no periodic updates).
  */
 object NotesWidget {
-    private const val MAX_ROWS = 8
+    const val MAX_ROWS = 8
 
-    fun render(context: Context, notes: List<NoteEntity>) {
+    // [recent] is NoteDao.recent(MAX_ROWS): sorted and cut in SQL.
+    fun render(context: Context, recent: List<NoteMeta>) {
         val manager = AppWidgetManager.getInstance(context)
         val ids = manager.getAppWidgetIds(ComponentName(context, NotesWidgetProvider::class.java))
         if (ids.isEmpty()) return
@@ -39,7 +40,6 @@ object NotesWidget {
             open(context, Uri.parse("scrinium:new")) { putExtra(MainActivity.EXTRA_NEW_NOTE, true) }
         )
         views.removeAllViews(R.id.widget_list)
-        val recent = recentNotes(notes, MAX_ROWS)
         for (note in recent) {
             val row = RemoteViews(context.packageName, R.layout.widget_note_row)
             row.setTextViewText(R.id.row_title, noteStem(note.path))
@@ -69,12 +69,6 @@ object NotesWidget {
         )
 }
 
-/** Live notes, last edited first; a local edit counts as newer than the server time. */
-fun recentNotes(notes: List<NoteEntity>, limit: Int): List<NoteEntity> = notes
-    .filter { !it.isDeleted }
-    .sortedByDescending { maxOf(it.localModifiedAt ?: 0L, it.remoteUpdatedAt) }
-    .take(limit)
-
 class NotesWidgetProvider : AppWidgetProvider() {
     override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) {
         val pending = goAsync()
@@ -82,7 +76,7 @@ class NotesWidgetProvider : AppWidgetProvider() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val signedIn = container.tokenStore.token.value != null
-                NotesWidget.render(context, if (signedIn) container.database.noteDao().getAll() else emptyList())
+                NotesWidget.render(context, if (signedIn) container.database.noteDao().recent(NotesWidget.MAX_ROWS) else emptyList())
             } finally {
                 pending.finish()
             }

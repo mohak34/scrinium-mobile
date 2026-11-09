@@ -280,7 +280,7 @@ fun TaskDetailScreen(vm: MainViewModel, tasksVm: TasksViewModel, id: String) {
             onDismiss = { showLinkPicker = false },
             onPick = {
                 showLinkPicker = false
-                tasksVm.addLink(task.id, it)
+                tasksVm.addLink(task.id) { vm.noteOnServer(it) }
             }
         )
     }
@@ -291,6 +291,7 @@ private fun Subtasks(task: TaskDto, all: List<TaskDto>, tasksVm: TasksViewModel)
     val kids = all.filter { it.parentId == task.id }
         .sortedWith(compareBy({ it.position }, { it.createdAt }))
     var newTitle by remember(task.id) { mutableStateOf("") }
+    var adding by remember(task.id) { mutableStateOf(false) }
     GroupHeader("Subtasks", if (kids.isNotEmpty()) "${kids.count { it.isDone }}/${kids.size}" else null)
     kids.forEach { k ->
         TaskRow(k, null, onToggle = { tasksVm.toggleDone(k) }, onOpen = { tasksVm.openTask(k.id) })
@@ -302,16 +303,21 @@ private fun Subtasks(task: TaskDto, all: List<TaskDto>, tasksVm: TasksViewModel)
         Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
         icon = R.drawable.ms_add,
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-        keyboardActions = KeyboardActions(onDone = {
+        keyboardActions = KeyboardActions(onDone = add@{
             // Subtasks inherit the parent's area and start in its column.
             val title = newTitle
+            if (adding) return@add
+            adding = true
             tasksVm.create(
                 title,
                 area = TaskArea.of(task.area),
                 parentId = task.id,
                 status = TaskStatus.of(task.status).takeIf { it != TaskStatus.Done } ?: TaskStatus.Todo,
                 // Kept on failure for a retry; cleared unless more was typed.
-                onCreated = { if (newTitle == title) newTitle = "" }
+                onDone = { ok ->
+                    adding = false
+                    if (ok && newTitle == title) newTitle = ""
+                }
             )
         })
     )
@@ -348,22 +354,31 @@ private fun DraftField(
         text = next
         tasksVm.draft(id, field, next)
     }
+    val failed by tasksVm.failedFields.collectAsStateWithLifecycle()
     if (boxed) {
         InputBox(text, onChange, placeholder, Modifier.fillMaxWidth().padding(horizontal = 16.dp), style = style)
-        return
+    } else {
+        BasicTextField(
+            value = text,
+            onValueChange = onChange,
+            singleLine = singleLine,
+            textStyle = style,
+            cursorBrush = SolidColor(Sc.accent),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+            decorationBox = { inner ->
+                if (text.isEmpty()) Text(placeholder, style = style.copy(color = Sc.text3))
+                inner()
+            }
+        )
     }
-    BasicTextField(
-        value = text,
-        onValueChange = onChange,
-        singleLine = singleLine,
-        textStyle = style,
-        cursorBrush = SolidColor(Sc.accent),
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-        decorationBox = { inner ->
-            if (text.isEmpty()) Text(placeholder, style = style.copy(color = Sc.text3))
-            inner()
-        }
-    )
+    // The text above stays as typed; the server still has the old value.
+    if ((id to field) in failed) {
+        Text(
+            "Not saved. Tap to retry.",
+            style = Type.meta.copy(color = Sc.red),
+            modifier = Modifier.clickable { tasksVm.retryField(id, field) }.padding(horizontal = 16.dp, vertical = 4.dp)
+        )
+    }
 }
 
 @Composable

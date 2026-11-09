@@ -167,8 +167,8 @@ fun TasksScreen(tasksVm: TasksViewModel) {
     }
 
     if (showAdd) {
-        QuickAddSheet(TaskArea.of(area), null, onDismiss = { showAdd = false }) { title, a, due ->
-            tasksVm.create(title, area = a, dueAt = due)
+        QuickAddSheet(TaskArea.of(area), null, onDismiss = { showAdd = false }) { title, a, due, done ->
+            tasksVm.create(title, area = a, dueAt = due, onDone = done)
         }
     }
 }
@@ -250,8 +250,8 @@ fun BoardScreen(tasksVm: TasksViewModel) {
     }
     if (showAdd) {
         val status = statuses[pager.currentPage]
-        QuickAddSheet(TaskArea.of(area), null, onDismiss = { showAdd = false }) { title, a, due ->
-            tasksVm.create(title, area = a, dueAt = due, project = (view as? ProjectView.Project)?.path, status = status)
+        QuickAddSheet(TaskArea.of(area), null, onDismiss = { showAdd = false }) { title, a, due, done ->
+            tasksVm.create(title, area = a, dueAt = due, project = (view as? ProjectView.Project)?.path, status = status, onDone = done)
         }
     }
 }
@@ -345,8 +345,8 @@ fun CalendarScreen(tasksVm: TasksViewModel) {
     }
 
     if (showAdd) {
-        QuickAddSheet(TaskArea.of(area), selectedDay, onDismiss = { showAdd = false }) { title, a, due ->
-            tasksVm.create(title, area = a, dueAt = due)
+        QuickAddSheet(TaskArea.of(area), selectedDay, onDismiss = { showAdd = false }) { title, a, due, done ->
+            tasksVm.create(title, area = a, dueAt = due, onDone = done)
         }
     }
 }
@@ -598,19 +598,27 @@ private fun TaskMeta(task: TaskDto, progress: Pair<Int, Int>?, showDue: Boolean,
     }
 }
 
-/** New task: title, area and an optional due day. */
+/**
+ * New task: title, area and an optional due day. The sheet closes once the
+ * server made the task ([onAdd]'s callback gets true); on a failure it stays
+ * open with the text for a retry.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun QuickAddSheet(initialArea: TaskArea?, initialDue: Long?, onDismiss: () -> Unit, onAdd: (String, TaskArea?, Long?) -> Unit) {
+fun QuickAddSheet(initialArea: TaskArea?, initialDue: Long?, onDismiss: () -> Unit, onAdd: (String, TaskArea?, Long?, (Boolean) -> Unit) -> Unit) {
     var title by remember { mutableStateOf("") }
     var area by remember { mutableStateOf(initialArea) }
     var due by remember { mutableStateOf(initialDue) }
     var pickDate by remember { mutableStateOf(false) }
+    var adding by remember { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
     fun submit() {
-        if (title.isBlank()) return
-        onAdd(title, area, due)
-        onDismiss()
+        if (title.isBlank() || adding) return
+        adding = true
+        onAdd(title, area, due) { ok ->
+            adding = false
+            if (ok) onDismiss()
+        }
     }
     Sheet(onDismiss) {
         InputBox(

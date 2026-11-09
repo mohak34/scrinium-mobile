@@ -99,11 +99,16 @@ data class PublicShare(
     val id: String,
     val notePath: String,
     val createdAt: Long = 0L,
-    val hasPassword: Boolean = false
+    val hasPassword: Boolean = false,
+    // Epoch ms; null never expires. An expired link still lists until removed.
+    val expiresAt: Long? = null
 )
 
+// Lifetimes offered when a link is made, as the web offers them (days; null never expires).
+val SHARE_LIFETIMES: List<Int?> = listOf(null, 1, 7, 30)
+
 @Serializable
-data class CreateShareRequest(val path: String, val password: String? = null)
+data class CreateShareRequest(val path: String, val password: String? = null, val expiresInDays: Int? = null)
 
 // No default: a null password must reach the server to remove it.
 @Serializable
@@ -141,7 +146,9 @@ data class NewTaskRequest(
     val area: String?,
     @SerialName("due_at") val dueAt: Long?,
     @SerialName("parent_id") val parentId: String?,
-    val project: String?
+    val project: String?,
+    // Linked in the same request; a bad path fails it before the task exists.
+    @SerialName("note_paths") val notePaths: List<String>? = null
 )
 
 // A vault folder registered as a project board on the web.
@@ -449,8 +456,8 @@ class ScriniumApi(
     suspend fun setSharePassword(id: String, password: String?): PublicShare =
         service.setSharePassword(id, SharePasswordRequest(password))
 
-    suspend fun createShare(path: String, password: String?): PublicShare =
-        service.createShare(CreateShareRequest(path, password?.takeIf { it.isNotBlank() }))
+    suspend fun createShare(path: String, password: String?, expiresInDays: Int?): PublicShare =
+        service.createShare(CreateShareRequest(path, password?.takeIf { it.isNotBlank() }, expiresInDays))
 
     suspend fun deleteShare(id: String) {
         val res = service.deleteShare(id)

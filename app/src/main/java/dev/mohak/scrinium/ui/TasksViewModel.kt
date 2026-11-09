@@ -201,12 +201,20 @@ class TasksViewModel(
     // task saves it at once instead of dropping it with the composition.
     enum class TextField { Title, Detail, WaitingOn }
 
-    private class Draft(val text: String, val job: Job)
+    // [job] is the pending save; null for text whose save failed, which
+    // waits for more typing, a retry or leaving the task.
+    private class Draft(val text: String, val job: Job?)
 
     private val drafts = mutableMapOf<Pair<String, TextField>, Draft>()
 
+    // Fields whose last save failed: the screen keeps their text and marks
+    // it unsaved.
+    private val _failedFields = MutableStateFlow(emptySet<Pair<String, TextField>>())
+    val failedFields: StateFlow<Set<Pair<String, TextField>>> = _failedFields.asStateFlow()
+
     fun draft(id: String, field: TextField, text: String) {
         val key = id to field
+        _failedFields.update { it - key }
         drafts.remove(key)?.job?.cancel()
         drafts[key] = Draft(text, viewModelScope.launch {
             delay(DRAFT_DELAY_MS)
@@ -222,20 +230,38 @@ class TasksViewModel(
         val pending = drafts.toMap()
         drafts.clear()
         for ((key, d) in pending) {
-            d.job.cancel()
+            d.job?.cancel()
             commit(key.first, key.second, d.text)
         }
     }
 
-    private fun commit(id: String, field: TextField, text: String) = when (field) {
-        TextField.Title -> setTitle(id, text)
-        TextField.Detail -> setDetail(id, text)
-        TextField.WaitingOn -> setWaitingOn(id, text)
+    fun retryField(id: String, field: TextField) {
+        val d = drafts.remove(id to field) ?: return
+        _failedFields.update { it - (id to field) }
+        commit(id, field, d.text)
+    }
+
+    // A failed save goes back in as a draft unless newer typing replaced it.
+    private fun commit(id: String, field: TextField, text: String) {
+        val key = id to field
+        val onFailed = {
+            if (key !in drafts) {
+                drafts[key] = Draft(text, null)
+                _failedFields.update { it + key }
+            }
+        }
+        when (field) {
+            TextField.Title -> setTitle(id, text, onFailed)
+            TextField.Detail -> setDetail(id, text, onFailed)
+            TextField.WaitingOn -> setWaitingOn(id, text, onFailed)
+        }
     }
 
     // Undated tasks land in the Inbox, dated ones are already planned:
-    // the web quick-add rule. [onCreated] runs once the server has the task,
-    // so a form can keep its text for a retry when creation fails.
+    // the web quick-add rule. [link] pushes the note to link and returns its
+    // server path (MainViewModel.noteOnServer); the task and link are one
+    // request. [onDone] reports whether the server made the task, so a form
+    // keeps its text for a retry when it didn't.
     fun create(
         title: String,
         area: TaskArea? = null,
@@ -243,14 +269,15 @@ class TasksViewModel(
         parentId: String? = null,
         project: String? = null,
         status: TaskStatus? = null,
-        linkPath: String? = null,
+        link: (suspend () -> String)? = null,
         open: Boolean = false,
-        onCreated: () -> Unit = {}
+        onDone: (Boolean) -> Unit = {}
     ) {
         val clean = title.trim()
         if (clean.isEmpty()) return
         viewModelScope.launch {
             try {
+                val linkPath = link?.invoke()
                 val row = api.createTask(
                     NewTaskRequest(
                         title = clean,
@@ -258,34 +285,32 @@ class TasksViewModel(
                         area = area?.key,
                         dueAt = dueAt,
                         parentId = parentId,
-                        project = project
+                        project = project,
+                        notePaths = linkPath?.let(::listOf)
                     )
-                )
+                ).let { if (linkPath != null) it.copy(linkCount = 1) else it }
                 setTasks { it + row }
-                onCreated()
-                if (linkPath != null) {
-                    api.addTaskLink(row.id, linkPath)
-                    setLinkCount(row.id, 1)
-                    // The panel may show another note by now.
-                    if (notePath == linkPath) _noteTasks.update { it + row.copy(linkCount = 1) }
-                }
+                // The panel may show another note by now.
+                if (linkPath != null && notePath == linkPath) _noteTasks.update { it + row }
+                onDone(true)
                 if (open) openTask(row.id)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 _error.value = "Couldn't add task: ${e.message}"
+                onDone(false)
             }
         }
     }
 
-    fun setTitle(id: String, title: String) {
+    fun setTitle(id: String, title: String, onFailed: () -> Unit = {}) {
         val clean = title.trim()
         if (clean.isEmpty()) return
-        patch(id, "title" to JsonPrimitive(clean)) { it.copy(title = clean) }
+        patch(id, "title" to JsonPrimitive(clean), onFailed = onFailed) { it.copy(title = clean) }
     }
 
-    fun setDetail(id: String, detail: String) =
-        patch(id, "detail" to JsonPrimitive(detail)) { it.copy(detail = detail) }
+    fun setDetail(id: String, detail: String, onFailed: () -> Unit = {}) =
+        patch(id, "detail" to JsonPrimitive(detail), onFailed = onFailed) { it.copy(detail = detail) }
 
     fun setStatus(id: String, status: TaskStatus) =
         patch(id, "status" to JsonPrimitive(status.key)) { it.copy(status = status.key) }
@@ -317,9 +342,9 @@ class TasksViewModel(
     fun setPriority(id: String, priority: TaskPriority) =
         patch(id, "priority" to JsonPrimitive(priority.key)) { it.copy(priority = priority.key) }
 
-    fun setWaitingOn(id: String, who: String) {
+    fun setWaitingOn(id: String, who: String, onFailed: () -> Unit = {}) {
         val clean = who.trim().ifEmpty { null }
-        patch(id, "waiting_on" to (clean?.let { JsonPrimitive(it) } ?: JsonNull)) { it.copy(waitingOn = clean) }
+        patch(id, "waiting_on" to (clean?.let { JsonPrimitive(it) } ?: JsonNull), onFailed = onFailed) { it.copy(waitingOn = clean) }
     }
 
     // The server refuses a start in the future.
@@ -367,10 +392,11 @@ class TasksViewModel(
         }
     }
 
-    fun addLink(id: String, notePath: String) {
+    // [link] pushes the note first and returns its server path.
+    fun addLink(id: String, link: suspend () -> String) {
         viewModelScope.launch {
             try {
-                val links = api.addTaskLink(id, notePath)
+                val links = api.addTaskLink(id, link())
                 if (_openTaskId.value == id) _openLinks.value = links
                 setLinkCount(id, links.size)
             } catch (e: CancellationException) {
@@ -433,6 +459,7 @@ class TasksViewModel(
         id: String,
         field: Pair<String, JsonElement>,
         onSaved: (suspend () -> Unit)? = null,
+        onFailed: () -> Unit = {},
         local: (TaskDto) -> TaskDto
     ) {
         val shown = _tasks.value.firstOrNull { it.id == id } ?: _noteTasks.value.firstOrNull { it.id == id }
@@ -450,6 +477,7 @@ class TasksViewModel(
                 _error.value = "Couldn't save task: ${e.message}"
                 pending[id]?.remove(edit)
                 settle(id)
+                onFailed()
                 return@launch
             }
             pending[id]?.remove(edit)

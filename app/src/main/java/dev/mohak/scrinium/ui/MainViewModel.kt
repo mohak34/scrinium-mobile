@@ -17,6 +17,7 @@ import dev.mohak.scrinium.data.attachmentMarkdown
 import dev.mohak.scrinium.data.resolveImage
 import dev.mohak.scrinium.data.SessionRepository
 import dev.mohak.scrinium.data.local.NoteEntity
+import dev.mohak.scrinium.data.local.NoteMeta
 import dev.mohak.scrinium.data.remote.ApiTokenDto
 import dev.mohak.scrinium.data.remote.PublicShare
 import dev.mohak.scrinium.data.remote.SearchResult
@@ -101,11 +102,14 @@ private var nextEditorId = 0L
 // `isNew` notes open in edit mode; everything else opens in reading view.
 // [dirty] is typing not yet saved to Room. A clean editor follows Room, so a
 // sync pull shows up in it and closing it never writes the old copy back.
+// [base] is the Room text the typing builds on; a save over a newer pull
+// pushes as a conflict instead of overwriting it.
 data class EditorState(
     val path: String,
     val text: String,
     val isNew: Boolean = false,
     val dirty: Boolean = false,
+    val base: String = text,
     val id: Long = ++nextEditorId
 )
 
@@ -133,8 +137,7 @@ class MainViewModel(
 
     // Everything waiting to upload, deletion markers included (a rename or
     // move is a marker at the old path plus an edit at the new one).
-    val pendingNotes: StateFlow<List<NoteEntity>> = notes.observeAll()
-        .map { list -> list.filter { it.localModifiedAt != null }.sortedByDescending { it.localModifiedAt } }
+    val pendingNotes: StateFlow<List<NoteMeta>> = notes.observePending()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _unsyncedCount = MutableStateFlow(0)
@@ -252,16 +255,17 @@ class MainViewModel(
         if (isArchiving(current.path)) return
         val stored = notes.get(current.path)
         if (stored != null && !stored.isDeleted && stored.content != current.text) {
-            notes.saveLocally(current.path, current.text)
+            notes.saveLocally(current.path, current.text, current.base)
             maybeSyncTitleToFilename(current.path, current.text)
             scheduleAutoSync()
         }
         markSaved(current.path, current.text)
     }
 
-    // Clean again once Room holds exactly what the editor shows.
+    // Room now holds [text]: later typing builds on it, and the editor is
+    // clean again if that is exactly what it shows.
     private fun markSaved(path: String, text: String) =
-        _editor.update { if (it?.path == path && it.text == text) it.copy(dirty = false) else it }
+        _editor.update { if (it?.path == path) it.copy(base = text, dirty = it.dirty && it.text != text) else it }
 
     data class SearchHit(val path: String, val title: String, val snippet: String?)
 
@@ -328,9 +332,10 @@ class MainViewModel(
                     if (isArchiving(target)) return@collect
                     val stored = notes.get(target)
                     if (stored?.isDeleted == true) return@collect
-                    val latest = _editor.value?.takeIf { it.path == target }?.text ?: text
+                    val open = _editor.value?.takeIf { it.path == target }
+                    val latest = open?.text ?: text
                     if (stored?.content != latest) {
-                        notes.saveLocally(target, latest)
+                        notes.saveLocally(target, latest, open?.base)
                         scheduleAutoSync()
                     }
                     markSaved(target, latest)
@@ -345,7 +350,7 @@ class MainViewModel(
                 .filterNotNull()
                 .collect { note ->
                     if (note.isDeleted) return@collect
-                    _editor.update { if (it != null && !it.dirty && it.path == note.path && it.text != note.content) it.copy(text = note.content) else it }
+                    _editor.update { if (it != null && !it.dirty && it.path == note.path && it.text != note.content) it.copy(text = note.content, base = note.content) else it }
                 }
         }
         viewModelScope.launch {
@@ -431,7 +436,7 @@ class MainViewModel(
     fun createNoteIn(folder: String) {
         viewModelScope.launch {
             flushEditor()
-            val existing = notes.observeAll().first().map { it.path }
+            val existing = notes.allMeta().map { it.path }
             try {
                 val note = notes.createNote(existing, folder, prefs::newNoteBody)
                 _editor.value = EditorState(note.path, note.content, isNew = true)
@@ -606,7 +611,7 @@ class MainViewModel(
                     if (tab == BinTab.Review) _review.value = emptyList() else _unused.value = emptyList()
                     flushEditor()
                     runSync()
-                    if (notes.observeAll().first().any { it.localModifiedAt != null }) {
+                    if (notes.allMeta().any { it.localModifiedAt != null }) {
                         throw IllegalStateException("some edits are not synced yet")
                     }
                 }
@@ -650,7 +655,7 @@ class MainViewModel(
                     if (_screen.value is Screen.Editor) _screen.value = Screen.Notes
                 }
                 runSync()
-                if (notes.observeAll().first().any { under(it.path) && it.localModifiedAt != null }) {
+                if (notes.allMeta().any { under(it.path) && it.localModifiedAt != null }) {
                     throw IllegalStateException("some edits are not synced yet")
                 }
                 notes.archive(target)
@@ -704,7 +709,7 @@ class MainViewModel(
             try {
                 flushEditor()
                 runSync()
-                if (notes.observeAll().first().any { it.localModifiedAt != null }) {
+                if (notes.allMeta().any { it.localModifiedAt != null }) {
                     throw IllegalStateException("some edits are not synced yet")
                 }
                 val fresh = notes.fetchUnused()
@@ -816,7 +821,7 @@ class MainViewModel(
         val target = targetRaw.substringBefore('#').trim()
         if (target.isEmpty()) return
         viewModelScope.launch {
-            val paths = notes.observeAll().first().filter { !it.isDeleted }.map { it.path }
+            val paths = notes.allMeta().filter { !it.isDeleted }.map { it.path }
             val hit = resolveWikilink(target, _editor.value?.path ?: "", paths)
             if (hit != null) {
                 openNote(hit)
@@ -852,11 +857,13 @@ class MainViewModel(
         _screen.update { Screen.Search }
     }
 
-    // Public share links: the open note's, or every link (null path) for
-    // Settings. Server holds the links; the public URL is base + /s/<id>,
-    // same as the web client builds.
-    private val _shares = MutableStateFlow<List<PublicShare>>(emptyList())
-    val shares: StateFlow<List<PublicShare>> = _shares.asStateFlow()
+    // Public share links: one note's, or every link (null path) for
+    // Settings. A response only lands if the list still belongs to the
+    // path it was asked for. Server holds the links; the public URL is
+    // base + /s/<id>, same as the web client builds.
+    data class ShareList(val path: String?, val links: List<PublicShare>)
+    private val _shares = MutableStateFlow(ShareList(null, emptyList()))
+    val shares: StateFlow<ShareList> = _shares.asStateFlow()
     private val _sharesLoading = MutableStateFlow(false)
     val sharesLoading: StateFlow<Boolean> = _sharesLoading.asStateFlow()
 
@@ -864,10 +871,12 @@ class MainViewModel(
         "${BuildConfig.SCRINIUM_API_URL.trimEnd('/')}/s/$id"
 
     fun loadShares(path: String?) {
+        _shares.value = ShareList(path, emptyList())
         viewModelScope.launch(Dispatchers.IO) {
             _sharesLoading.value = true
             try {
-                _shares.value = notes.fetchShares(path)
+                val links = notes.fetchShares(path)
+                _shares.update { if (it.path == path) ShareList(path, links) else it }
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Couldn't load links: ${e.message}") }
             } finally {
@@ -876,15 +885,34 @@ class MainViewModel(
         }
     }
 
-    fun createShareLink(path: String, password: String?) {
+    /**
+     * Pushes [path]'s unsaved typing and unsynced edits, and any queued
+     * move, so the server holds the note as shown. Returns its current
+     * path; throws when it still isn't there (offline). Share links and
+     * task links point at the server's copy, so they call this first.
+     */
+    suspend fun noteOnServer(path: String): String {
+        flushEditor()
+        fun ready(row: NoteEntity?) = row != null && !row.isDeleted && row.localModifiedAt == null &&
+            (row.version.isNotEmpty() || row.contentHash.isNotEmpty())
+        if (!ready(notes.get(currentPath(path))) || notes.hasPendingMoves()) runSync()
+        val target = currentPath(path)
+        if (!ready(notes.get(target)) || notes.hasPendingMoves()) throw IllegalStateException("the note isn't synced yet")
+        return target
+    }
+
+    // The note is pushed first: the server shares what it holds, and a
+    // note it has never seen can't be shared at all.
+    fun createShareLink(path: String, password: String?, expiresInDays: Int?) {
         if (password != null && password.isNotBlank() && password.length < 4) {
             _sync.update { it.copy(error = "Password needs at least 4 characters") }
             return
         }
         viewModelScope.launch {
             try {
-                val share = notes.createShare(path, password)
-                _shares.update { listOf(share) + it }
+                val target = noteOnServer(path)
+                val share = notes.createShare(target, password, expiresInDays)
+                _shares.update { if (it.path == path || it.path == target) it.copy(links = listOf(share) + it.links) else it }
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Share failed: ${e.message}") }
             }
@@ -900,7 +928,7 @@ class MainViewModel(
         viewModelScope.launch {
             try {
                 val share = notes.setSharePassword(id, password)
-                _shares.update { list -> list.map { if (it.id == id) share else it } }
+                _shares.update { list -> list.copy(links = list.links.map { if (it.id == id) share else it }) }
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Password change failed: ${e.message}") }
             }
@@ -911,7 +939,7 @@ class MainViewModel(
         viewModelScope.launch {
             try {
                 notes.deleteShare(id)
-                _shares.update { it.filterNot { s -> s.id == id } }
+                _shares.update { list -> list.copy(links = list.links.filterNot { it.id == id }) }
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Unshare failed: ${e.message}") }
             }
@@ -1054,7 +1082,7 @@ class MainViewModel(
                 val updated = retitle(text, source, newPath)
                 if (updated != text) {
                     notes.saveLocally(newPath, updated)
-                    if (open != null) _editor.value = open.copy(text = updated)
+                    if (open != null) _editor.value = open.copy(text = updated, base = updated)
                 }
                 scheduleAutoSync()
             } catch (e: Exception) {

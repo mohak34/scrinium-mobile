@@ -55,15 +55,16 @@ fun buildTree(
         allFolders.groupBy { it.substringBeforeLast('/', "") }
     val leafCounts = allFolders.groupingBy { it.substringAfterLast('/') }.eachCount()
 
-    fun countNotes(dir: String): Int {
-        var c = byParent[dir]?.size ?: 0
-        for (child in childDirs[dir].orEmpty()) c += countNotes(child)
-        return c
-    }
-
-    fun hasUnsynced(dir: String): Boolean {
-        if (byParent[dir].orEmpty().any { it.localModifiedAt != null }) return true
-        return childDirs[dir].orEmpty().any { hasUnsynced(it) }
+    // Each note counts toward every folder above it, in one pass.
+    val noteCounts = HashMap<String, Int>()
+    val unsynced = HashSet<String>()
+    for (note in notes) {
+        var dir = note.path.substringBeforeLast('/', "")
+        while (dir.isNotEmpty()) {
+            noteCounts.merge(dir, 1, Int::plus)
+            if (note.localModifiedAt != null) unsynced += dir
+            dir = dir.substringBeforeLast('/', "")
+        }
     }
 
     val out = mutableListOf<TreeItem>()
@@ -72,7 +73,7 @@ fun buildTree(
             val hint = if ((leafCounts[child.substringAfterLast('/')] ?: 0) > 1) {
                 child.substringBeforeLast('/', "").ifBlank { "All notes" }
             } else null
-            out += TreeItem.Folder(child, depth, countNotes(child), hasUnsynced(child), hint, child in pinned, child in projects)
+            out += TreeItem.Folder(child, depth, noteCounts[child] ?: 0, child in unsynced, hint, child in pinned, child in projects)
             if (child !in collapsed) emit(child, depth + 1)
         }
         val (projectDirs, dirs) = childDirs[dir].orEmpty().sortedBy { it.lowercase() }.partition { it in projects }

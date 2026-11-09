@@ -9,13 +9,27 @@ import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 import java.util.UUID
 
+private const val META = "path, remoteUpdatedAt, localModifiedAt, contentHash, isDeleted, version"
+
 @Dao
 interface NoteDao {
     @Query("SELECT * FROM notes ORDER BY path")
     fun observeAll(): Flow<List<NoteEntity>>
 
-    @Query("SELECT * FROM notes")
-    suspend fun getAll(): List<NoteEntity>
+    @Query("SELECT $META FROM notes")
+    suspend fun getAllMeta(): List<NoteMeta>
+
+    // Everything waiting to upload, newest first.
+    @Query("SELECT $META FROM notes WHERE localModifiedAt IS NOT NULL ORDER BY localModifiedAt DESC")
+    fun observePending(): Flow<List<NoteMeta>>
+
+    // Live notes, last edited first; a local edit counts as newer than the
+    // server time.
+    @Query("SELECT $META FROM notes WHERE isDeleted = 0 ORDER BY MAX(COALESCE(localModifiedAt, 0), remoteUpdatedAt) DESC LIMIT :limit")
+    fun observeRecent(limit: Int): Flow<List<NoteMeta>>
+
+    @Query("SELECT $META FROM notes WHERE isDeleted = 0 ORDER BY MAX(COALESCE(localModifiedAt, 0), remoteUpdatedAt) DESC LIMIT :limit")
+    suspend fun recent(limit: Int): List<NoteMeta>
 
     @Query("SELECT * FROM notes WHERE path = :path")
     suspend fun get(path: String): NoteEntity?
@@ -26,11 +40,14 @@ interface NoteDao {
     @Upsert
     suspend fun upsert(note: NoteEntity)
 
-    @Upsert
-    suspend fun upsertAll(notes: List<NoteEntity>)
-
     @Query("DELETE FROM notes WHERE path = :path")
     suspend fun delete(path: String)
+
+    @Query(
+        "UPDATE notes SET isDeleted = 1, localModifiedAt = :now " +
+            "WHERE isDeleted = 0 AND substr(path, 1, length(:folder) + 1) = :folder || '/'"
+    )
+    suspend fun tombstoneFolder(folder: String, now: Long)
 
     // Sync writes below are compare-and-set: each one applies only if the row
     // is still in the state sync read before its network call, so an edit,
