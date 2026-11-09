@@ -454,7 +454,7 @@ class MainViewModel(
     }
 
     // Web parity: editing the title renames the file — frontmatter `title:`
-    // first, else the H1. Local-only tombstone + PUT like a manual rename.
+    // first, else the H1. Local-only, synced like a manual rename.
     // Skips quietly on collision — the file keeps its name instead of
     // gaining a surprise suffix.
     private suspend fun maybeSyncTitleToFilename(path: String, text: String) {
@@ -1105,14 +1105,14 @@ class MainViewModel(
 
     // Where the open note went on each rename or move this session. Dialogs,
     // history and pending saves can hold a path an automatic title rename
-    // has since tombstoned; [currentPath] follows the chain to the live note.
+    // has since moved; [currentPath] follows the chain to the live note.
     private val movedTo = mutableMapOf<String, String>()
 
     private suspend fun currentPath(path: String): String {
         var p = path
         repeat(32) {
             val next = movedTo[p] ?: return p
-            if (notes.get(p)?.isDeleted != true) return p
+            if (notes.get(p)?.isDeleted == false) return p
             p = next
         }
         return p

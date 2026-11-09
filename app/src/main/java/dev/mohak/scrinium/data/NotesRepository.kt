@@ -37,7 +37,8 @@ class NotesRepository(
                 content = content,
                 remoteUpdatedAt = existing?.remoteUpdatedAt ?: 0L,
                 localModifiedAt = System.currentTimeMillis(),
-                contentHash = existing?.contentHash ?: ""
+                contentHash = existing?.contentHash ?: "",
+                version = existing?.version ?: ""
             )
         )
     }
@@ -63,9 +64,8 @@ class NotesRepository(
     }
 
     /**
-     * Local-only rename. The old path is tombstoned ([isDeleted]) so the next
-     * sync pushes DELETE, and the new path carries [localModifiedAt] so the
-     * same sync pushes PUT. Never touches the network — safe offline.
+     * Local-only rename: the row moves now, and the next sync sends the
+     * server move (NoteDao.move). Never touches the network, safe offline.
      * Returns the new path, or null when there is nothing to do (including a
      * tombstoned source). Throws [IllegalArgumentException] when the target
      * path already exists.
@@ -81,17 +81,7 @@ class NotesRepository(
         if (noteDao.get(newPath) != null) {
             throw IllegalArgumentException("A note already exists at $newPath")
         }
-        val now = System.currentTimeMillis()
-        noteDao.upsert(existing.copy(isDeleted = true, localModifiedAt = now))
-        noteDao.upsert(
-            NoteEntity(
-                path = newPath,
-                content = existing.content,
-                remoteUpdatedAt = existing.remoteUpdatedAt,
-                localModifiedAt = now,
-                contentHash = existing.contentHash
-            )
-        )
+        noteDao.move(path, newPath)
         return newPath
     }
 
@@ -138,10 +128,8 @@ class NotesRepository(
         api.uploadAttachment(body, fileName, folder)
 
     /**
-     * Local-only move. Same tombstone + PUT mechanism as [renameNote], so the
-     * next sync deletes the old path and pushes the new one — the server
-     * creates intermediate directories on PUT. Never touches the network.
-     * A colliding destination gets a "name (N)" suffix instead of failing
+     * Local-only move, synced like [renameNote]; the server creates missing
+     * folders. Never touches the network. A colliding destination gets a "name (N)" suffix instead of failing
      * (same convention as the web client's uniquePath): a drag never typed
      * a name, so there is nothing to correct.
      * Returns the new path, or null when there is nothing to do.
@@ -155,23 +143,13 @@ class NotesRepository(
         if (noteDao.get(newPath) != null) {
             newPath = uniqueNotePath(newParent, base)
         }
-        val now = System.currentTimeMillis()
-        noteDao.upsert(existing.copy(isDeleted = true, localModifiedAt = now))
-        noteDao.upsert(
-            NoteEntity(
-                path = newPath,
-                content = existing.content,
-                remoteUpdatedAt = existing.remoteUpdatedAt,
-                localModifiedAt = now,
-                contentHash = existing.contentHash
-            )
-        )
+        noteDao.move(path, newPath)
         return newPath
     }
 
     /**
      * Local-only folder rename: rewrites the path prefix of every note under
-     * [folder] in one transaction. Sync pushes one DELETE + PUT per note. Returns the new
+     * [folder] and queues one server move for the folder. Returns the new
      * folder path, or null when there is nothing to do.
      */
     suspend fun renameFolder(folder: String, newName: String): String? {
@@ -198,34 +176,14 @@ class NotesRepository(
         return rewritePrefix(folder, uniqueFolderPrefix(newPrefix))
     }
 
+    // Tombstones move with the folder, so their deletes follow it.
     private suspend fun rewritePrefix(folder: String, newPrefix: String): String? {
-        val all = noteDao.getAll().filter { !it.isDeleted }
-        val affected = all.filter { it.path.startsWith("$folder/") }
-        if (affected.isEmpty()) return null
-        if (all.any { it.path.startsWith("$newPrefix/") }) {
+        val all = noteDao.getAll()
+        if (all.none { !it.isDeleted && it.path.startsWith("$folder/") }) return null
+        if (all.any { it.path == newPrefix || it.path.startsWith("$newPrefix/") }) {
             throw IllegalArgumentException("A folder already exists at $newPrefix")
         }
-        for (note in affected) {
-            val target = newPrefix + note.path.removePrefix(folder)
-            if (noteDao.get(target) != null) {
-                throw IllegalArgumentException("A note already exists at $target")
-            }
-        }
-        val now = System.currentTimeMillis()
-        // One upsertAll is one Room transaction: a crash leaves the folder
-        // whole at one path, never half moved.
-        noteDao.upsertAll(affected.flatMap { note ->
-            listOf(
-                note.copy(isDeleted = true, localModifiedAt = now),
-                NoteEntity(
-                    path = newPrefix + note.path.removePrefix(folder),
-                    content = note.content,
-                    remoteUpdatedAt = note.remoteUpdatedAt,
-                    localModifiedAt = now,
-                    contentHash = note.contentHash
-                )
-            )
-        })
+        noteDao.move(folder, newPrefix)
         return newPrefix
     }
 
@@ -259,11 +217,11 @@ class NotesRepository(
         }
     }
 
-    // First free "base (N)" for a colliding folder destination. Only live
-    // notes count — tombstones are already on their way out.
+    // First free "base (N)" for a colliding folder destination. Tombstones
+    // count: a row can't move onto one.
     private suspend fun uniqueFolderPrefix(want: String): String {
-        val live = noteDao.getAll().filter { !it.isDeleted }
-        fun taken(prefix: String) = live.any { it.path == prefix || it.path.startsWith("$prefix/") }
+        val all = noteDao.getAll()
+        fun taken(prefix: String) = all.any { it.path == prefix || it.path.startsWith("$prefix/") }
         if (!taken(want)) return want
         var i = 1
         while (true) {

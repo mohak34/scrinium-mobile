@@ -42,6 +42,10 @@ data class MobileAuthResponse(val apiToken: String, val email: String)
 @Serializable
 data class RenameRequest(val newPath: String)
 
+// What a server move rewrote: path to its new version, and its version before.
+@Serializable
+data class MoveResult(val versions: Map<String, String> = emptyMap(), val previous: Map<String, String> = emptyMap())
+
 @Serializable
 data class SearchResult(val path: String, val title: String, val snippet: String)
 
@@ -193,17 +197,24 @@ private interface ScriniumService {
     @PUT("api/notes/{path}")
     suspend fun putNote(
         @Path("path", encoded = true) path: String,
-        @Body body: RequestBody
+        @Body body: RequestBody,
+        @Header("If-Match") ifMatch: String?,
+        @Header("X-Note-Strict") strict: String?,
+        @Header("If-None-Match") ifNoneMatch: String?
     ): Response<ResponseBody>
 
     @PATCH("api/notes/{path}")
     suspend fun rename(
         @Path("path", encoded = true) path: String,
-        @Body body: RenameRequest
-    ): Response<ResponseBody>
+        @Body body: RenameRequest,
+        @Header("X-Op-Id") opId: String
+    ): Response<MoveResult>
 
     @DELETE("api/notes/{path}")
-    suspend fun delete(@Path("path", encoded = true) path: String): Response<ResponseBody>
+    suspend fun delete(
+        @Path("path", encoded = true) path: String,
+        @Header("If-Match") ifMatch: String?
+    ): Response<ResponseBody>
 
     @GET("api/search")
     suspend fun search(@Query("q") q: String): List<SearchResult>
@@ -302,12 +313,22 @@ private interface ScriniumService {
 
 class ApiException(val status: Int) : Exception("API error $status")
 
+// The server's noteVersion(): quoted sha256 hex of the text, first 16.
+fun noteVersion(content: String): String {
+    val hash = MessageDigest.getInstance("SHA-256").digest(content.toByteArray())
+    return "\"" + hash.joinToString("") { "%02x".format(it) }.take(16) + "\""
+}
+
 // What SyncEngine needs from the server, so tests can fake it.
 interface NotesSyncApi {
     suspend fun fetchManifest(): List<ManifestEntry>
     suspend fun fetchNote(path: String): String
-    suspend fun pushNote(path: String, content: String)
-    suspend fun deleteNote(path: String)
+    // [ifMatch]: the version this text replaces, 412 if the server moved on.
+    // [createOnly]: 409 if the note exists. Neither overwrites.
+    suspend fun pushNote(path: String, content: String, ifMatch: String? = null, createOnly: Boolean = false)
+    // [ifMatch]: 412 if the note changed since that version.
+    suspend fun deleteNote(path: String, ifMatch: String? = null)
+    suspend fun moveNote(from: String, to: String, opId: String): MoveResult
     suspend fun serverHolds(path: String, content: String): Boolean
 }
 
@@ -359,28 +380,30 @@ class ScriniumApi(
 
     override suspend fun fetchNote(path: String): String = service.note(encPath(path)).string()
 
-    // True when the server's copy is exactly [content]: a 304 against the
-    // note's version, the server's noteVersion() (sha256 hex, first 16).
+    // True when the server's copy is exactly [content]: a 304 against its version.
     override suspend fun serverHolds(path: String, content: String): Boolean {
-        val hash = MessageDigest.getInstance("SHA-256").digest(content.toByteArray())
-        val version = "\"" + hash.joinToString("") { "%02x".format(it) }.take(16) + "\""
-        val res = service.noteIfChanged(encPath(path), version)
+        val res = service.noteIfChanged(encPath(path), noteVersion(content))
         res.body()?.close()
         return res.code() == 304
     }
 
-    override suspend fun pushNote(path: String, content: String) {
-        val res = service.putNote(encPath(path), content.toRequestBody(textMediaType))
+    override suspend fun pushNote(path: String, content: String, ifMatch: String?, createOnly: Boolean) {
+        val res = service.putNote(
+            encPath(path), content.toRequestBody(textMediaType),
+            ifMatch, ifMatch?.let { "1" }, if (createOnly) "*" else null
+        )
+        res.body()?.close()
         if (!res.isSuccessful) throw ApiException(res.code())
     }
 
-    suspend fun renameNote(oldPath: String, newPath: String) {
-        val res = service.rename(encPath(oldPath), RenameRequest(newPath))
-        if (!res.isSuccessful) throw ApiException(res.code())
+    override suspend fun moveNote(from: String, to: String, opId: String): MoveResult {
+        val res = service.rename(encPath(from), RenameRequest(to), opId)
+        return res.body()?.takeIf { res.isSuccessful } ?: throw ApiException(res.code())
     }
 
-    override suspend fun deleteNote(path: String) {
-        val res = service.delete(encPath(path))
+    override suspend fun deleteNote(path: String, ifMatch: String?) {
+        val res = service.delete(encPath(path), ifMatch)
+        res.body()?.close()
         if (!res.isSuccessful) throw ApiException(res.code())
     }
     suspend fun search(q: String): List<SearchResult> = service.search(q)

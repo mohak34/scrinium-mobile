@@ -85,22 +85,25 @@ with server," non-null means "has local changes waiting to push."
 **On sync trigger** (app foreground, 5s after local edits settle, the
 60s foreground tick, or manual pull-to-refresh):
 
-1. Fetch `/api/notes/manifest` (cheap — metadata only)
-2. For each note, compare local `contentHash` vs remote:
-   - Local has unsynced edits (`localModifiedAt != null`) AND remote
-     changed since last sync → **conflict** (see below)
-   - Local has unsynced edits, remote unchanged → push local → server
-   - Remote changed, no local edits → pull remote content → update Room
+1. Send queued renames and moves as `PATCH` with an op id, so a retry
+   after a lost reply never moves twice. Room already holds the new paths.
+2. Fetch `/api/notes/manifest` (cheap — metadata only)
+3. For each note:
+   - Local has unsynced edits (`localModifiedAt != null`) → push with
+     `If-Match` on the version the edit builds on; the server answers 412
+     if another device wrote since → **conflict** (see below)
+   - Remote `contentHash` changed, no local edits → pull remote content →
+     update Room
    - Neither changed → skip (this is why the manifest step matters —
      most notes hit this branch and cost nothing)
-3. Push and pull happen as individual note content requests, only for
+4. Push and pull happen as individual note content requests, only for
    notes that actually need it
-4. Every Room write after a request is compare-and-set (`NoteDao`): a
+5. Every Room write after a request is compare-and-set (`NoteDao`): a
    pull lands only if the note is still clean, a push clears
    `localModifiedAt` only if the text is still what was pushed, and a
    remote note is inserted only if the path is still free. An edit,
    delete or new note made while a request is out waits for the next sync.
-5. After pushes, the fresh manifest fingerprint is stored only if the
+6. After pushes, the fresh manifest fingerprint is stored only if the
    server still holds the pushed text (`If-None-Match` with its version
    answers 304); otherwise the next sync fetches what changed.
 
