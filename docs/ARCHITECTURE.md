@@ -8,10 +8,6 @@
   app.
 - **Room** — local SQLite database, the offline source of truth for
   notes
-- **WorkManager** — battery-aware background sync (respects Doze mode,
-  battery constraints, network availability — this is the standard
-  Android-recommended way to do exactly the kind of periodic sync you
-  need, and it's built to not fight the OS's battery optimization)
 - **Retrofit + OkHttp** — API client for talking to Scrinium's backend
 - **DataStore (encrypted) / Android Keystore** — auth token storage
 - **MVVM + Repository pattern** — ViewModel + StateFlow driving Compose
@@ -86,8 +82,8 @@ with server," non-null means "has local changes waiting to push."
 
 ## Sync engine
 
-**On sync trigger** (app foreground, manual pull-to-refresh, or
-periodic WorkManager job):
+**On sync trigger** (app foreground, 5s after local edits settle, the
+60s foreground tick, or manual pull-to-refresh):
 
 1. Fetch `/api/notes/manifest` (cheap — metadata only)
 2. For each note, compare local `contentHash` vs remote:
@@ -99,6 +95,14 @@ periodic WorkManager job):
      most notes hit this branch and cost nothing)
 3. Push and pull happen as individual note content requests, only for
    notes that actually need it
+4. Every Room write after a request is compare-and-set (`NoteDao`): a
+   pull lands only if the note is still clean, a push clears
+   `localModifiedAt` only if the text is still what was pushed, and a
+   remote note is inserted only if the path is still free. An edit,
+   delete or new note made while a request is out waits for the next sync.
+5. After pushes, the fresh manifest fingerprint is stored only if the
+   server still holds the pushed text (`If-None-Match` with its version
+   answers 304); otherwise the next sync fetches what changed.
 
 **Conflict handling**: for a single-user, multi-device app, don't build
 a merge UI for v1 — that's real complexity for a rare case. Simplest
@@ -114,9 +118,8 @@ devices between syncs), but when you do, nothing gets lost.
 
 This is worth being explicit about since it's your stated top priority:
 
-- **No foreground service.** Sync is a WorkManager job that runs,
-  finishes, and stops — never a persistent background process holding
-  a wakelock.
+- **No foreground service.** Sync runs inside the open app, finishes,
+  and stops — never a persistent background process holding a wakelock.
 - **No background sync.** Sync triggers, all foreground-only: auto-push 5s
   after local edits settle, a 60s pull tick while foregrounded, app opened
   from background, and manual pull-to-refresh. Killing the app stops

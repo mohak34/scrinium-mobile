@@ -2,7 +2,7 @@ package dev.mohak.scrinium.sync
 
 import dev.mohak.scrinium.data.local.NoteDao
 import dev.mohak.scrinium.data.local.NoteEntity
-import dev.mohak.scrinium.data.remote.ScriniumApi
+import dev.mohak.scrinium.data.remote.NotesSyncApi
 
 data class SyncReport(
     val pulled: Int,
@@ -16,21 +16,24 @@ data class SyncReport(
 
 class SyncEngine(
     private val dao: NoteDao,
-    private val api: ScriniumApi,
+    private val api: NotesSyncApi,
     private val tokenProvider: () -> String?
 ) {
     suspend fun syncOnce(): SyncReport {
         if (tokenProvider() == null) return emptyReport()
 
         val remote = api.fetchManifest().associateBy { it.path }
+        // A snapshot: edits made while a request is out are caught by the
+        // compare-and-set writes in NoteDao and pushed on the next sync.
         val local = dao.getAll()
+        val localPaths = local.mapTo(HashSet()) { it.path }
         val liveContent = local.filter { !it.isDeleted }.mapTo(HashSet()) { it.content }
         var pulled = 0
         var pushed = 0
         var removed = 0
         var conflicts = 0
         var errors = 0
-        val rehash = mutableListOf<String>()
+        val written = mutableListOf<Pair<String, String>>()
         val failures = mutableListOf<String>()
 
         for (note in local) {
@@ -45,17 +48,17 @@ class SyncEngine(
                             api.pushNote(note.path, note.content)
                             api.deleteNote(note.path)
                         }
-                        dao.delete(note.path)
+                        dao.dropTombstone(note.path)
                         removed++
                     }
                     !remote.containsKey(note.path) -> {
                         if (note.localModifiedAt != null) {
                             api.pushNote(note.path, note.content)
-                            dao.upsert(note.copy(localModifiedAt = null))
-                            rehash += note.path
+                            dao.markPushed(note.path, note.content)
+                            written += note.path to note.content
                             pushed++
                         } else {
-                            dao.delete(note.path)
+                            dao.deleteIfClean(note.path)
                             removed++
                         }
                     }
@@ -63,35 +66,20 @@ class SyncEngine(
                         val meta = remote.getValue(note.path)
                         if (note.contentHash == meta.contentHash) continue
                         val content = api.fetchNote(note.path)
-                        dao.upsert(
-                            note.copy(
-                                content = content,
-                                contentHash = meta.contentHash,
-                                remoteUpdatedAt = meta.updatedAt.toLong()
-                            )
-                        )
+                        dao.applyPull(note.path, content, meta.contentHash, meta.updatedAt.toLong())
                         pulled++
                     }
                     else -> {
                         val meta = remote.getValue(note.path)
                         if (note.contentHash == meta.contentHash) {
                             api.pushNote(note.path, note.content)
-                            dao.upsert(note.copy(localModifiedAt = null))
-                            rehash += note.path
+                            dao.markPushed(note.path, note.content)
+                            written += note.path to note.content
                             pushed++
                         } else {
                             val serverContent = api.fetchNote(note.path)
-                            val conflictPath = conflictName(note.path)
-                            api.pushNote(conflictPath, note.content)
-                            dao.upsert(
-                                note.copy(
-                                    content = serverContent,
-                                    contentHash = meta.contentHash,
-                                    remoteUpdatedAt = meta.updatedAt.toLong(),
-                                    localModifiedAt = null
-                                )
-                            )
-                            rehash += conflictPath
+                            api.pushNote(conflictName(note.path), note.content)
+                            dao.resolveConflict(note.path, note.content, serverContent, meta.contentHash, meta.updatedAt.toLong())
                             conflicts++
                         }
                     }
@@ -103,10 +91,10 @@ class SyncEngine(
         }
 
         for ((path, meta) in remote) {
-            if (local.any { it.path == path }) continue
+            if (path in localPaths) continue
             try {
                 val content = api.fetchNote(path)
-                dao.upsert(
+                dao.insertIfAbsent(
                     NoteEntity(
                         path = path,
                         content = content,
@@ -122,13 +110,16 @@ class SyncEngine(
             }
         }
 
-        if (rehash.isNotEmpty()) {
+        // The PUT doesn't return the manifest fingerprint, so read it back.
+        // It is kept only when the server still holds what we wrote; if
+        // another device wrote in between, the old hash makes the next sync
+        // fetch that change.
+        if (written.isNotEmpty()) {
             try {
                 val fresh = api.fetchManifest().associateBy { it.path }
-                for (path in rehash) {
+                for ((path, content) in written) {
                     val meta = fresh[path] ?: continue
-                    val current = dao.get(path) ?: continue
-                    dao.upsert(current.copy(contentHash = meta.contentHash, remoteUpdatedAt = meta.updatedAt.toLong()))
+                    if (api.serverHolds(path, content)) dao.stampRemote(path, meta.contentHash, meta.updatedAt.toLong())
                 }
             } catch (e: Exception) {
                 // stale hashes self-correct on the next sync

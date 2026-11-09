@@ -78,10 +78,11 @@ fun recentNotes(notes: List<NoteEntity>, limit: Int): List<NoteEntity> = notes
 class NotesWidgetProvider : AppWidgetProvider() {
     override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) {
         val pending = goAsync()
-        val dao = (context.applicationContext as ScriniumApplication).container.database.noteDao()
+        val container = (context.applicationContext as ScriniumApplication).container
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                NotesWidget.render(context, dao.getAll())
+                val signedIn = container.tokenStore.token.value != null
+                NotesWidget.render(context, if (signedIn) container.database.noteDao().getAll() else emptyList())
             } finally {
                 pending.finish()
             }

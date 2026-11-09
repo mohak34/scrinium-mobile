@@ -40,7 +40,7 @@ rules below are the decisions that keep it small and battery-friendly.
 ## Stack
 
 Kotlin + Jetpack Compose (Material 3, dark theme ported from the web app's
-`DESIGN.md` palette), Room, Retrofit + OkHttp, WorkManager, DataStore for
+`DESIGN.md` palette), Room, Retrofit + OkHttp, DataStore for
 preferences, Android Keystore (AES-GCM) for token encryption, Credential
 Manager for Google Sign-In. MVVM, manual DI via an `AppContainer`.
 
@@ -126,7 +126,8 @@ web it does not pick the shortest path when a name is ambiguous.
 
 ## Sync engine rules
 
-On trigger (app foreground, pull-to-refresh, periodic WorkManager):
+On trigger (app foreground, 5s after edits settle, the 60s foreground tick,
+pull-to-refresh; a forced sync asked for mid-sync runs right after it):
 
 1. Fetch manifest; build `{path: contentHash}` remote map.
 2. For each Room note compare `contentHash`:
@@ -138,6 +139,10 @@ On trigger (app foreground, pull-to-refresh, periodic WorkManager):
 3. Room notes missing from remote + no local edits → they were deleted
    elsewhere; delete locally. Local deletes push `DELETE`.
 4. On success, clear `localModifiedAt` and update `contentHash`/`updatedAt`.
+   Every write is compare-and-set against the state read before the
+   request (`NoteDao`), so edits made mid-request survive. A pushed note
+   takes the fresh manifest hash only if a 304 shows the server still
+   holds the pushed text.
 
 ## Commands
 
