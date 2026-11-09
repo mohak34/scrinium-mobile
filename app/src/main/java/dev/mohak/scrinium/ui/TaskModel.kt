@@ -1,12 +1,10 @@
 package dev.mohak.scrinium.ui
 
-import androidx.compose.ui.graphics.Color
 import dev.mohak.scrinium.data.remote.CalendarEvent
 import dev.mohak.scrinium.data.remote.TaskDto
 import java.text.DateFormat
 import java.util.Calendar
 import java.util.Date
-import java.util.TimeZone
 
 // Task vocabulary, mirrored from the web client's taskModel.ts. The keys are
 // the wire values; order is the board's column order.
@@ -19,17 +17,6 @@ enum class TaskStatus(val key: String, val label: String) {
 
     companion object {
         fun of(key: String): TaskStatus = entries.firstOrNull { it.key == key } ?: Todo
-    }
-}
-
-enum class TaskArea(val key: String, val label: String, val color: Color) {
-    Uni("uni", "Uni", Color(0xFF8FB3FF)),
-    Learning("learning", "Learning", Color(0xFFC4A8FF)),
-    Work("work", "Work", Color(0xFFF0A35E)),
-    Quotidian("quotidian", "Quotidian", Color(0xFFD6C3A1));
-
-    companion object {
-        fun of(key: String?): TaskArea? = entries.firstOrNull { it.key == key }
     }
 }
 
@@ -51,23 +38,39 @@ const val DOING_LIMIT = 3
 val TaskDto.statusEnum: TaskStatus get() = TaskStatus.of(status)
 val TaskDto.isDone: Boolean get() = status == TaskStatus.Done.key
 
-// A project's Inbox is its backlog and stays on the project board; the
-// main list and board show a project task only once it is planned.
-val TaskDto.onMainBoard: Boolean get() = project == null || status != TaskStatus.Inbox.key
+// A project's undated Inbox is its backlog and stays on the project board;
+// the All views show a project task once it is planned or dated.
+private val TaskDto.onMainBoard: Boolean get() = project == null || status != TaskStatus.Inbox.key || dueAt != null
 
 fun projectName(path: String): String = path.substringAfterLast('/')
 
-// Which project the Board and the Notes tabs show, like the web's project
-// tabs. A null path is Quotidian: tasks in no project, notes outside every
-// project folder. On the board All leaves project backlogs out (onMainBoard).
+// Which project the task and Notes tabs show, like the web's project tabs.
+// A null path is Quotidian: tasks in no project, notes outside every
+// project folder.
 sealed interface ProjectView {
     data object All : ProjectView
     data class Project(val path: String?) : ProjectView
 }
 
-fun ProjectView.shows(t: TaskDto): Boolean = when (this) {
-    ProjectView.All -> t.onMainBoard
-    is ProjectView.Project -> t.project == path
+/**
+ * The tasks a view shows, subtasks included, ported from the web's
+ * selectTasks. One project, or Quotidian, is every task in it. All is every
+ * dated task plus the rest unless they or an ancestor sit in a project
+ * backlog. The list, board and widget select through here.
+ */
+fun selectTasks(all: List<TaskDto>, view: ProjectView): List<TaskDto> {
+    if (view is ProjectView.Project) return all.filter { it.project == view.path }
+    val byId = all.associateBy { it.id }
+    fun planned(t: TaskDto): Boolean {
+        val seen = mutableSetOf<String>()
+        var a: TaskDto? = t
+        while (a != null && seen.add(a.id)) {
+            if (!a.onMainBoard) return false
+            a = a.parentId?.let(byId::get)
+        }
+        return true
+    }
+    return all.filter { it.dueAt != null || planned(it) }
 }
 
 const val QUOTIDIAN = "Quotidian"
@@ -142,29 +145,17 @@ fun groupByStatus(tasks: List<TaskDto>): List<TaskGroup> = ListOrder.map { s ->
 }.filter { it.rows.isNotEmpty() }
 
 /**
- * Local-midnight days an event covers. All-day events come from Google as
- * UTC midnights with an exclusive end, so their dates are read in UTC and
- * rebuilt as local days. Timed events cover every day they touch.
+ * Local-midnight days an event covers within [from, to). All-day events
+ * already start at a local midnight with an exclusive end (see
+ * CalendarEventDto); timed events cover every day they touch.
  */
-fun eventDays(e: CalendarEvent): List<Long> {
-    val (first, last) = if (e.allDay) {
-        val utc = Calendar.getInstance(TimeZone.getTimeZone("UTC"))
-        fun local(ms: Long): Long {
-            utc.timeInMillis = ms
-            return Calendar.getInstance().apply {
-                clear()
-                set(utc.get(Calendar.YEAR), utc.get(Calendar.MONTH), utc.get(Calendar.DAY_OF_MONTH))
-            }.timeInMillis
-        }
-        local(e.start) to local(maxOf(e.start, e.end - 1))
-    } else {
-        startOfDay(e.start) to startOfDay(maxOf(e.start, e.end - 1))
-    }
+fun eventDays(e: CalendarEvent, from: Long, to: Long): List<Long> {
+    val last = startOfDay(maxOf(e.start, e.end - 1))
     val days = mutableListOf<Long>()
-    val cal = Calendar.getInstance().apply { timeInMillis = first }
-    while (cal.timeInMillis <= last && days.size < 62) {
-        days += cal.timeInMillis
-        cal.add(Calendar.DAY_OF_MONTH, 1)
+    var day = startOfDay(maxOf(e.start, from))
+    while (day <= last && day < to) {
+        days += day
+        day = addDays(day, 1)
     }
     return days
 }

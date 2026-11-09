@@ -43,23 +43,15 @@ class TasksViewModel(
     private val _tasks = MutableStateFlow<List<TaskDto>>(emptyList())
     val tasks: StateFlow<List<TaskDto>> = _tasks.asStateFlow()
 
-    // Area filter shared by the Tasks, Board and Calendar tabs. Null is all.
-    private val _areaFilter = MutableStateFlow<String?>(null)
-    val areaFilter: StateFlow<String?> = _areaFilter.asStateFlow()
-
-    fun setAreaFilter(key: String?) {
-        _areaFilter.value = key
-    }
-
-    // Project boards (vault folders), and the view the Board tab shows.
+    // Project boards (vault folders), and the view the Tasks and Board tabs share.
     private val _projects = MutableStateFlow<List<ProjectDto>>(emptyList())
     val projects: StateFlow<List<ProjectDto>> = _projects.asStateFlow()
 
-    private val _boardView = MutableStateFlow<ProjectView>(ProjectView.All)
-    val boardView: StateFlow<ProjectView> = _boardView.asStateFlow()
+    private val _projectView = MutableStateFlow<ProjectView>(ProjectView.All)
+    val projectView: StateFlow<ProjectView> = _projectView.asStateFlow()
 
     fun setProjectView(view: ProjectView) {
-        _boardView.value = view
+        _projectView.value = view
     }
 
     // Set by the tasks widget's +: the Tasks tab opens its quick-add sheet.
@@ -153,8 +145,8 @@ class TasksViewModel(
             try {
                 val rows = api.fetchProjects()
                 _projects.value = rows
-                val view = _boardView.value
-                if (view is ProjectView.Project && view.path != null && rows.none { it.path == view.path }) _boardView.value = ProjectView.All
+                val view = _projectView.value
+                if (view is ProjectView.Project && view.path != null && rows.none { it.path == view.path }) _projectView.value = ProjectView.All
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
@@ -238,7 +230,6 @@ class TasksViewModel(
     // so a form can keep its text for a retry when creation fails.
     fun create(
         title: String,
-        area: TaskArea? = null,
         dueAt: Long? = null,
         parentId: String? = null,
         project: String? = null,
@@ -255,7 +246,6 @@ class TasksViewModel(
                     NewTaskRequest(
                         title = clean,
                         status = (status ?: if (dueAt == null) TaskStatus.Inbox else TaskStatus.Todo).key,
-                        area = area?.key,
                         dueAt = dueAt,
                         parentId = parentId,
                         project = project
@@ -292,9 +282,6 @@ class TasksViewModel(
 
     fun toggleDone(task: TaskDto) =
         setStatus(task.id, if (task.isDone) TaskStatus.Todo else TaskStatus.Done)
-
-    fun setArea(id: String, area: TaskArea?) =
-        patch(id, "area" to (area?.let { JsonPrimitive(it.key) } ?: JsonNull)) { it.copy(area = area?.key) }
 
     // Subtasks follow their root's project on the server, so the list
     // reloads once the change lands.

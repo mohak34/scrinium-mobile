@@ -65,7 +65,6 @@ import dev.mohak.scrinium.ui.Segments
 import dev.mohak.scrinium.ui.Sheet
 import dev.mohak.scrinium.ui.SheetTitle
 import dev.mohak.scrinium.ui.Sym
-import dev.mohak.scrinium.ui.TaskArea
 import dev.mohak.scrinium.ui.TaskCheck
 import dev.mohak.scrinium.ui.TaskPriority
 import dev.mohak.scrinium.ui.TaskStatus
@@ -79,11 +78,10 @@ import dev.mohak.scrinium.ui.groupByStatus
 import dev.mohak.scrinium.ui.isDone
 import dev.mohak.scrinium.ui.isOverdue
 import dev.mohak.scrinium.ui.isDueToday
-import dev.mohak.scrinium.ui.onMainBoard
+import dev.mohak.scrinium.ui.selectTasks
 import dev.mohak.scrinium.ui.ProjectView
 import dev.mohak.scrinium.ui.QUOTIDIAN
 import dev.mohak.scrinium.ui.projectName
-import dev.mohak.scrinium.ui.shows
 import dev.mohak.scrinium.ui.shortDue
 import dev.mohak.scrinium.ui.startOfDay
 import dev.mohak.scrinium.ui.startOfToday
@@ -95,13 +93,13 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
-// The Tasks, Board and Calendar tabs. All three read TasksViewModel's list
-// and share its area filter. Subtasks live inside their parent's detail
-// screen, as on the web, so only top-level tasks show here. List and Board
-// leave project backlogs out (onMainBoard); the calendar shows every date.
+// The Tasks, Board and Calendar tabs. All three read TasksViewModel's list;
+// Tasks and Board share its project view. Subtasks live inside their
+// parent's detail screen, as on the web, so List and Board show top-level
+// tasks only. The calendar shows every dated task, subtasks included.
 
-private fun topLevel(all: List<TaskDto>, area: String?) =
-    all.filter { it.parentId == null && (area == null || it.area == area) }
+private fun topLevel(all: List<TaskDto>, view: ProjectView) =
+    selectTasks(all, view).filter { it.parentId == null }
 
 // parentId -> (done, total) for the "1/3" subtask label.
 private fun subtaskProgress(all: List<TaskDto>): Map<String, Pair<Int, Int>> =
@@ -114,7 +112,8 @@ fun TasksScreen(tasksVm: TasksViewModel) {
     val all by tasksVm.tasks.collectAsStateWithLifecycle()
     val loading by tasksVm.loading.collectAsStateWithLifecycle()
     val error by tasksVm.error.collectAsStateWithLifecycle()
-    val area by tasksVm.areaFilter.collectAsStateWithLifecycle()
+    val projects by tasksVm.projects.collectAsStateWithLifecycle()
+    val view by tasksVm.projectView.collectAsStateWithLifecycle()
     val askNotify = rememberNotificationAsk()
     LaunchedEffect(Unit) {
         askNotify()
@@ -130,14 +129,18 @@ fun TasksScreen(tasksVm: TasksViewModel) {
         }
     }
 
-    val groups = groupByStatus(topLevel(all, area).filter { it.onMainBoard })
+    val groups = groupByStatus(topLevel(all, view))
     val progress = subtaskProgress(all)
-    val areaTabs = listOf<TaskArea?>(null) + TaskArea.entries
 
     Column(Modifier.fillMaxSize()) {
         TopBar("Tasks")
-        TextTabs(areaTabs.map { it?.label ?: "All" }, areaTabs.indexOf(TaskArea.of(area))) {
-            tasksVm.setAreaFilter(areaTabs[it]?.key)
+        if (projects.isNotEmpty()) {
+            val paths = projects.map { it.path }
+            val tabs = listOf(ProjectView.All, ProjectView.Project(null)) + paths.map { ProjectView.Project(it) }
+            TextTabs(
+                tabs.map { v -> if (v is ProjectView.Project) v.path?.let { projectLabel(it, paths) } ?: QUOTIDIAN else "All" },
+                tabs.indexOf(view)
+            ) { tasksVm.setProjectView(tabs[it]) }
         }
         error?.let { ErrorStrip(it) { tasksVm.dismissError() } }
         Box(Modifier.weight(1f)) {
@@ -167,8 +170,8 @@ fun TasksScreen(tasksVm: TasksViewModel) {
     }
 
     if (showAdd) {
-        QuickAddSheet(TaskArea.of(area), null, onDismiss = { showAdd = false }) { title, a, due ->
-            tasksVm.create(title, area = a, dueAt = due)
+        QuickAddSheet(null, onDismiss = { showAdd = false }) { title, due ->
+            tasksVm.create(title, dueAt = due, project = (view as? ProjectView.Project)?.path)
         }
     }
 }
@@ -181,9 +184,8 @@ fun BoardScreen(tasksVm: TasksViewModel) {
     val all by tasksVm.tasks.collectAsStateWithLifecycle()
     val loading by tasksVm.loading.collectAsStateWithLifecycle()
     val error by tasksVm.error.collectAsStateWithLifecycle()
-    val area by tasksVm.areaFilter.collectAsStateWithLifecycle()
     val projects by tasksVm.projects.collectAsStateWithLifecycle()
-    val view by tasksVm.boardView.collectAsStateWithLifecycle()
+    val view by tasksVm.projectView.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { tasksVm.refresh() }
     var showAdd by remember { mutableStateOf(false) }
     var moving by remember { mutableStateOf<TaskDto?>(null) }
@@ -191,7 +193,7 @@ fun BoardScreen(tasksVm: TasksViewModel) {
     val statuses = TaskStatus.entries
     val pager = rememberPagerState { statuses.size }
     val scope = rememberCoroutineScope()
-    val tasks = topLevel(all, area).filter { view.shows(it) }
+    val tasks = topLevel(all, view)
     val progress = subtaskProgress(all)
     val columns = statuses.map { s ->
         tasks.filter { it.status == s.key }.let { rows ->
@@ -203,7 +205,6 @@ fun BoardScreen(tasksVm: TasksViewModel) {
     Column(Modifier.fillMaxSize()) {
         TopBar(when (val v = view) { ProjectView.All -> "Board"; is ProjectView.Project -> v.path?.let(::projectName) ?: QUOTIDIAN }) {
             if (projects.isNotEmpty()) ProjectViewButton(projects.map { it.path }, view) { tasksVm.setProjectView(it) }
-            AreaFilterButton(area) { tasksVm.setAreaFilter(it) }
         }
         TextTabs(
             statuses.mapIndexed { i, s ->
@@ -250,8 +251,8 @@ fun BoardScreen(tasksVm: TasksViewModel) {
     }
     if (showAdd) {
         val status = statuses[pager.currentPage]
-        QuickAddSheet(TaskArea.of(area), null, onDismiss = { showAdd = false }) { title, a, due ->
-            tasksVm.create(title, area = a, dueAt = due, project = (view as? ProjectView.Project)?.path, status = status)
+        QuickAddSheet(null, onDismiss = { showAdd = false }) { title, due ->
+            tasksVm.create(title, dueAt = due, project = (view as? ProjectView.Project)?.path, status = status)
         }
     }
 }
@@ -261,7 +262,6 @@ fun BoardScreen(tasksVm: TasksViewModel) {
 @Composable
 fun CalendarScreen(tasksVm: TasksViewModel) {
     val all by tasksVm.tasks.collectAsStateWithLifecycle()
-    val area by tasksVm.areaFilter.collectAsStateWithLifecycle()
     val error by tasksVm.error.collectAsStateWithLifecycle()
     val calendar by tasksVm.calendar.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { tasksVm.refresh() }
@@ -269,19 +269,16 @@ fun CalendarScreen(tasksVm: TasksViewModel) {
     var month by rememberSaveable { mutableStateOf(monthStart(startOfToday())) }
     var showAdd by remember { mutableStateOf(false) }
 
-    LaunchedEffect(month) {
-        val next = Calendar.getInstance().apply {
-            timeInMillis = month
-            add(Calendar.MONTH, 1)
-        }.timeInMillis
-        tasksVm.loadEvents(month, next)
-    }
-    val tasks = topLevel(all, area)
+    val next = Calendar.getInstance().apply {
+        timeInMillis = month
+        add(Calendar.MONTH, 1)
+    }.timeInMillis
+    LaunchedEffect(month) { tasksVm.loadEvents(month, next) }
     val progress = subtaskProgress(all)
-    val byDay = tasks.filter { it.dueAt != null }.groupBy { startOfDay(it.dueAt!!) }
-    val eventsByDay = remember(calendar) {
+    val byDay = all.filter { it.dueAt != null }.groupBy { startOfDay(it.dueAt!!) }
+    val eventsByDay = remember(calendar, month) {
         buildMap<Long, MutableList<CalendarEvent>> {
-            for (e in calendar.events) for (d in eventDays(e)) getOrPut(d) { mutableListOf() } += e
+            for (e in calendar.events) for (d in eventDays(e, month, next)) getOrPut(d) { mutableListOf() } += e
         }
     }
     val today = startOfToday()
@@ -295,7 +292,6 @@ fun CalendarScreen(tasksVm: TasksViewModel) {
 
     Column(Modifier.fillMaxSize()) {
         TopBar(SimpleDateFormat("MMMM yyyy", Locale.getDefault()).format(Date(month))) {
-            AreaFilterButton(area) { tasksVm.setAreaFilter(it) }
             IconBtn(R.drawable.ms_today, "Today", {
                 month = monthStart(today)
                 selectedDay = today
@@ -345,8 +341,8 @@ fun CalendarScreen(tasksVm: TasksViewModel) {
     }
 
     if (showAdd) {
-        QuickAddSheet(TaskArea.of(area), selectedDay, onDismiss = { showAdd = false }) { title, a, due ->
-            tasksVm.create(title, area = a, dueAt = due)
+        QuickAddSheet(selectedDay, onDismiss = { showAdd = false }) { title, due ->
+            tasksVm.create(title, dueAt = due)
         }
     }
 }
@@ -431,7 +427,7 @@ private fun DayCell(day: Int, tasks: List<TaskDto>, events: Int, isToday: Boolea
         }
         Spacer(Modifier.height(3.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-            tasks.filter { !it.isDone }.take(3).forEach { Dot(TaskArea.of(it.area)?.color ?: Sc.accent, 4.dp) }
+            tasks.filter { !it.isDone }.take(3).forEach { Dot(Sc.accent, 4.dp) }
             if (events > 0) Dot(Sc.text3, 4.dp)
         }
     }
@@ -452,23 +448,6 @@ private fun EventRow(e: CalendarEvent) {
         Column(Modifier.padding(start = 12.dp).weight(1f)) {
             Text(e.title, style = Type.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text("Google Calendar", style = Type.meta)
-        }
-    }
-}
-
-/** Top-bar area filter for Board and Calendar (Tasks has area tabs instead). */
-@Composable
-private fun AreaFilterButton(area: String?, onPick: (String?) -> Unit) {
-    var open by remember { mutableStateOf(false) }
-    Box {
-        IconBtn(R.drawable.ms_tune, "Filter by area", { open = true }, tint = if (area != null) Sc.accent else Sc.text2, active = open)
-        Menu(open, { open = false }) {
-            MenuRow(null, "All areas", { open = false; onPick(null) }, trailing = { if (area == null) Sym(R.drawable.ms_check, tint = Sc.accent, size = 18.dp) })
-            TaskArea.entries.forEach { a ->
-                MenuRow(null, a.label, { open = false; onPick(a.key) }, trailing = {
-                    if (area == a.key) Sym(R.drawable.ms_check, tint = Sc.accent, size = 18.dp) else Dot(a.color)
-                })
-            }
         }
     }
 }
@@ -498,7 +477,7 @@ fun projectLabel(path: String, all: List<String>): String {
 }
 
 /**
- * One task: round checkbox, title, and a meta line (area, due, priority,
+ * One task: round checkbox, title, and a meta line (project, due, priority,
  * subtasks, reminder, linked notes). [progress] is (done, total) subtasks.
  */
 @OptIn(ExperimentalFoundationApi::class)
@@ -539,12 +518,11 @@ fun TaskRow(
 
 @Composable
 private fun TaskMeta(task: TaskDto, progress: Pair<Int, Int>?, showDue: Boolean, showStatus: Boolean) {
-    val area = TaskArea.of(task.area)
     val priority = TaskPriority.of(task.priority)
     val due = task.dueAt?.takeIf { showDue }
     val waitingDays = task.waitingSince?.takeIf { task.status == TaskStatus.Waiting.key }
         ?.let { ((System.currentTimeMillis() - it) / 86_400_000L).toInt() }
-    val any = area != null || task.project != null || due != null || priority == TaskPriority.High || priority == TaskPriority.Urgent ||
+    val any = task.project != null || due != null || priority == TaskPriority.High || priority == TaskPriority.Urgent ||
         progress != null || task.remindAt != null || task.linkCount > 0 || waitingDays != null || showStatus
     if (!any) return
     Row(
@@ -552,12 +530,6 @@ private fun TaskMeta(task: TaskDto, progress: Pair<Int, Int>?, showDue: Boolean,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         modifier = Modifier.padding(top = 2.dp)
     ) {
-        if (area != null) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                Dot(area.color)
-                Text(area.label, style = Type.meta)
-            }
-        }
         task.project?.let {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Sym(R.drawable.ms_folder, tint = Sc.text3, size = 14.dp, desc = "Project")
@@ -598,18 +570,17 @@ private fun TaskMeta(task: TaskDto, progress: Pair<Int, Int>?, showDue: Boolean,
     }
 }
 
-/** New task: title, area and an optional due day. */
+/** New task: a title and an optional due day. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun QuickAddSheet(initialArea: TaskArea?, initialDue: Long?, onDismiss: () -> Unit, onAdd: (String, TaskArea?, Long?) -> Unit) {
+fun QuickAddSheet(initialDue: Long?, onDismiss: () -> Unit, onAdd: (String, Long?) -> Unit) {
     var title by remember { mutableStateOf("") }
-    var area by remember { mutableStateOf(initialArea) }
     var due by remember { mutableStateOf(initialDue) }
     var pickDate by remember { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
     fun submit() {
         if (title.isBlank()) return
-        onAdd(title, area, due)
+        onAdd(title, due)
         onDismiss()
     }
     Sheet(onDismiss) {
@@ -623,7 +594,6 @@ fun QuickAddSheet(initialArea: TaskArea?, initialDue: Long?, onDismiss: () -> Un
             keyboardActions = KeyboardActions(onDone = { submit() })
         )
         Spacer(Modifier.height(8.dp))
-        Segments(TaskArea.entries, area, { it.label }, { area = if (area == it) null else it }, lead = { Dot(it.color) })
         Row(
             Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 8.dp),
             verticalAlignment = Alignment.CenterVertically
