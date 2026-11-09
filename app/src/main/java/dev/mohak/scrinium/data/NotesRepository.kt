@@ -27,6 +27,8 @@ class NotesRepository(
 
     suspend fun get(path: String): NoteEntity? = noteDao.get(path)
 
+    fun observe(path: String): Flow<NoteEntity?> = noteDao.observe(path)
+
     suspend fun saveLocally(path: String, content: String) {
         val existing = noteDao.get(path)
         noteDao.upsert(
@@ -189,7 +191,7 @@ class NotesRepository(
 
     /**
      * Local-only folder rename: rewrites the path prefix of every note under
-     * [folder]. Sync pushes one DELETE + PUT per note. Returns the new
+     * [folder] in one transaction. Sync pushes one DELETE + PUT per note. Returns the new
      * folder path, or null when there is nothing to do.
      */
     suspend fun renameFolder(folder: String, newName: String): String? {
@@ -230,28 +232,30 @@ class NotesRepository(
             }
         }
         val now = System.currentTimeMillis()
-        for (note in affected) {
-            val target = newPrefix + note.path.removePrefix(folder)
-            noteDao.upsert(note.copy(isDeleted = true, localModifiedAt = now))
-            noteDao.upsert(
+        // One upsertAll is one Room transaction: a crash leaves the folder
+        // whole at one path, never half moved.
+        noteDao.upsertAll(affected.flatMap { note ->
+            listOf(
+                note.copy(isDeleted = true, localModifiedAt = now),
                 NoteEntity(
-                    path = target,
+                    path = newPrefix + note.path.removePrefix(folder),
                     content = note.content,
                     remoteUpdatedAt = note.remoteUpdatedAt,
                     localModifiedAt = now,
                     contentHash = note.contentHash
                 )
             )
-        }
+        })
         return newPrefix
     }
 
-    /** Local-only folder delete: tombstones every note under [folder]. */
+    /** Local-only folder delete: tombstones every note under [folder] in one transaction. */
     suspend fun deleteFolder(folder: String) {
         val now = System.currentTimeMillis()
-        for (note in noteDao.getAll().filter { !it.isDeleted && it.path.startsWith("$folder/") }) {
-            noteDao.upsert(note.copy(isDeleted = true, localModifiedAt = now))
-        }
+        noteDao.upsertAll(
+            noteDao.getAll().filter { !it.isDeleted && it.path.startsWith("$folder/") }
+                .map { it.copy(isDeleted = true, localModifiedAt = now) }
+        )
     }
 
     private fun normalizeFolder(raw: String): String {

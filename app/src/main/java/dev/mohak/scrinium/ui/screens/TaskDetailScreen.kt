@@ -59,6 +59,7 @@ import dev.mohak.scrinium.ui.isDone
 import dev.mohak.scrinium.ui.noteTitle
 import dev.mohak.scrinium.ui.stampLabel
 import dev.mohak.scrinium.ui.startOfDay
+import dev.mohak.scrinium.ui.noteStem
 
 /** Full-screen task editor, the phone's version of the web task drawer. */
 @OptIn(ExperimentalLayoutApi::class)
@@ -429,7 +430,7 @@ fun NotePickerDialog(paths: List<String>, onDismiss: () -> Unit, onPick: (String
                 ) {
                     Sym(R.drawable.ms_description, tint = Sc.text3, size = 17.dp)
                     Column(Modifier.padding(start = 10.dp)) {
-                        Text(p.substringAfterLast('/').removeSuffix(".md"), style = Type.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(noteStem(p), style = Type.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(p.substringBeforeLast('/', "").ifBlank { "/" }, style = Type.meta, maxLines = 1)
                     }
                 }

@@ -13,16 +13,11 @@ fun relativeTime(epoch: Long, now: Long = System.currentTimeMillis()): String {
     }
 }
 
-fun noteTitle(path: String, content: String): String {
-    val heading = content.lineSequence()
-        .firstOrNull { it.isNotBlank() }
-        ?.trim()
-        ?.takeIf { it.startsWith("#") }
-        ?.trimStart('#')
-        ?.trim()
-    if (!heading.isNullOrBlank()) return heading
-    return path.substringAfterLast('/').removeSuffix(".md")
-}
+/** A note's filename without its .md extension, in any case. */
+fun noteStem(path: String): String =
+    path.substringAfterLast('/').let { if (it.endsWith(".md", ignoreCase = true)) it.dropLast(3) else it }
+
+fun noteTitle(path: String, content: String): String = effectiveTitle(content, noteStem(path))
 
 // Relevance bucket mirroring the web client's titleScore (rank.ts):
 // title-prefix first, body-only mentions last. Lower wins.
@@ -55,47 +50,49 @@ fun snippet(content: String, query: String, maxLen: Int = 140): String? {
     return (if (start > 0) "…" else "") + window + (if (start + maxLen < line.length) "…" else "")
 }
 
-// Title source mirrors the web client: frontmatter `title:` wins, else the
-// first `# ` heading, else the filename stem.
+// Ported from the web's editor/frontmatter.ts without a YAML parser: only
+// the top-level `title:` key counts, its value may continue on deeper
+// indented lines, and headings inside code fences are not titles.
+
+/** Frontmatter `title:` wins, then the first `# ` heading below the block, then [fallback]. */
 fun effectiveTitle(content: String, fallback: String): String {
-    frontmatterTitle(content)?.takeIf { it.isNotBlank() }?.let { return it }
-    firstH1(content)?.takeIf { it.isNotBlank() }?.let { return it }
-    return fallback
-}
-
-fun firstH1(content: String): String? {
-    val body = withoutFrontmatter(content)
-    return body.lineSequence()
-        .map { it.trim() }
-        .firstOrNull { it.startsWith("# ") }
-        ?.drop(2)?.trim()?.takeIf { it.isNotEmpty() }
-}
-
-// Rewrites the same source effectiveTitle read from (fm key if the block
-// owns one, else the body H1). Null when neither exists — never injects.
-fun setEffectiveTitle(content: String, newTitle: String): String? {
     val lines = content.lines()
     val fm = frontmatterRange(lines)
     if (fm != null) {
-        val idx = fm.lines.indices.firstOrNull { i ->
-            fm.lines[i].trimStart().startsWith("title:")
-        }
-        if (idx != null) {
-            val quote = fm.lines[idx].trimEnd().lastOrNull()?.takeIf { it == '"' || it == '\'' }
-            val replacement = if (quote != null) "title: $quote$newTitle$quote" else "title: $newTitle"
-            val out = lines.toMutableList()
-            out[fm.start + 1 + idx] = replacement
-            return out.joinToString("\n")
-        }
+        titleKey(fm.lines)?.let { (start, end) -> scalarValue(fm.lines.subList(start, end)) }?.let { return it.take(200) }
     }
-    val bodyOffset = if (fm != null) fm.endInclusive + 1 else 0
-    val h1 = lines.withIndex().drop(bodyOffset).firstOrNull { (_, line) ->
-        line.trimStart().startsWith("# ")
-    } ?: return null
-    val out = lines.toMutableList()
-    val indent = h1.value.takeWhile { it == ' ' || it == '\t' }
-    out[h1.index] = "$indent# $newTitle"
-    return out.joinToString("\n")
+    return firstHeading(lines, fm?.let { it.endInclusive + 1 } ?: 0)?.value?.take(200) ?: fallback
+}
+
+// Rewrites the same source effectiveTitle reads (the top-level key if the
+// block has one, else the first body heading). Null when neither exists:
+// it never injects a title.
+fun setEffectiveTitle(content: String, newTitle: String): String? {
+    val lines = content.lines().toMutableList()
+    val fm = frontmatterRange(lines)
+    val key = fm?.let { titleKey(it.lines) }
+    if (fm != null && key != null) {
+        val at = fm.start + 1 + key.first
+        repeat(key.second - key.first) { lines.removeAt(at) }
+        lines.add(at, "title: ${yamlScalar(newTitle)}")
+        return lines.joinToString("\n")
+    }
+    val h = firstHeading(lines, fm?.let { it.endInclusive + 1 } ?: 0) ?: return null
+    lines[h.index] = "# $newTitle"
+    return lines.joinToString("\n")
+}
+
+/**
+ * A renamed note takes its new filename as title only when its title was
+ * the old filename. A title that already differed is the author's and stays,
+ * so title->filename and filename->title sync never undo each other.
+ */
+fun retitle(content: String, oldPath: String, newPath: String): String {
+    fun stem(p: String) = if (p.endsWith(".md", ignoreCase = true)) noteStem(p) else null
+    val was = stem(oldPath) ?: return content
+    val now = stem(newPath) ?: return content
+    if (was == now || sanitizeTitleForFilename(effectiveTitle(content, "")) != was) return content
+    return setEffectiveTitle(content, now) ?: content
 }
 
 fun sanitizeTitleForFilename(raw: String): String? = sanitizePathSegment(raw)
@@ -103,29 +100,69 @@ fun sanitizeTitleForFilename(raw: String): String? = sanitizePathSegment(raw)
 private data class FmRange(val start: Int, val endInclusive: Int, val lines: List<String>)
 
 private fun frontmatterRange(lines: List<String>): FmRange? {
-    if (lines.isEmpty() || lines[0].trim() != "---") return null
+    if (lines.isEmpty() || lines[0].trimEnd() != "---") return null
     for (i in 1 until lines.size) {
-        val t = lines[i].trim()
-        if (t == "---" || t == "...") {
-            return FmRange(0, i, lines.subList(1, i))
+        val t = lines[i].trimEnd()
+        if (t == "---" || t == "...") return FmRange(0, i, lines.subList(1, i))
+    }
+    return null
+}
+
+private val TITLE_KEY = Regex("^title\\s*:")
+
+// Lines [first, second) of the top-level title key and its continuation.
+private fun titleKey(fm: List<String>): Pair<Int, Int>? {
+    val start = fm.indexOfFirst { TITLE_KEY.containsMatchIn(it) }
+    if (start < 0) return null
+    var end = start + 1
+    for (j in start + 1 until fm.size) {
+        if (fm[j].isBlank()) continue
+        if (!fm[j][0].isWhitespace()) break
+        end = j + 1
+    }
+    return start to end
+}
+
+// The key's value on one line: block (| >) and multi-line plain or quoted
+// values are folded with spaces, quotes and plain-scalar comments removed.
+private fun scalarValue(lines: List<String>): String? {
+    val first = lines[0].substringAfter(':').trim()
+    val rest = lines.drop(1).map { it.trim() }.filter { it.isNotEmpty() }
+    val raw = (if (first.startsWith('|') || first.startsWith('>')) rest else listOf(first) + rest).joinToString(" ").trim()
+    val value = when {
+        raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"') ->
+            raw.substring(1, raw.length - 1).replace("\\\"", "\"").replace("\\\\", "\\")
+        raw.length >= 2 && raw.startsWith('\'') && raw.endsWith('\'') ->
+            raw.substring(1, raw.length - 1).replace("''", "'")
+        else -> raw.substringBefore(" #")
+    }.trim()
+    return value.ifEmpty { null }
+}
+
+private val FENCE = Regex("^ {0,3}(`{3,}|~{3,})")
+private val HEADING = Regex("^#\\s+(.+?)\\s*$")
+
+// First `# ` heading at or after line [from], outside code fences.
+private fun firstHeading(lines: List<String>, from: Int): IndexedValue<String>? {
+    var fence = ""
+    for (i in from until lines.size) {
+        val line = lines[i]
+        val f = FENCE.find(line)?.groupValues?.get(1)
+        if (fence.isNotEmpty()) {
+            if (f != null && f[0] == fence[0] && f.length >= fence.length && line.trim().drop(f.length).isBlank()) fence = ""
+        } else if (f != null) {
+            fence = f
+        } else {
+            HEADING.matchEntire(line)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() }?.let { return IndexedValue(i, it) }
         }
     }
     return null
 }
 
-private fun withoutFrontmatter(content: String): String {
-    val lines = content.lines()
-    val fm = frontmatterRange(lines) ?: return content
-    return lines.drop(fm.endInclusive + 1).joinToString("\n")
-}
+private val PLAIN = Regex("^[A-Za-z][A-Za-z0-9 _\\-/().]*$")
+private val YAML_WORD = Regex("^(true|false|yes|no|on|off|null|y|n)$", RegexOption.IGNORE_CASE)
 
-private fun frontmatterTitle(content: String): String? {
-    val lines = content.lines()
-    val fm = frontmatterRange(lines) ?: return null
-    val raw = fm.lines.firstOrNull { it.trimStart().startsWith("title:") }
-        ?.substringAfter("title:")?.trim() ?: return null
-    if (raw.length >= 2 && (raw.startsWith('"') && raw.endsWith('"') || raw.startsWith('\'') && raw.endsWith('\''))) {
-        return raw.substring(1, raw.length - 1)
-    }
-    return raw
-}
+// Bare when YAML is sure to read it back as the same string, else quoted.
+private fun yamlScalar(s: String): String =
+    if (PLAIN.matches(s) && s == s.trim() && !YAML_WORD.matches(s)) s
+    else "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""

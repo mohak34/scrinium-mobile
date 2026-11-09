@@ -18,6 +18,7 @@ class NotesRepositoryTest {
         override fun observeAll(): Flow<List<NoteEntity>> = rows.map { it.values.sortedBy(NoteEntity::path) }
         override suspend fun getAll() = rows.value.values.toList()
         override suspend fun get(path: String) = rows.value[path]
+        override fun observe(path: String): Flow<NoteEntity?> = rows.map { it[path] }
         override suspend fun upsert(note: NoteEntity) { rows.value += note.path to note }
         override suspend fun upsertAll(notes: List<NoteEntity>) = notes.forEach { upsert(it) }
         override suspend fun delete(path: String) { rows.value -= path }

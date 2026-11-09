@@ -44,6 +44,7 @@ import dev.mohak.scrinium.ui.SheetTitle
 import dev.mohak.scrinium.ui.Sym
 import dev.mohak.scrinium.ui.Type
 import dev.mohak.scrinium.ui.printHtml
+import dev.mohak.scrinium.ui.noteStem
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -64,7 +65,7 @@ class NoteActions {
         rename?.let { path ->
             PromptDialog(
                 "Rename note",
-                path.substringAfterLast('/').removeSuffix(".md"),
+                noteStem(path),
                 "Rename",
                 onConfirm = { vm.renameNote(path, it) },
                 onDismiss = { rename = null }
@@ -72,7 +73,7 @@ class NoteActions {
         }
         move?.let { path ->
             MoveSheet(
-                title = "Move \"${path.substringAfterLast('/').removeSuffix(".md")}\"",
+                title = "Move \"${noteStem(path)}\"",
                 folders = folders,
                 current = path.substringBeforeLast('/', ""),
                 onDismiss = { move = null },
@@ -98,7 +99,7 @@ fun rememberNoteActions(): NoteActions = remember { NoteActions() }
 /** Opens the print dialog for a note, where "Save as PDF" is a printer. */
 fun exportPdf(context: Context, scope: CoroutineScope, vm: MainViewModel, path: String, text: String) {
     scope.launch {
-        printHtml(context, path.substringAfterLast('/').removeSuffix(".md"), vm.printableHtml(path, text))
+        printHtml(context, noteStem(path), vm.printableHtml(path, text))
     }
 }
 

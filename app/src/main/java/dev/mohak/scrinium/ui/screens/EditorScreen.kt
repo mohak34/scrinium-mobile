@@ -70,6 +70,7 @@ import dev.mohak.scrinium.ui.insertText
 import dev.mohak.scrinium.ui.lineStartOffset
 import dev.mohak.scrinium.ui.toggleLinePrefix
 import dev.mohak.scrinium.ui.wrapSelection
+import dev.mohak.scrinium.ui.noteStem
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -368,7 +369,7 @@ private fun Crumbs(path: String) {
     Text(
         buildAnnotatedString {
             if (dir.isNotBlank()) withStyle(SpanStyle(color = Sc.text3)) { append(dir.replace("/", " / ") + " / ") }
-            withStyle(SpanStyle(color = Sc.text2)) { append(path.substringAfterLast('/').removeSuffix(".md")) }
+            withStyle(SpanStyle(color = Sc.text2)) { append(noteStem(path)) }
         },
         style = Type.body.copy(fontWeight = FontWeight.Medium, fontSize = Type.meta.fontSize * 1.1f),
         maxLines = 1,
