@@ -821,7 +821,7 @@ class MainViewModel(
         val target = targetRaw.substringBefore('#').trim()
         if (target.isEmpty()) return
         viewModelScope.launch {
-            val paths = notes.allMeta().filter { !it.isDeleted }.map { it.path }
+            val paths = livePaths()
             val hit = resolveWikilink(target, _editor.value?.path ?: "", paths)
             if (hit != null) {
                 openNote(hit)
@@ -834,6 +834,27 @@ class MainViewModel(
             }
         }
     }
+
+    // A relative Markdown link in the open note: a note opens, anything
+    // else says the phone can't open it. External links open in the UI.
+    fun openMarkdownLink(href: String) {
+        val source = _editor.value?.path ?: return
+        val path = resolveMarkdownLink(href, source) ?: return
+        viewModelScope.launch {
+            val paths = livePaths()
+            val hit = paths.firstOrNull { it.equals(path, ignoreCase = true) }
+                ?: paths.firstOrNull { it.equals("$path.md", ignoreCase = true) }
+            if (hit != null) openNote(hit)
+            else _sync.update { it.copy(error = if (path.endsWith(".md", ignoreCase = true)) "Note not found: $path" else "Can't open $path on the phone") }
+        }
+    }
+
+    // `[[name]]` for [path] as a link written in the open note (or the vault
+    // root) would name it.
+    suspend fun wikilinkTo(path: String): String =
+        "[[${WikiResolver(livePaths()).targetFor(path, _editor.value?.path ?: "")}]]"
+
+    private suspend fun livePaths(): List<String> = notes.allMeta().filter { !it.isDeleted }.map { it.path }
 
     fun toggleTaskLine(lineIdx: Int) {
         val current = _editor.value ?: return
@@ -966,7 +987,7 @@ class MainViewModel(
         val target = _editor.value?.path ?: return
         viewModelScope.launch {
             val source = notes.get(sourcePath) ?: return@launch
-            val updated = linkFirstMention(source.content, target) ?: return@launch
+            val updated = linkFirstMention(source.content, sourcePath, target, WikiResolver(livePaths())) ?: return@launch
             notes.saveLocally(sourcePath, updated)
             scheduleAutoSync()
             loadBacklinks()

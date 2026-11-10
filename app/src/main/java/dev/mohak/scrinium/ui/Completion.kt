@@ -18,13 +18,14 @@ fun completions(text: String, cursor: Int, sourcePath: String, notePaths: List<S
     wikiTrigger.find(before)?.let { m ->
         val typed = m.groupValues[1].lowercase()
         val from = cursor - m.groupValues[1].length
+        val links by lazy { WikiResolver(notePaths) }
         return notePaths.asSequence()
             .map { it to noteStem(it) }
             .filter { (_, stem) -> typed in stem.lowercase() }
             .sortedWith(compareBy({ !it.second.lowercase().startsWith(typed) }, { it.second.lowercase() }))
             .take(20)
             .map { (path, stem) ->
-                val target = if (resolveWikilink(stem, sourcePath, notePaths) == path) stem else path.removeSuffix(".md")
+                val target = links.targetFor(path, sourcePath)
                 Suggestion(stem, path.takeIf { '/' in it }, from, "$target]]")
             }
             .toList()

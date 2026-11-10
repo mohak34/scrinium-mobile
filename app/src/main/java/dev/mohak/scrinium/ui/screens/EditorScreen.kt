@@ -40,7 +40,11 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
+import android.content.ClipData
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
@@ -67,6 +71,8 @@ import dev.mohak.scrinium.ui.Type
 import dev.mohak.scrinium.ui.completions
 import dev.mohak.scrinium.ui.folderPaths
 import dev.mohak.scrinium.ui.insertText
+import dev.mohak.scrinium.ui.isExternalLink
+import dev.mohak.scrinium.ui.linkDestination
 import dev.mohak.scrinium.ui.lineStartOffset
 import dev.mohak.scrinium.ui.toggleLinePrefix
 import dev.mohak.scrinium.ui.wrapSelection
@@ -102,6 +108,9 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
     val pinned by vm.pinned.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val clipboard = LocalClipboard.current
+    val uriHandler = LocalUriHandler.current
+    fun copy(label: String, text: String) = scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(label, text))) }
     var uploading by remember { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
     val previewScroll = rememberScrollState()
@@ -225,6 +234,9 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                     MenuRow(R.drawable.ms_drive_file_move, "Move", act { actions.move = state.path })
                     MenuRow(R.drawable.ms_link, "Share link", act { actions.share = state.path })
                     MenuRow(R.drawable.ms_picture_as_pdf, "Export PDF", act { exportPdf(context, scope, vm, state.path, field.text) })
+                    MenuRow(R.drawable.ms_share, "Share Markdown", act { shareMarkdown(context, state.path, field.text) })
+                    MenuRow(R.drawable.ms_content_copy, "Copy path", act { copy("path", state.path) })
+                    MenuRow(R.drawable.ms_data_array, "Copy wikilink", act { scope.launch { copy("wikilink", vm.wikilinkTo(state.path)) } })
                     Divider()
                     MenuRow(R.drawable.ms_archive, "Archive", act { vm.archivePath(state.path) })
                     MenuRow(R.drawable.ms_delete, "Delete", act { actions.delete = state.path }, danger = true)
@@ -241,6 +253,14 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                     .verticalScroll(previewScroll)
                     .padding(horizontal = 18.dp, vertical = 8.dp),
                 onWikilinkClick = { vm.openWikilink(it) },
+                onLinkClick = { href ->
+                    if (!isExternalLink(href)) vm.openMarkdownLink(href)
+                    else try {
+                        uriHandler.openUri(linkDestination(href))
+                    } catch (_: RuntimeException) {
+                        vm.reportError("No app opens ${linkDestination(href)}")
+                    }
+                },
                 onToggleTaskLine = { vm.toggleTaskLine(it) },
                 onTagClick = { vm.searchTag(it) },
                 imageBase = state.path,

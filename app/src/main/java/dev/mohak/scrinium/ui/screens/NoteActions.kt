@@ -1,6 +1,7 @@
 package dev.mohak.scrinium.ui.screens
 
 import android.content.Context
+import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
@@ -104,6 +105,15 @@ fun exportPdf(context: Context, scope: CoroutineScope, vm: MainViewModel, path: 
     scope.launch {
         printHtml(context, noteStem(path), vm.printableHtml(path, text))
     }
+}
+
+// Hands the note's Markdown to any app (save to Files, mail, chat).
+fun shareMarkdown(context: Context, path: String, text: String) {
+    val send = Intent(Intent.ACTION_SEND)
+        .setType("text/markdown")
+        .putExtra(Intent.EXTRA_SUBJECT, noteStem(path))
+        .putExtra(Intent.EXTRA_TEXT, text)
+    context.startActivity(Intent.createChooser(send, null))
 }
 
 /**

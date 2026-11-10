@@ -131,9 +131,12 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
 
 Paths are URL-encoded per segment. Backlinks are computed on the phone from
 Room (`ui/Backlinks.kt`, a port of the web's `wikilinks.ts`), not fetched.
-One `resolveWikilink` serves link taps, backlinks and `[[` autocomplete:
-vault path, then the source note's folder, then a unique name. Unlike the
-web it does not pick the shortest path when a name is ambiguous.
+One `WikiResolver` serves link taps, backlinks, mention linking and `[[`
+autocomplete: vault path, then the source note's folder, then a unique
+name. Unlike the web it does not pick the shortest path when a name is
+ambiguous; a link it writes names the path instead. Code (fences and
+inline spans) holds no links or mentions. Relative `[text](href)` links
+open notes; links with a scheme open outside the app.
 
 ## Sync engine rules
 
