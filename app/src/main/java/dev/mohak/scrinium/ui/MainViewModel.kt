@@ -13,7 +13,6 @@ import dev.mohak.scrinium.data.ImageLoader
 import dev.mohak.scrinium.data.ImageSource
 import dev.mohak.scrinium.data.NotesRepository
 import dev.mohak.scrinium.data.Prefs
-import dev.mohak.scrinium.data.attachmentMarkdown
 import dev.mohak.scrinium.data.resolveImage
 import dev.mohak.scrinium.data.SessionRepository
 import dev.mohak.scrinium.data.local.NoteEntity
@@ -1043,26 +1042,26 @@ class MainViewModel(
     }
 
     /**
-     * Uploads a picked image to the vault's attachments folder (the web
-     * default) and returns the markdown to insert, path relative to the note.
-     * Online only; failures surface in the error banner.
+     * Uploads a picked image into [folder] (see attachmentFolder) and returns
+     * the vault path it landed at. Online only; failures surface in the
+     * error banner.
      */
-    suspend fun uploadImage(notePath: String, bytes: ByteArray, mimeType: String?, name: String): String? =
-        upload(notePath) {
+    suspend fun uploadImage(folder: String, bytes: ByteArray, mimeType: String?, name: String): String? =
+        upload {
             val (body, mime) = withContext(Dispatchers.Default) { ImageLoader.prepareUpload(bytes, mimeType) }
                 ?: throw IllegalArgumentException("Unsupported image")
             val ext = mime.substringAfter('/').replace("jpeg", "jpg")
             val base = name.substringBeforeLast('.').ifBlank { "image" }
-            notes.uploadAttachment(body.toRequestBody(mime.toMediaType()), "$base.$ext", ATTACHMENTS_FOLDER)
+            notes.uploadAttachment(body.toRequestBody(mime.toMediaType()), "$base.$ext", folder)
         }
 
     /** Any other file, streamed as-is; same contract as [uploadImage]. */
-    suspend fun uploadFile(notePath: String, body: RequestBody, name: String): String? =
-        upload(notePath) { notes.uploadAttachment(body, name, ATTACHMENTS_FOLDER) }
+    suspend fun uploadFile(folder: String, body: RequestBody, name: String): String? =
+        upload { notes.uploadAttachment(body, name, folder) }
 
-    private suspend fun upload(notePath: String, send: suspend () -> String): String? {
+    private suspend fun upload(send: suspend () -> String): String? {
         return try {
-            attachmentMarkdown(notePath, send())
+            send()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1352,7 +1351,6 @@ class MainViewModel(
     companion object {
         private const val AUTO_PUSH_DELAY_MS = 5_000L
         private const val FOREGROUND_PULL_MS = 60_000L
-        private const val ATTACHMENTS_FOLDER = "attachments"
         // Review lists notes untouched this long, the web default.
         private const val REVIEW_DAYS = 60
 

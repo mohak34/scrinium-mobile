@@ -130,9 +130,12 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
   PackageInstaller (`update/Updater.kt`).
 - `GET /api/assets/<path>` → file bytes; `POST /api/attachments?name=&folder=`
   with the file as the raw body (any type, a Content-Type is required, max
-  100 MB) → `{ path }`. Phone uploads go to `attachments/`, the web
-  default, and the note gets a note-relative `![name](path)` for images or
-  `[file](path)` for anything else.
+  100 MB) → `{ path }`. Phone uploads go where the web's do: the note's
+  project `<project>/attachments/`, else `attachments/`. The note gets a
+  `![name](path)` for images or `[file](path)` for anything else, relative
+  to where the note is when the upload ends, in `<...>` if the path has
+  spaces. Image references resolve like the web's `resolveAssetUrl`
+  (`data/Images.kt`): percent-decoded, `?`/`#` dropped.
 
 Paths are URL-encoded per segment. Backlinks are computed on the phone from
 Room (`ui/Backlinks.kt`, a port of the web's `wikilinks.ts`), not fetched.

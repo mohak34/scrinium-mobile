@@ -54,6 +54,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.mohak.scrinium.data.attachmentFolder
+import dev.mohak.scrinium.data.attachmentMarkdown
 import dev.mohak.scrinium.R
 import dev.mohak.scrinium.ui.Divider
 import dev.mohak.scrinium.ui.ErrorStrip
@@ -167,11 +169,11 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
     // Raster images are downscaled/re-encoded in memory; other files
     // (SVG included, which can't be decoded) stream from the provider. Either way the markdown lands at the cursor.
     fun attach(uri: Uri) {
-        val notePath = state.path
+        val folder = attachmentFolder(state.path, tasksVm.projects.value.map { it.path })
         val editorId = state.id
         scope.launch {
             uploading = true
-            val markdown = try {
+            val uploaded = try {
                 // Providers throw for unreadable picks (an offline cloud photo,
                 // a revoked grant); that is an upload error, not a crash.
                 val resolver = context.contentResolver
@@ -183,11 +185,11 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                 if (mime?.startsWith("image/") == true && mime != "image/svg+xml") {
                     val bytes = withContext(Dispatchers.IO) { resolver.openInputStream(uri)?.use { it.readBytes() } }
                         ?: throw IOException("no data")
-                    vm.uploadImage(notePath, bytes, mime, name)
+                    vm.uploadImage(folder, bytes, mime, name)
                 } else {
                     if (size > MAX_ATTACHMENT_BYTES) throw IOException("over 100 MB")
                     val type = (mime ?: "application/octet-stream").toMediaType()
-                    vm.uploadFile(notePath, UriBody(resolver, uri, type, size), name)
+                    vm.uploadFile(folder, UriBody(resolver, uri, type, size), name)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -197,7 +199,9 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
             } finally {
                 uploading = false
             }
-            if (markdown == null || vm.editor.value?.id != editorId) return@launch
+            // Relative to where the note is now: it may have moved mid-upload.
+            val notePath = vm.editor.value?.takeIf { it.id == editorId }?.path ?: return@launch
+            val markdown = attachmentMarkdown(notePath, uploaded ?: return@launch)
             // Own line, like the web's paste: break before it if mid-line.
             val at = field.selection.start
             val needsBreak = at > 0 && field.text[at - 1] != '\n'
