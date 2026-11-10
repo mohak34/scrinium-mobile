@@ -127,6 +127,20 @@ class NotesRepository(
     // Trashes any vault file on the server; for files Room doesn't hold.
     suspend fun trashRemote(path: String) = api.deleteNote(path)
 
+    suspend fun history(path: String) = api.history(path)
+
+    suspend fun historyText(path: String, id: Long) = api.historyText(path, id)
+
+    // Puts [content] back on the server over the clean row's text, then into
+    // Room unless typing began meanwhile (that edit then conflicts on push).
+    // The blank hash makes the next sync take the server's fingerprint.
+    suspend fun restoreVersion(path: String, content: String) {
+        val row = noteDao.get(path)?.takeIf { it.localModifiedAt == null && !it.isDeleted }
+            ?: throw IllegalStateException("the note has unsynced edits")
+        api.restoreNote(path, content, row.version.ifEmpty { noteVersion(row.content) })
+        noteDao.applyPull(path, content, "", System.currentTimeMillis(), noteVersion(content))
+    }
+
     suspend fun fetchShares(path: String?) = api.fetchShares(path)
 
     suspend fun setSharePassword(id: String, password: String?) = api.setSharePassword(id, password)

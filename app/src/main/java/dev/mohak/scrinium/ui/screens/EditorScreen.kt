@@ -237,6 +237,7 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                     MenuRow(R.drawable.ms_edit, "Rename", act { actions.rename = state.path })
                     MenuRow(R.drawable.ms_drive_file_move, "Move", act { actions.move = state.path })
                     MenuRow(R.drawable.ms_link, "Share link", act { actions.share = state.path })
+                    MenuRow(R.drawable.ms_history, "History", act { actions.history = state.path })
                     MenuRow(R.drawable.ms_picture_as_pdf, "Export PDF", act { exportPdf(context, scope, vm, state.path, field.text) })
                     MenuRow(R.drawable.ms_share, "Share Markdown", act { shareMarkdown(context, state.path, field.text) })
                     MenuRow(R.drawable.ms_content_copy, "Copy path", act { copy("path", state.path) })

@@ -17,6 +17,7 @@ import dev.mohak.scrinium.data.resolveImage
 import dev.mohak.scrinium.data.SessionRepository
 import dev.mohak.scrinium.data.local.NoteEntity
 import dev.mohak.scrinium.data.local.NoteMeta
+import dev.mohak.scrinium.data.remote.ApiException
 import dev.mohak.scrinium.data.remote.ApiTokenDto
 import dev.mohak.scrinium.data.remote.PublicShare
 import dev.mohak.scrinium.data.remote.SearchResult
@@ -956,6 +957,31 @@ class MainViewModel(
         val target = currentPath(path)
         if (!ready(notes.get(target)) || notes.hasPendingMoves()) throw IllegalStateException("the note isn't synced yet")
         return target
+    }
+
+    // The note's text as Room holds it, after any unsaved typing.
+    suspend fun noteContent(path: String): String {
+        flushEditor()
+        return notes.get(currentPath(path))?.content.orEmpty()
+    }
+
+    // A note's saved versions on the server, newest first, and one's text.
+    suspend fun noteHistory(path: String) = notes.history(currentPath(path))
+
+    suspend fun historyText(path: String, id: Long) = notes.historyText(currentPath(path), id)
+
+    // Puts a past version back as a new write. Pending edits go first, so
+    // the server's history keeps them as the version before the restore.
+    fun restoreVersion(path: String, content: String) {
+        viewModelScope.launch {
+            try {
+                notes.restoreVersion(noteOnServer(path), content)
+            } catch (e: ApiException) {
+                _sync.update { it.copy(error = if (e.status == 412) "The note changed meanwhile. Try again." else "Restore failed: ${e.message}") }
+            } catch (e: Exception) {
+                _sync.update { it.copy(error = "Restore failed: ${e.message}") }
+            }
+        }
     }
 
     // The note is pushed first: the server shares what it holds, and a

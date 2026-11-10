@@ -70,6 +70,11 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
   <version>` + `X-Note-Strict: 1` → 412 if the note changed;
   `If-None-Match: *` → 409 if it exists. A version is the server's
   `noteVersion()` (quoted sha256 hex, first 16), computed on the phone too.
+- `GET /api/history?note=<path>` → `[{ id, author, at, size, mine }]`,
+  newest first; `&id=` → that version's text. The note menu's History
+  diffs a version against the current text; Restore pushes pending edits,
+  then PUTs the version with `If-Match` + `X-Note-Restore: 1` (a version of
+  its own on the server) and writes it to Room if no typing began.
 - `POST /api/notes/<path>` → `{ folder: true }` creates a folder
 - `PATCH /api/notes/<path>` → `{ newPath }` rename/move, note or folder;
   relinks and retitles, returning `{ versions, previous }` of what it

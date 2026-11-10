@@ -49,6 +49,10 @@ data class MoveResult(val versions: Map<String, String> = emptyMap(), val previo
 @Serializable
 data class SearchResult(val path: String, val title: String, val snippet: String)
 
+// One saved version of a note; [mine] when the caller wrote it.
+@Serializable
+data class NoteVersionRow(val id: Long, val author: String? = null, val at: Long, val size: Int, val mine: Boolean = false)
+
 @Serializable
 data class TagCount(val tag: String, val count: Int)
 
@@ -207,8 +211,15 @@ private interface ScriniumService {
         @Body body: RequestBody,
         @Header("If-Match") ifMatch: String?,
         @Header("X-Note-Strict") strict: String?,
-        @Header("If-None-Match") ifNoneMatch: String?
+        @Header("If-None-Match") ifNoneMatch: String?,
+        @Header("X-Note-Restore") restore: String? = null
     ): Response<ResponseBody>
+
+    @GET("api/history")
+    suspend fun history(@Query("note") note: String): List<NoteVersionRow>
+
+    @GET("api/history")
+    suspend fun historyText(@Query("note") note: String, @Query("id") id: Long): ResponseBody
 
     @PATCH("api/notes/{path}")
     suspend fun rename(
@@ -402,6 +413,17 @@ class ScriniumApi(
         res.body()?.close()
         if (!res.isSuccessful) throw ApiException(res.code())
     }
+
+    // A restore is a guarded write the server books as a version of its own.
+    suspend fun restoreNote(path: String, content: String, ifMatch: String) {
+        val res = service.putNote(encPath(path), content.toRequestBody(textMediaType), ifMatch, "1", null, "1")
+        res.body()?.close()
+        if (!res.isSuccessful) throw ApiException(res.code())
+    }
+
+    suspend fun history(path: String): List<NoteVersionRow> = service.history(path)
+
+    suspend fun historyText(path: String, id: Long): String = service.historyText(path, id).use { it.string() }
 
     override suspend fun moveNote(from: String, to: String, opId: String): MoveResult {
         val res = service.rename(encPath(from), RenameRequest(to), opId)

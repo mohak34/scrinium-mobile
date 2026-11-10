@@ -420,6 +420,7 @@ fun NotesScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
             onRename = { actions.rename = note.path },
             onMove = { actions.move = note.path },
             onShare = { actions.share = note.path },
+            onHistory = { actions.history = note.path },
             onExport = { exportPdf(context, scope, vm, note.path, note.content) },
             onArchive = { vm.archivePath(note.path) },
             onDelete = { actions.delete = note.path }
