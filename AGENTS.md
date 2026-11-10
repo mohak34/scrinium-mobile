@@ -105,7 +105,9 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
   made when it can't be. Rows are snake_case. Tasks live in the server's SQLite, not the vault, so
   they are online-only: `TasksViewModel` calls the API directly, no Room.
   `waiting_since` is stamped on entering Waiting; a PATCH may set an
-  earlier start, never a future one.
+  earlier start, never a future one. Reminders that went off (`remind_at`
+  past, task not done) sit behind a bell in the Tasks bar; snooze sets a
+  new `remind_at` (the web's choices), clear sets it null.
 - `GET /api/projects` → `[{ path, area, created_at }]`, vault folders the
   web registered as project boards. A task's `project` is that path;
   subtasks follow their root's project. A project's Inbox is its backlog:

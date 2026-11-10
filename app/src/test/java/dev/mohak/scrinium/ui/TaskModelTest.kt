@@ -49,4 +49,24 @@ class TaskModelTest {
         assertFalse(ProjectView.Project(null).shows(active))
         assertEquals(listOf(backlog, active), listOf(loose, backlog, active).filter { ProjectView.Project("Jobs").shows(it) })
     }
+
+    @Test
+    fun snoozeOffersTheEveningOnlyBeforeFive() {
+        val morning = Calendar.getInstance().apply { timeInMillis = local(2026, 11, 10, 9) }
+        assertEquals(
+            listOf("10 minutes", "1 hour", "This evening, 6 PM", "Tomorrow, 9 AM"),
+            snoozeChoices(morning).map { it.label }
+        )
+        assertEquals(local(2026, 11, 10, 18), snoozeChoices(morning)[2].at)
+        val evening = Calendar.getInstance().apply { timeInMillis = local(2026, 11, 30, 19) }
+        assertEquals(local(2026, 12, 1, 9), snoozeChoices(evening).last().at)
+        assertEquals(3, snoozeChoices(evening).size)
+    }
+
+    @Test
+    fun firedRemindersSkipDoneAndFutureOnes() {
+        val t = TaskDto(id = "a", title = "a", status = "todo", remindAt = 100)
+        val tasks = listOf(t, t.copy(id = "b", status = "done"), t.copy(id = "c", remindAt = 300), t.copy(id = "d", remindAt = 50))
+        assertEquals(listOf("d", "a"), firedReminders(tasks, 200).map { it.id })
+    }
 }

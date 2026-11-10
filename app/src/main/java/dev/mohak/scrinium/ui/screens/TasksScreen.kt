@@ -88,6 +88,11 @@ import dev.mohak.scrinium.ui.shortDue
 import dev.mohak.scrinium.ui.startOfDay
 import dev.mohak.scrinium.ui.startOfToday
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import androidx.compose.runtime.produceState
+import dev.mohak.scrinium.ui.relativeTime
+import dev.mohak.scrinium.ui.snoozeChoices
+import dev.mohak.scrinium.ui.firedReminders
 import java.text.DateFormat
 import java.text.DateFormatSymbols
 import java.text.SimpleDateFormat
@@ -132,10 +137,29 @@ fun TasksScreen(tasksVm: TasksViewModel) {
 
     val groups = groupByStatus(topLevel(all, area).filter { it.onMainBoard })
     val progress = subtaskProgress(all)
+    // Ticks so a reminder joins the bell when it goes off with the list open.
+    val now by produceState(System.currentTimeMillis()) {
+        while (true) {
+            delay(30_000)
+            value = System.currentTimeMillis()
+        }
+    }
+    val fired = firedReminders(all, now)
+    var showReminders by remember { mutableStateOf(false) }
     val areaTabs = listOf<TaskArea?>(null) + TaskArea.entries
 
     Column(Modifier.fillMaxSize()) {
-        TopBar("Tasks")
+        TopBar("Tasks") {
+            if (fired.isNotEmpty()) {
+                Row(
+                    Modifier.clickable { showReminders = true }.padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Sym(R.drawable.ms_notifications, tint = Sc.yellow, size = 20.dp, desc = "Reminders")
+                    Text("${fired.size}", style = Type.meta.copy(color = Sc.yellow), modifier = Modifier.padding(start = 3.dp))
+                }
+            }
+        }
         TextTabs(areaTabs.map { it?.label ?: "All" }, areaTabs.indexOf(TaskArea.of(area))) {
             tasksVm.setAreaFilter(areaTabs[it]?.key)
         }
@@ -166,9 +190,55 @@ fun TasksScreen(tasksVm: TasksViewModel) {
         }
     }
 
+    if (showReminders) {
+        ReminderSheet(fired, now, tasksVm) { showReminders = false }
+    }
     if (showAdd) {
         QuickAddSheet(TaskArea.of(area), null, onDismiss = { showAdd = false }) { title, a, due, done ->
             tasksVm.create(title, area = a, dueAt = due, onDone = done)
+        }
+    }
+}
+
+// Reminders that went off: finish, snooze or clear each. Closing the sheet
+// loses nothing; the bell stays while any is left.
+@Composable
+private fun ReminderSheet(fired: List<TaskDto>, now: Long, tasksVm: TasksViewModel, onDismiss: () -> Unit) {
+    var open by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(fired.isEmpty()) { if (fired.isEmpty()) onDismiss() }
+    Sheet(onDismiss) {
+        SheetTitle("Reminders")
+        Divider()
+        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp)) {
+            fired.forEach { t ->
+                item(key = t.id) {
+                    Row(
+                        Modifier.fillMaxWidth().clickable { open = if (open == t.id) null else t.id }.padding(start = 4.dp, end = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TaskCheck(false) { tasksVm.toggleDone(t) }
+                        Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
+                            Text(t.title, style = Type.body, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text(relativeTime(t.remindAt ?: now, now), style = Type.meta)
+                        }
+                        Sym(if (open == t.id) R.drawable.ms_expand_less else R.drawable.ms_expand_more, tint = Sc.text3, size = 18.dp)
+                    }
+                }
+                if (open == t.id) {
+                    item(key = "${t.id}-choices") {
+                        Column(Modifier.padding(start = 32.dp)) {
+                            snoozeChoices().forEach { c ->
+                                MenuRow(R.drawable.ms_schedule, c.label, { tasksVm.setReminder(t.id, c.at) })
+                            }
+                            MenuRow(R.drawable.ms_close, "Clear reminder", { tasksVm.setReminder(t.id, null) })
+                            MenuRow(R.drawable.ms_open_in_new, "Open task", {
+                                onDismiss()
+                                tasksVm.openTask(t.id)
+                            })
+                        }
+                    }
+                }
+            }
         }
     }
 }
