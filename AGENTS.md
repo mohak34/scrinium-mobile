@@ -114,8 +114,10 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
   earlier start, never a future one. Reminders that went off (`remind_at`
   past, task not done) sit behind a bell in the Tasks bar; snooze sets a
   new `remind_at` (the web's choices), clear sets it null.
-- `GET /api/projects` → `[{ path, area, created_at }]`, vault folders the
-  web registered as project boards. A task's `project` is that path;
+- `GET /api/projects` → `[{ path, area, icon, color, created_at }]`, vault
+  folders the web registered as project boards. Each shows in its icon and
+  color everywhere (`projectStyle`, the web's `projects.ts`): the pick, else
+  a color hashed from the path; Quotidian is a gray home. A task's `project` is that path;
   subtasks follow their root's project. A project's Inbox is its backlog:
   the main list and the All board leave it out (`onMainBoard`). Tasks with
   no project are Quotidian; the board shows All, Quotidian or one project

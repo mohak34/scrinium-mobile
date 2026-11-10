@@ -70,6 +70,8 @@ import dev.mohak.scrinium.ui.MenuRow
 import dev.mohak.scrinium.ui.ProjectView
 import dev.mohak.scrinium.ui.PromptDialog
 import dev.mohak.scrinium.ui.QUOTIDIAN
+import dev.mohak.scrinium.ui.ProjectStyle
+import dev.mohak.scrinium.ui.projectStyle
 import dev.mohak.scrinium.ui.Sc
 import dev.mohak.scrinium.ui.Sheet
 import dev.mohak.scrinium.ui.SheetTitle
@@ -271,7 +273,8 @@ fun NotesScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
             val tabs = listOf(ProjectView.All, ProjectView.Project(null)) + projects.map { ProjectView.Project(it) }
             TextTabs(
                 tabs.map { v -> if (v is ProjectView.Project) v.path?.let { projectLabel(it, projects) } ?: QUOTIDIAN else "All" },
-                tabs.indexOf(view)
+                tabs.indexOf(view),
+                icons = tabs.map { v -> (v as? ProjectView.Project)?.let { projectStyle(it.path, projectRows).let { s -> s.icon to s.color } } }
             ) { vm.setNotesView(tabs[it]) }
         }
         sync.error?.let { ErrorStrip(it) { vm.dismissSyncError() } }
@@ -340,6 +343,7 @@ fun NotesScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                                 when (item) {
                                     is TreeItem.Folder -> FolderRow(
                                         folder = item,
+                                        style = if (item.project) projectStyle(item.path, projectRows) else null,
                                         expanded = item.path !in collapsed,
                                         highlighted = dropTarget == item.path,
                                         dimmed = (dragItem as? TreeItem.Folder)?.path == item.path,
@@ -505,6 +509,7 @@ fun NotesScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
 @Composable
 private fun FolderRow(
     folder: TreeItem.Folder,
+    style: ProjectStyle?,
     expanded: Boolean,
     highlighted: Boolean,
     dimmed: Boolean,
@@ -524,12 +529,8 @@ private fun FolderRow(
         Sym(if (expanded) R.drawable.ms_expand_more else R.drawable.ms_chevron_right, tint = Sc.text3, size = 17.dp, desc = if (expanded) "Collapse" else "Expand")
         Spacer(Modifier.width(6.dp))
         Sym(
-            when {
-                folder.project -> R.drawable.ms_folder_special
-                expanded -> R.drawable.ms_folder_open
-                else -> R.drawable.ms_folder
-            },
-            tint = Sc.text3,
+            style?.icon ?: if (expanded) R.drawable.ms_folder_open else R.drawable.ms_folder,
+            tint = style?.color ?: Sc.text3,
             size = 17.dp
         )
         Column(Modifier.weight(1f).padding(start = 8.dp)) {
