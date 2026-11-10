@@ -227,8 +227,9 @@ fun TasksScreen(tasksVm: TasksViewModel) {
     var showReminders by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
-    val atTop by remember(sections, headerAt) {
-        derivedStateOf { sections.lastOrNull { headerAt.getValue(it.key) <= listState.firstVisibleItemIndex }?.key }
+    // Keyed on the map's contents, so it's rebuilt only when sections move.
+    val atTop by remember(headerAt) {
+        derivedStateOf { headerAt.entries.lastOrNull { it.value <= listState.firstVisibleItemIndex }?.key }
     }
     fun jump(key: String) {
         headerAt[key]?.let { scope.launch { listState.animateScrollToItem(it) } }
@@ -298,7 +299,7 @@ fun TasksScreen(tasksVm: TasksViewModel) {
         ReminderSheet(fired, now, tasksVm) { showReminders = false }
     }
     if (showAdd) {
-        QuickAddSheet(TaskArea.of(area), null, onDismiss = { showAdd = false }) { title, a, due, done ->
+        QuickAddSheet(TaskArea.of(area), null, onDismiss = { showAdd = false }) { title, a, due, _, done ->
             tasksVm.create(title, area = a, dueAt = due, project = (view as? ProjectView.Project)?.path, onDone = done)
         }
     }
@@ -479,8 +480,8 @@ fun BoardScreen(tasksVm: TasksViewModel) {
         }
     }
     if (showAdd) {
-        QuickAddSheet(TaskArea.of(area), null, onDismiss = { showAdd = false }) { title, a, due, done ->
-            tasksVm.create(title, area = a, dueAt = due, project = (view as? ProjectView.Project)?.path, onDone = done)
+        QuickAddSheet(TaskArea.of(area), null, TaskStatus.Inbox, onDismiss = { showAdd = false }) { title, a, due, status, done ->
+            tasksVm.create(title, area = a, dueAt = due, project = (view as? ProjectView.Project)?.path, status = status, onDone = done)
         }
     }
 }
@@ -575,7 +576,7 @@ fun CalendarScreen(tasksVm: TasksViewModel) {
     }
 
     if (showAdd) {
-        QuickAddSheet(TaskArea.of(area), selectedDay, onDismiss = { showAdd = false }) { title, a, due, done ->
+        QuickAddSheet(TaskArea.of(area), selectedDay, onDismiss = { showAdd = false }) { title, a, due, _, done ->
             tasksVm.create(title, area = a, dueAt = due, onDone = done)
         }
     }
@@ -811,7 +812,8 @@ private fun TaskMeta(task: TaskDto, progress: Pair<Int, Int>?, due: DueShow, pro
     val waiting = task.status == TaskStatus.Waiting.key && (task.waitingOn != null || waited != null)
     val idle = if (task.status == TaskStatus.Doing.key) daysSince(task.updatedAt) else 0
     val project = task.project?.takeIf { projects != null }
-    val any = dueAt != null || project != null || priority != TaskPriority.None || waiting || idle >= STALE_DAYS ||
+    val area = TaskArea.of(task.area)
+    val any = area != null || dueAt != null || project != null || priority != TaskPriority.None || waiting || idle >= STALE_DAYS ||
         progress != null || task.remindAt != null || task.linkCount > 0
     if (!any) return
     FlowRow(
@@ -819,6 +821,8 @@ private fun TaskMeta(task: TaskDto, progress: Pair<Int, Int>?, due: DueShow, pro
         verticalArrangement = Arrangement.spacedBy(2.dp),
         modifier = Modifier.padding(top = 2.dp)
     ) {
+        // Plain text: the area colors are also project colors.
+        if (area != null) Text(area.label, style = Type.meta, maxLines = 1)
         if (dueAt != null) {
             val today = task.isDueToday() && !task.isDone
             val over = task.isOverdue()
@@ -859,23 +863,32 @@ private fun TaskMeta(task: TaskDto, progress: Pair<Int, Int>?, due: DueShow, pro
 }
 
 /**
- * New task: title, area and an optional due day. The sheet closes once the
- * server made the task ([onAdd]'s callback gets true); on a failure it stays
- * open with the text for a retry.
+ * New task: title, area and an optional due day, plus a status when
+ * [initialStatus] is set (the board). The sheet closes once the server made
+ * the task ([onAdd]'s callback gets true); on a failure it stays open with
+ * the text for a retry.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun QuickAddSheet(initialArea: TaskArea?, initialDue: Long?, onDismiss: () -> Unit, onAdd: (String, TaskArea?, Long?, (Boolean) -> Unit) -> Unit) {
+fun QuickAddSheet(
+    initialArea: TaskArea?,
+    initialDue: Long?,
+    initialStatus: TaskStatus? = null,
+    onDismiss: () -> Unit,
+    onAdd: (String, TaskArea?, Long?, TaskStatus?, (Boolean) -> Unit) -> Unit
+) {
     var title by remember { mutableStateOf("") }
     var area by remember { mutableStateOf(initialArea) }
     var due by remember { mutableStateOf(initialDue) }
+    var status by remember { mutableStateOf(initialStatus) }
+    var pickStatus by remember { mutableStateOf(false) }
     var pickDate by remember { mutableStateOf(false) }
     var adding by remember { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
     fun submit() {
         if (title.isBlank() || adding) return
         adding = true
-        onAdd(title, area, due) { ok ->
+        onAdd(title, area, due, status) { ok ->
             adding = false
             if (ok) onDismiss()
         }
@@ -892,6 +905,25 @@ fun QuickAddSheet(initialArea: TaskArea?, initialDue: Long?, onDismiss: () -> Un
         )
         Spacer(Modifier.height(8.dp))
         Segments(TaskArea.entries, area, { it.label }, { area = if (area == it) null else it }, lead = { Dot(it.color) })
+        status?.let { current ->
+            Box(Modifier.padding(start = 8.dp, top = 8.dp)) {
+                val (icon, tint) = statusIcon(current)
+                Row(
+                    Modifier.clip(RoundedCornerShape(8.dp)).clickable { pickStatus = true }.padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Sym(icon, tint = tint, size = 18.dp)
+                    Text(current.label, style = Type.body.copy(color = Sc.text2), modifier = Modifier.padding(start = 8.dp))
+                    Sym(R.drawable.ms_arrow_drop_down, tint = Sc.text3, size = 18.dp, desc = "Status")
+                }
+                Menu(pickStatus, { pickStatus = false }) {
+                    TaskStatus.entries.filter { it != TaskStatus.Done }.forEach { s ->
+                        val (i, t) = statusIcon(s)
+                        MenuRow(i, s.label, { pickStatus = false; status = s }, tint = t)
+                    }
+                }
+            }
+        }
         Row(
             Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 8.dp),
             verticalAlignment = Alignment.CenterVertically
