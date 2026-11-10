@@ -474,7 +474,7 @@ private class MarkdownRenderer(
         while (i < lines.size) {
             val line = lines[i]
             val trimmed = line.trimStart()
-            val table = if ('|' in line) parseTable(lines, i) else null
+            val table = parseTable(lines, i)
             when {
                 trimmed.startsWith("```") -> {
                     val lang = trimmed.drop(3).trim().lowercase()
@@ -579,7 +579,7 @@ private class MarkdownRenderer(
                     val paragraph = mutableListOf<String>()
                     while (
                         i < lines.size && !isBlockStart(lines[i].trimStart()) && lines[i].isNotBlank() &&
-                        !('|' in lines[i] && parseTable(lines, i) != null)
+                        parseTable(lines, i) == null
                     ) {
                         paragraph += lines[i].trim()
                         i++
