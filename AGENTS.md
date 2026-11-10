@@ -87,7 +87,12 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
   edits first, then syncs so the notes leave Room. Task links follow notes
   into `.archive/` and `.trash/`; the phone never opens those paths as notes.
 - `GET /api/tree` → nested vault listing
-- `GET /api/search?q=` → `[{ path, title, snippet }]` (FTS5)
+- `GET /api/search?q=&folder=` → `[{ path, title, snippet }]` (FTS5),
+  `GET /api/tagged?tag=` → the same shape for a tag and its nested tags.
+  Search runs Room and the server side by side; each reply is keyed by the
+  query and folder it answers, so a late one never shows under another.
+  An exact `#tag` query uses the tag index. Opened from a project's Notes
+  tab, search stays in that folder until "Search all".
 - `GET /api/tasks` (`?note=<path>` for one note's tasks), `POST /api/tasks`,
   `PATCH|DELETE /api/tasks/<id>`, `GET|POST|DELETE /api/tasks/<id>/links`.
   `POST /api/tasks` takes `note_paths` to link in the same request; a

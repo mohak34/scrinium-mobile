@@ -114,10 +114,11 @@ interface NoteDao {
     suspend fun dropMove(seq: Long)
 
     @Query(
-        "SELECT * FROM notes WHERE path LIKE '%' || :q || '%' OR content LIKE '%' || :q || '%' " +
-            "ORDER BY path LIMIT 50"
+        "SELECT * FROM notes WHERE isDeleted = 0 AND substr(path, 1, length(:prefix)) = :prefix " +
+            "AND (path LIKE '%' || :q || '%' OR content LIKE '%' || :q || '%') ORDER BY path LIMIT 50"
     )
-    fun search(q: String): Flow<List<NoteEntity>>
+    /** Live notes under [prefix] ("" for the vault) whose path or text holds [q]. */
+    fun search(q: String, prefix: String): Flow<List<NoteEntity>>
 
     @Query("SELECT COUNT(*) FROM notes WHERE localModifiedAt IS NOT NULL")
     fun observeUnsyncedCount(): Flow<Int>

@@ -31,7 +31,7 @@ class NotesRepository(
 
     fun observeUnsyncedCount(): Flow<Int> = noteDao.observeUnsyncedCount()
 
-    fun search(q: String): Flow<List<NoteEntity>> = noteDao.search(q)
+    fun search(q: String, prefix: String): Flow<List<NoteEntity>> = noteDao.search(q, prefix)
 
     suspend fun get(path: String): NoteEntity? = noteDao.get(path)
 
@@ -98,7 +98,7 @@ class NotesRepository(
         return newPath
     }
 
-    suspend fun networkSearch(q: String) = api.search(q)
+    suspend fun networkSearch(q: String, folder: String?) = api.search(q, folder)
 
     suspend fun fetchTags() = api.fetchTags()
 

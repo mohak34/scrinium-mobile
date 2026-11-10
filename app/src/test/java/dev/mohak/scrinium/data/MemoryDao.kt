@@ -27,7 +27,7 @@ class MemoryDao : NoteDao {
     override fun observe(path: String): Flow<NoteEntity?> = rows.map { it[path] }
     override suspend fun upsert(note: NoteEntity) { rows.value += note.path to note }
     override suspend fun delete(path: String) { rows.value -= path }
-    override fun search(q: String): Flow<List<NoteEntity>> = observeAll()
+    override fun search(q: String, prefix: String): Flow<List<NoteEntity>> = observeAll()
     override suspend fun insertIfAbsent(note: NoteEntity) { if (note.path !in rows.value) upsert(note) }
     private fun swap(path: String, ok: (NoteEntity) -> Boolean, f: (NoteEntity) -> NoteEntity): Int {
         val row = rows.value[path]?.takeIf(ok) ?: return 0

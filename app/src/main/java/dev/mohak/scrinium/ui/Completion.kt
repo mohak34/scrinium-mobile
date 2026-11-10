@@ -44,6 +44,14 @@ fun completions(text: String, cursor: Int, sourcePath: String, notePaths: List<S
 
 private val vaultTagRe = Regex("""(?<!\S)#([A-Za-z][\w/-]*)""")
 
+/** The web's matchTag: the tag itself or a tag nested under it, any case. */
+fun matchTag(tag: String, query: String): Boolean =
+    tag.equals(query, ignoreCase = true) || tag.startsWith("$query/", ignoreCase = true)
+
+/** Whether [content] has an inline tag [matchTag] accepts; code holds no tags. */
+fun hasTag(content: String, query: String): Boolean =
+    vaultTagRe.findAll(maskCode(content)).any { matchTag(it.groupValues[1], query) }
+
 /** Inline `#tags` across notes, most used first. */
 fun vaultTags(contents: List<String>): List<String> =
     contents.flatMap { c -> vaultTagRe.findAll(c).map { it.groupValues[1] }.toList() }

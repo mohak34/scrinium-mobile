@@ -269,31 +269,58 @@ class MainViewModel(
 
     data class SearchHit(val path: String, val title: String, val snippet: String?)
 
-    @OptIn(ExperimentalCoroutinesApi::class)
-    private val localHits = searchQuery
+    // Search runs inside one project folder when opened from that project's
+    // Notes tab; null searches the vault.
+    private val _searchFolder = MutableStateFlow<String?>(null)
+    val searchFolder: StateFlow<String?> = _searchFolder.asStateFlow()
+    fun clearSearchFolder() { _searchFolder.value = null }
+
+    private data class SearchKey(val query: String, val folder: String?) {
+        /** The tag of an exact `#tag` query, matched like the web's tag pane. */
+        val tag: String? get() = tagQueryRe.matchEntire(query)?.groupValues?.get(1)
+        fun holds(path: String) = folder == null || path.startsWith("$folder/")
+    }
+
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
+    private val searchKey = combine(searchQuery, _searchFolder) { q, f -> SearchKey(q.trim(), f) }
         .debounce(250)
         .distinctUntilChanged()
-        .flatMapLatest { q ->
-            if (q.isBlank()) notes.observeAll() else notes.search(q)
-        }
-        .map { list -> list.filter { !it.isDeleted } }
 
-    // Server FTS runs alongside local search: better ranking plus notes the
-    // phone hasn't synced yet. Read-only and quiet — offline just yields
-    // local results.
+    // Each result list carries the key it answers, so a slow reply for an
+    // older query or scope never shows under the current one.
     @OptIn(ExperimentalCoroutinesApi::class)
-    private val serverHits: StateFlow<List<SearchResult>> = searchQuery
-        .debounce(400)
-        .distinctUntilChanged()
-        .filter { it.isNotBlank() }
-        .flatMapLatest { q ->
-            flow { emit(notes.networkSearch(q)) }.catch { emit(emptyList()) }
+    private val localHits = searchKey.flatMapLatest { k ->
+        val tag = k.tag
+        when {
+            k.query.isBlank() -> flowOf(k to emptyList())
+            tag != null -> notesFlow.map { list -> k to list.filter { k.holds(it.path) && hasTag(it.content, tag) } }
+            else -> notes.search(k.query, k.folder?.let { "$it/" } ?: "").map { k to it }
+        }
+    }
+
+    // Server FTS (or the tag index for `#tag`) runs alongside local search:
+    // better ranking, frontmatter tags, and notes the phone hasn't synced
+    // yet. Read-only and quiet: offline just yields local results.
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val serverHits: StateFlow<Pair<SearchKey, List<SearchResult>>?> = searchKey
+        .filter { it.query.isNotBlank() }
+        .flatMapLatest { k ->
+            flow {
+                val tag = k.tag
+                val hits = if (tag != null) {
+                    notes.fetchTagged(tag).filter { k.holds(it.path) }.map { SearchResult(it.path, it.title, it.snippet) }
+                } else {
+                    notes.networkSearch(k.query, k.folder)
+                }
+                emit(k to hits)
+            }.catch { emit(k to emptyList()) }
         }
         .flowOn(Dispatchers.IO)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     val searchResults: StateFlow<List<SearchHit>> =
-        combine(localHits, serverHits, searchQuery) { local, server, q ->
+        combine(localHits, serverHits) { (key, local), server ->
+            val q = key.query
             if (q.isBlank()) return@combine emptyList()
             val localPaths = local.map { it.path }.toSet()
             buildList {
@@ -308,7 +335,7 @@ class MainViewModel(
                 for (note in ranked) {
                     add(SearchHit(note.path, noteTitle(note.path, note.content), snippet(note.content, q)))
                 }
-                for (hit in server) {
+                if (server?.first == key) for (hit in server.second) {
                     if (hit.path !in localPaths) add(SearchHit(hit.path, hit.title, hit.snippet))
                 }
             }
@@ -520,13 +547,21 @@ class MainViewModel(
 
     fun openSearch() {
         _searchOrigin.value = _screen.value
+        scopeSearchToProject()
         _screen.update { Screen.Search }
+    }
+
+    private fun scopeSearchToProject() {
+        _searchFolder.value = if (_screen.value == Screen.Notes) (_notesView.value as? ProjectView.Project)?.path else null
     }
     fun openSettings() = _screen.update { Screen.Settings }
 
     /** Bottom-tab switch. Search remembers the tab it was opened from. */
     fun openTab(tab: Screen) {
-        if (tab == Screen.Search && _screen.value != Screen.Search) _searchOrigin.value = _screen.value
+        if (tab == Screen.Search && _screen.value != Screen.Search) {
+            _searchOrigin.value = _screen.value
+            scopeSearchToProject()
+        }
         _screen.value = tab
     }
 
@@ -732,11 +767,12 @@ class MainViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             _taggedLoading.value = true
             try {
-                _taggedHits.value = notes.fetchTagged(tag)
+                val hits = notes.fetchTagged(tag)
+                if (_selectedTag.value == tag) _taggedHits.value = hits
             } catch (e: Exception) {
-                _sync.update { it.copy(error = "Couldn't load tag: ${e.message}") }
+                if (_selectedTag.value == tag) _sync.update { it.copy(error = "Couldn't load tag: ${e.message}") }
             } finally {
-                _taggedLoading.value = false
+                if (_selectedTag.value == tag) _taggedLoading.value = false
             }
         }
     }
@@ -874,6 +910,7 @@ class MainViewModel(
 
     fun searchTag(tag: String) {
         searchQuery.value = "#$tag"
+        _searchFolder.value = null
         _searchOrigin.value = _screen.value
         _screen.update { Screen.Search }
     }
@@ -1334,3 +1371,5 @@ class MainViewModel(
         }
     }
 }
+
+private val tagQueryRe = Regex("""^#([A-Za-z][\w/-]*)$""")
