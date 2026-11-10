@@ -53,4 +53,13 @@ class TreeModelTest {
             rows(ProjectView.Project(null), listing)
         )
     }
+
+    @Test
+    fun recentIsNewestFirstWithinTheTab() {
+        val edited = notes.mapIndexed { i, n -> n.copy(remoteUpdatedAt = i.toLong()) } +
+            NoteEntity("Daily/Tue.md", "", 1L, localModifiedAt = 99L, contentHash = "")
+        assertEquals(listOf("Daily/Tue.md", "Jobs/Apps/Waymo.md"), recentNotes(edited, ProjectView.All, projects, 2).map { it.path })
+        assertEquals(listOf("Jobs/Apps/Waymo.md", "Jobs/Prep.md"), recentNotes(edited, ProjectView.Project("Jobs"), projects).map { it.path })
+        assertEquals(listOf("Daily/Tue.md", "Daily/Mon.md", "Ideas.md"), recentNotes(edited, ProjectView.Project(null), projects).map { it.path })
+    }
 }
