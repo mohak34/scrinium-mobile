@@ -1,5 +1,9 @@
 package dev.mohak.scrinium.ui.screens
 
+import kotlinx.coroutines.launch
+import androidx.compose.foundation.clickable
+import dev.mohak.scrinium.data.isImagePath
+import dev.mohak.scrinium.ui.openVaultFile
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -114,6 +118,7 @@ fun NotesScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
     val sync by vm.sync.collectAsStateWithLifecycle()
     val unsynced by vm.unsyncedCount.collectAsStateWithLifecycle()
     val pinned by vm.pinned.collectAsStateWithLifecycle()
+    val listing by vm.listing.collectAsStateWithLifecycle()
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -133,8 +138,8 @@ fun NotesScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
     var dragLabel by remember { mutableStateOf("") }
     var dragFingerY by remember { mutableFloatStateOf(0f) }
 
-    val items = remember(notes, collapsed, pinned, view, projects) { buildTree(notes, collapsed, pinned, view, projects.toSet()) }
-    val folders = remember(notes) { folderPaths(notes) }
+    val items = remember(notes, collapsed, pinned, view, projects, listing) { buildTree(notes, collapsed, pinned, view, projects.toSet(), listing) }
+    val folders = remember(notes, listing) { folderPaths(notes, listing.dirs) }
     var folderMenu by remember { mutableStateOf<String?>(null) }
     var noteMenu by remember { mutableStateOf<NoteEntity?>(null) }
     var moveFolderTarget by remember { mutableStateOf<String?>(null) }
@@ -167,8 +172,8 @@ fun NotesScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                 val path = key.removePrefix("d:")
                 if (path in blockedPrefixes(item)) null else path
             }
-            key is String && key.startsWith("f:") -> {
-                val parent = key.removePrefix("f:").substringBeforeLast('/', "")
+            key is String && (key.startsWith("f:") || key.startsWith("a:")) -> {
+                val parent = key.drop(2).substringBeforeLast('/', "")
                 val folder = item as? TreeItem.Folder
                 if (folder != null && (parent == folder.path || parent.startsWith(folder.path + "/"))) {
                     null
@@ -215,6 +220,7 @@ fun NotesScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
         when (item) {
             is TreeItem.Folder -> vm.moveFolder(item.path, target)
             is TreeItem.Note -> vm.moveNote(item.note.path, target)
+            is TreeItem.File -> Unit
         }
     }
 
@@ -327,6 +333,7 @@ fun NotesScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                                     when (it) {
                                         is TreeItem.Folder -> "d:${it.path}"
                                         is TreeItem.Note -> "f:${it.note.path}"
+                                        is TreeItem.File -> "a:${it.path}"
                                     }
                                 }
                             ) { item ->
@@ -368,6 +375,10 @@ fun NotesScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                                             }
                                         )
                                     }
+                                    is TreeItem.File -> FileRow(
+                                        item,
+                                        highlighted = dropTarget != null && dropTarget == item.path.substringBeforeLast('/', "")
+                                    ) { scope.launch { openVaultFile(context, vm, item.path) } }
                                 }
                             }
                             item {
@@ -436,10 +447,13 @@ fun NotesScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
             MenuRow(R.drawable.ms_note_add, "New note here", act { vm.createNoteIn(folder) })
             val isPinned = folder in pinned
             MenuRow(if (isPinned) R.drawable.ms_star_fill else R.drawable.ms_star, if (isPinned) "Unpin" else "Pin", act { vm.togglePin(folder) }, tint = if (isPinned) Sc.accent else null)
-            MenuRow(R.drawable.ms_edit, "Rename", act { renameFolderTarget = folder })
-            MenuRow(R.drawable.ms_drive_file_move, "Move to folder", act { moveFolderTarget = folder })
-            MenuRow(R.drawable.ms_archive, "Archive", act { vm.archivePath(folder) })
-            MenuRow(R.drawable.ms_delete, "Delete", act { deleteFolderTarget = folder }, danger = true)
+            // Folder moves work on its notes; one without notes is managed on the web.
+            if (count > 0) {
+                MenuRow(R.drawable.ms_edit, "Rename", act { renameFolderTarget = folder })
+                MenuRow(R.drawable.ms_drive_file_move, "Move to folder", act { moveFolderTarget = folder })
+                MenuRow(R.drawable.ms_archive, "Archive", act { vm.archivePath(folder) })
+                MenuRow(R.drawable.ms_delete, "Delete", act { deleteFolderTarget = folder }, danger = true)
+            }
         }
     }
 
@@ -564,6 +578,29 @@ private fun NoteRow(
         )
         if (note.localModifiedAt != null) Sym(R.drawable.ms_cloud_upload, tint = Sc.text3, size = 15.dp, desc = "Not synced", modifier = Modifier.padding(start = 8.dp))
         Text(shortAge(updatedAt, now), style = Type.mono, modifier = Modifier.padding(start = 8.dp))
+    }
+}
+
+// A file that isn't a note, dimmer than notes; tapping opens it elsewhere.
+@Composable
+private fun FileRow(file: TreeItem.File, highlighted: Boolean, onTap: () -> Unit) {
+    val name = file.path.substringAfterLast('/')
+    val icon = when {
+        isImagePath(name) -> R.drawable.ms_image
+        name.endsWith(".pdf", ignoreCase = true) -> R.drawable.ms_picture_as_pdf
+        else -> R.drawable.ms_attach_file
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(36.dp)
+            .background(if (highlighted) Sc.hover else Color.Transparent)
+            .clickable(onClick = onTap)
+            .padding(start = (14 + file.depth * 20 + 23).dp, end = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Sym(icon, tint = Sc.text3, size = 17.dp)
+        Text(name, style = Type.body.copy(color = Sc.text2), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = 8.dp))
     }
 }
 

@@ -4,6 +4,7 @@ import dev.mohak.scrinium.data.local.NoteDao
 import dev.mohak.scrinium.data.local.NoteEntity
 import dev.mohak.scrinium.data.local.NoteMeta
 import dev.mohak.scrinium.data.remote.ScriniumApi
+import dev.mohak.scrinium.data.remote.VaultEntry
 import dev.mohak.scrinium.data.remote.noteVersion
 import kotlinx.coroutines.flow.Flow
 import okhttp3.RequestBody
@@ -16,6 +17,8 @@ fun sanitizePathSegment(raw: String): String? {
     if (s.length > 100) s = s.take(100).trim()
     return s.ifEmpty { null }
 }
+
+data class VaultListing(val dirs: Set<String> = emptySet(), val files: List<String> = emptyList())
 
 class NotesRepository(
     private val noteDao: NoteDao,
@@ -133,6 +136,25 @@ class NotesRepository(
     suspend fun trashRemote(path: String) = api.deleteNote(path)
 
     suspend fun history(path: String) = api.history(path)
+
+    // What the manifest can't show: every folder (empty ones too) and the
+    // files that aren't notes. Metadata only.
+    suspend fun vaultListing(): VaultListing {
+        val dirs = mutableSetOf<String>()
+        val files = mutableListOf<String>()
+        fun walk(entries: List<VaultEntry>) {
+            for (e in entries) {
+                if (e.type == "directory") {
+                    dirs += e.path
+                    walk(e.children)
+                } else if (!e.path.endsWith(".md", ignoreCase = true)) files += e.path
+            }
+        }
+        walk(api.tree())
+        return VaultListing(dirs, files)
+    }
+
+    suspend fun fileBytes(path: String) = api.fetchAsset(path)
 
     suspend fun historyText(path: String, id: Long) = api.historyText(path, id)
 

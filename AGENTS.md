@@ -93,7 +93,11 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
   never into Room. Archiving is a server move: the phone pushes pending
   edits first, then syncs so the notes leave Room. Task links follow notes
   into `.archive/` and `.trash/`; the phone never opens those paths as notes.
-- `GET /api/tree` → nested vault listing
+- `GET /api/tree` → nested vault listing `[{ name, path, type, children }]`,
+  fetched after each sync (metadata only, memory only). It adds empty
+  folders and non-note files to the Notes tree. A file (or a relative link
+  to one) opens in another app: `GET /api/assets/` into the cache, then a
+  FileProvider `ACTION_VIEW` (`ui/OpenFile.kt`).
 - `GET /api/search?q=&folder=` → `[{ path, title, snippet }]` (FTS5),
   `GET /api/tagged?tag=` → the same shape for a tag and its nested tags.
   Search runs Room and the server side by side; each reply is keyed by the

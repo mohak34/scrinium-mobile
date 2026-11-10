@@ -1,10 +1,11 @@
 package dev.mohak.scrinium.ui
 
+import dev.mohak.scrinium.data.VaultListing
 import dev.mohak.scrinium.data.local.NoteEntity
 
-// Flat render model for the vault hierarchy. Folders are derived from note
-// paths — there is no folder table. An empty folder has no row: the manifest
-// only lists .md files, so empty folders are invisible to sync anyway.
+// Flat render model for the vault hierarchy. Folders come from note paths
+// plus the server's listing (empty folders, folders holding only files);
+// files that aren't notes come only from that listing.
 sealed interface TreeItem {
     data class Folder(
         val path: String,
@@ -19,16 +20,19 @@ sealed interface TreeItem {
     ) : TreeItem
 
     data class Note(val note: NoteEntity, val depth: Int, val pinned: Boolean = false) : TreeItem
+
+    /** A vault file that isn't a note (attachment, PDF); opens in another app. */
+    data class File(val path: String, val depth: Int) : TreeItem
 }
 
 val TreeItem.Folder.name: String
     get() = path.substringAfterLast('/')
 
-// Every ancestor directory implied by the note paths, sorted.
-fun folderPaths(notes: List<NoteEntity>): List<String> {
+// Every ancestor directory implied by the note paths, plus [dirs], sorted.
+fun folderPaths(notes: List<NoteEntity>, dirs: Collection<String> = emptyList()): List<String> {
     val out = sortedSetOf<String>()
-    for (note in notes) {
-        var dir = note.path.substringBeforeLast('/', "")
+    for (path in notes.map { it.path } + dirs.map { "$it/" }) {
+        var dir = path.substringBeforeLast('/', "")
         while (dir.isNotBlank()) {
             out += dir
             dir = dir.substringBeforeLast('/', "")
@@ -47,10 +51,12 @@ fun buildTree(
     collapsed: Set<String>,
     pinned: Set<String> = emptySet(),
     view: ProjectView = ProjectView.All,
-    projects: Set<String> = emptySet()
+    projects: Set<String> = emptySet(),
+    listing: VaultListing = VaultListing()
 ): List<TreeItem> {
     val byParent = notes.groupBy { it.path.substringBeforeLast('/', "") }
-    val allFolders = folderPaths(notes)
+    val filesByParent = listing.files.groupBy { it.substringBeforeLast('/', "") }
+    val allFolders = folderPaths(notes, listing.dirs)
     val childDirs: Map<String, List<String>> =
         allFolders.groupBy { it.substringBeforeLast('/', "") }
     val leafCounts = allFolders.groupingBy { it.substringAfterLast('/') }.eachCount()
@@ -85,6 +91,7 @@ fun buildTree(
         files.first.forEach { out += TreeItem.Note(it, depth, pinned = true) }
         folders.second.forEach { emitFolder(it, depth) }
         files.second.forEach { out += TreeItem.Note(it, depth) }
+        filesByParent[dir].orEmpty().sortedBy { it.substringAfterLast('/').lowercase() }.forEach { out += TreeItem.File(it, depth) }
     }
     emit((view as? ProjectView.Project)?.path ?: "", 0)
     return out

@@ -13,6 +13,7 @@ import dev.mohak.scrinium.data.ImageLoader
 import dev.mohak.scrinium.data.ImageSource
 import dev.mohak.scrinium.data.NotesRepository
 import dev.mohak.scrinium.data.Prefs
+import dev.mohak.scrinium.data.VaultListing
 import dev.mohak.scrinium.data.resolveImage
 import dev.mohak.scrinium.data.SessionRepository
 import dev.mohak.scrinium.data.local.NoteEntity
@@ -1298,6 +1299,7 @@ class MainViewModel(
         try {
             val report = syncEngine.syncOnce()
             session.updateLastSyncAt(report.completedAt)
+            refreshListing()
             _sync.update { it.copy(syncing = false, lastSyncAt = report.completedAt, report = report) }
             if (syncQueued) {
                 syncQueued = false
@@ -1307,6 +1309,27 @@ class MainViewModel(
             _sync.update { it.copy(syncing = false) }
             throw e
         }
+    }
+
+    // Server folders and non-note files for the tree, refreshed after each
+    // sync. A failure keeps the last listing; notes don't depend on it.
+    private val _listing = MutableStateFlow(VaultListing())
+    val listing: StateFlow<VaultListing> = _listing.asStateFlow()
+
+    private fun refreshListing() {
+        viewModelScope.launch {
+            try { _listing.value = notes.vaultListing() } catch (_: Exception) {}
+        }
+    }
+
+    suspend fun fileBytes(path: String) = notes.fileBytes(path)
+
+    // A relative Markdown link to a vault file that isn't a note, or null.
+    fun linkedFile(href: String): String? {
+        val source = _editor.value?.path ?: return null
+        val path = resolveMarkdownLink(href, source) ?: return null
+        val ext = path.substringAfterLast('/').substringAfterLast('.', "")
+        return path.takeIf { ext.isNotEmpty() && !ext.equals("md", ignoreCase = true) }
     }
 
     // Minutely foreground pull. Quiet: never interrupts the user.

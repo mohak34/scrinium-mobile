@@ -1,5 +1,6 @@
 package dev.mohak.scrinium.ui.screens
 
+import dev.mohak.scrinium.ui.openVaultFile
 import android.content.ContentResolver
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -259,7 +260,9 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                     .padding(horizontal = 18.dp, vertical = 8.dp),
                 onWikilinkClick = { vm.openWikilink(it) },
                 onLinkClick = { href ->
-                    if (!isExternalLink(href)) vm.openMarkdownLink(href)
+                    val file = if (isExternalLink(href)) null else vm.linkedFile(href)
+                    if (file != null) scope.launch { openVaultFile(context, vm, file) }
+                    else if (!isExternalLink(href)) vm.openMarkdownLink(href)
                     else try {
                         uriHandler.openUri(linkDestination(href))
                     } catch (_: RuntimeException) {
@@ -346,7 +349,8 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
         }
     }
 
-    actions.Host(vm, remember(notes) { folderPaths(notes) })
+    val listing by vm.listing.collectAsStateWithLifecycle()
+    actions.Host(vm, remember(notes, listing) { folderPaths(notes, listing.dirs) })
 
     if (showPanel) {
         NotePanel(

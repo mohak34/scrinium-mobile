@@ -53,6 +53,10 @@ data class SearchResult(val path: String, val title: String, val snippet: String
 @Serializable
 data class NoteVersionRow(val id: Long, val author: String? = null, val at: Long, val size: Int, val mine: Boolean = false)
 
+// One entry of the vault listing; dot folders are left out by the server.
+@Serializable
+data class VaultEntry(val name: String, val path: String, val type: String, val children: List<VaultEntry> = emptyList())
+
 @Serializable
 data class TagCount(val tag: String, val count: Int)
 
@@ -214,6 +218,9 @@ private interface ScriniumService {
         @Header("If-None-Match") ifNoneMatch: String?,
         @Header("X-Note-Restore") restore: String? = null
     ): Response<ResponseBody>
+
+    @GET("api/tree")
+    suspend fun tree(): List<VaultEntry>
 
     @GET("api/history")
     suspend fun history(@Query("note") note: String): List<NoteVersionRow>
@@ -422,6 +429,8 @@ class ScriniumApi(
     }
 
     suspend fun history(path: String): List<NoteVersionRow> = service.history(path)
+
+    suspend fun tree(): List<VaultEntry> = service.tree()
 
     suspend fun historyText(path: String, id: Long): String = service.historyText(path, id).use { it.string() }
 
