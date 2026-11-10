@@ -56,6 +56,15 @@ import dev.mohak.scrinium.ui.TopBar
 import dev.mohak.scrinium.ui.Type
 import dev.mohak.scrinium.ui.startOfToday
 import dev.mohak.scrinium.ui.noteStem
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import dev.mohak.scrinium.data.remote.SearchResult
+import dev.mohak.scrinium.ui.InputBox
+import dev.mohak.scrinium.ui.MarkdownText
+import kotlinx.coroutines.delay
 import java.text.DateFormat
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -110,13 +119,37 @@ fun BinsScreen(vm: MainViewModel, tab: BinTab) {
     }
 }
 
-/** Archived notes and folders, newest first. Tap to restore or trash. */
+/**
+ * Archived notes and folders, newest first. Tap to read, restore or trash;
+ * the box searches archived notes' text on the server.
+ */
 @Composable
 private fun ArchiveTab(vm: MainViewModel, loading: Boolean) {
     val entries by vm.archive.collectAsStateWithLifecycle()
     var open by remember { mutableStateOf<ArchiveEntry?>(null) }
+    var reading by remember { mutableStateOf<String?>(null) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var hits by remember { mutableStateOf<List<SearchResult>?>(null) }
+    val q = query.trim()
+    LaunchedEffect(q) {
+        hits = null
+        if (q.length < 2) return@LaunchedEffect
+        delay(300)
+        hits = try { vm.searchArchive(q) } catch (_: Exception) { emptyList() }
+    }
     val today = startOfToday()
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+        item {
+            InputBox(query, { query = it }, "Search the archive", Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), icon = R.drawable.ms_search)
+        }
+        if (q.length >= 2) {
+            val found = hits
+            if (found != null && found.isEmpty()) item { EmptyState(R.drawable.ms_search, "No archived notes match") }
+            items(found.orEmpty(), key = { "hit-" + it.path }) { h ->
+                BinRow(R.drawable.ms_description, h.title, h.snippet.ifBlank { h.path.removePrefix(".archive/") }, "") { reading = h.path }
+            }
+            return@LazyColumn
+        }
         if (!loading && entries.isEmpty()) {
             item { EmptyState(R.drawable.ms_inventory_2, "Archive is empty", "Archived notes leave the tree and search but are kept.") }
         }
@@ -134,8 +167,35 @@ private fun ArchiveTab(vm: MainViewModel, loading: Boolean) {
         Sheet(onDismiss = { open = null }) {
             SheetTitle(noteStem(e.originalPath), "was in $dir  ·  archived ${deletedLabel(e.archivedAt, today)}")
             Divider()
+            if (!e.isDir) MenuRow(R.drawable.ms_visibility, "Read", { open = null; reading = ".archive/${e.name}" })
             MenuRow(R.drawable.ms_unarchive, "Restore to $dir", { open = null; vm.restoreArchived(e) }, tint = Sc.accent)
             MenuRow(R.drawable.ms_delete, "Move to trash", { open = null; vm.trashArchived(e) }, danger = true)
+        }
+    }
+    reading?.let { path -> ArchivedNoteSheet(vm, path) { reading = null } }
+}
+
+// An archived note, read-only: the server keeps it out of the vault, so it
+// is fetched each time and never stored.
+@Composable
+private fun ArchivedNoteSheet(vm: MainViewModel, path: String, onDismiss: () -> Unit) {
+    var text by remember(path) { mutableStateOf<String?>(null) }
+    var failed by remember(path) { mutableStateOf(false) }
+    LaunchedEffect(path) {
+        try { text = vm.archivedText(path) } catch (_: Exception) { failed = true }
+    }
+    Sheet(onDismiss) {
+        SheetTitle(noteStem(path), "Archived, read-only")
+        Divider()
+        when {
+            failed -> Text("Couldn't load the note.", style = Type.meta.copy(color = Sc.red), modifier = Modifier.padding(20.dp))
+            text == null -> Text("Loading", style = Type.meta, modifier = Modifier.padding(20.dp))
+            else -> MarkdownText(
+                text!!,
+                Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 8.dp),
+                imageBase = path,
+                loadImage = { vm.loadImage(path, it) }
+            )
         }
     }
 }

@@ -88,7 +88,9 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
   `POST /api/archive/trash { name }` move it back or on to the trash.
   `GET /api/archive/review?days=` lists stale notes nothing links to,
   `GET /api/archive/unused` vault files no note mentions. The Bins screen
-  shows all four. Archiving is a server move: the phone pushes pending
+  shows all four. The Archive tab searches with `GET /api/search?scope=archive`
+  and reads an archived note (`GET /api/notes/.archive/...`) read-only,
+  never into Room. Archiving is a server move: the phone pushes pending
   edits first, then syncs so the notes leave Room. Task links follow notes
   into `.archive/` and `.trash/`; the phone never opens those paths as notes.
 - `GET /api/tree` → nested vault listing

@@ -235,7 +235,7 @@ private interface ScriniumService {
     ): Response<ResponseBody>
 
     @GET("api/search")
-    suspend fun search(@Query("q") q: String, @Query("folder") folder: String?): List<SearchResult>
+    suspend fun search(@Query("q") q: String, @Query("folder") folder: String?, @Query("scope") scope: String? = null): List<SearchResult>
 
     @GET("api/tags")
     suspend fun tags(): List<TagCount>
@@ -436,6 +436,9 @@ class ScriniumApi(
         if (!res.isSuccessful) throw ApiException(res.code())
     }
     suspend fun search(q: String, folder: String?): List<SearchResult> = service.search(q, folder)
+
+    // Archived notes only; hits carry their ".archive/..." path.
+    suspend fun searchArchive(q: String): List<SearchResult> = service.search(q, null, "archive")
 
     suspend fun fetchTags(): List<TagCount> = service.tags()
 

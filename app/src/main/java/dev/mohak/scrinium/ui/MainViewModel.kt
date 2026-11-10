@@ -959,6 +959,10 @@ class MainViewModel(
         return target
     }
 
+    suspend fun searchArchive(q: String) = notes.searchArchive(q)
+
+    suspend fun archivedText(path: String) = notes.archivedText(path)
+
     // The note's text as Room holds it, after any unsaved typing.
     suspend fun noteContent(path: String): String {
         flushEditor()

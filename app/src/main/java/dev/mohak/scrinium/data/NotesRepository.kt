@@ -100,6 +100,11 @@ class NotesRepository(
 
     suspend fun networkSearch(q: String, folder: String?) = api.search(q, folder)
 
+    suspend fun searchArchive(q: String) = api.searchArchive(q)
+
+    // Archived notes are read-only and never enter Room; reads reach them.
+    suspend fun archivedText(path: String) = api.fetchNote(path)
+
     suspend fun fetchTags() = api.fetchTags()
 
     suspend fun fetchTagged(tag: String) = api.fetchTagged(tag)
