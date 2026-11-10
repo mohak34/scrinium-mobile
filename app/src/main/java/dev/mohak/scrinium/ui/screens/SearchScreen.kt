@@ -153,7 +153,7 @@ fun SearchScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                         TaskRow(t, null, onToggle = { tasksVm.toggleDone(t) }, onOpen = {
                             vm.rememberSearch(query)
                             tasksVm.openTask(t.id)
-                        }, showStatus = true)
+                        })
                     }
                 }
             }

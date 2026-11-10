@@ -164,6 +164,9 @@ data class NewTaskRequest(
 data class ProjectDto(
     val path: String,
     val area: String? = null,
+    // Picked on the web; null means the default (projectStyle).
+    val icon: String? = null,
+    val color: String? = null,
     @SerialName("created_at") val createdAt: Long = 0L
 )
 
