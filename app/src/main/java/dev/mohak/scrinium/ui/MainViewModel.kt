@@ -49,6 +49,7 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -98,7 +99,15 @@ private var nextEditorId = 0L
 // [id] names one open-note session: a fresh one per note opened, kept by
 // renames (copy), so the editor field survives its note changing path.
 // `isNew` notes open in edit mode; everything else opens in reading view.
-data class EditorState(val path: String, val text: String, val isNew: Boolean = false, val id: Long = ++nextEditorId)
+// [dirty] is typing not yet saved to Room. A clean editor follows Room, so a
+// sync pull shows up in it and closing it never writes the old copy back.
+data class EditorState(
+    val path: String,
+    val text: String,
+    val isNew: Boolean = false,
+    val dirty: Boolean = false,
+    val id: Long = ++nextEditorId
+)
 
 class MainViewModel(
     private val session: SessionRepository,
@@ -235,10 +244,10 @@ class MainViewModel(
         }
     }
 
-    // Saves in-flight editor text to Room (with title sync + auto-push).
-    // openNote used to drop text typed right before a wikilink tap.
+    // Saves unsaved editor typing to Room (with title sync + auto-push)
+    // before the editor switches note, closes or the vault is checked.
     private suspend fun flushEditor() {
-        val current = _editor.value ?: return
+        val current = _editor.value?.takeIf { it.dirty } ?: return
         if (isArchiving(current.path)) return
         val stored = notes.get(current.path)
         if (stored != null && !stored.isDeleted && stored.content != current.text) {
@@ -246,7 +255,12 @@ class MainViewModel(
             maybeSyncTitleToFilename(current.path, current.text)
             scheduleAutoSync()
         }
+        markSaved(current.path, current.text)
     }
+
+    // Clean again once Room holds exactly what the editor shows.
+    private fun markSaved(path: String, text: String) =
+        _editor.update { if (it?.path == path && it.text == text) it.copy(dirty = false) else it }
 
     data class SearchHit(val path: String, val title: String, val snippet: String?)
 
@@ -314,9 +328,23 @@ class MainViewModel(
                     val stored = notes.get(target)
                     if (stored?.isDeleted == true) return@collect
                     val latest = _editor.value?.takeIf { it.path == target }?.text ?: text
-                    if (stored?.content == latest) return@collect
-                    notes.saveLocally(target, latest)
-                    scheduleAutoSync()
+                    if (stored?.content != latest) {
+                        notes.saveLocally(target, latest)
+                        scheduleAutoSync()
+                    }
+                    markSaved(target, latest)
+                }
+        }
+        // A clean editor adopts what Room holds for its note (a sync pull);
+        // a dirty one keeps the typing, which saves over it.
+        viewModelScope.launch {
+            _editor.map { it?.path }
+                .distinctUntilChanged()
+                .flatMapLatest { path -> if (path == null) flowOf(null) else notes.observe(path) }
+                .filterNotNull()
+                .collect { note ->
+                    if (note.isDeleted) return@collect
+                    _editor.update { if (it != null && !it.dirty && it.path == note.path && it.text != note.content) it.copy(text = note.content) else it }
                 }
         }
         viewModelScope.launch {
@@ -417,6 +445,7 @@ class MainViewModel(
 
     fun createNoteIn(folder: String) {
         viewModelScope.launch {
+            flushEditor()
             val existing = notes.observeAll().first().map { it.path }
             try {
                 val note = notes.createNote(existing, folder, prefs::newNoteBody)
@@ -433,7 +462,8 @@ class MainViewModel(
 
     fun updateEditorText(text: String) {
         val current = _editor.value ?: return
-        _editor.value = current.copy(text = text)
+        if (text == current.text) return
+        _editor.value = current.copy(text = text, dirty = true)
         editorEdits.value = current.path to text
         titleSyncEdits.value = current.path to text
     }
@@ -444,7 +474,7 @@ class MainViewModel(
     // gaining a surprise suffix.
     private suspend fun maybeSyncTitleToFilename(path: String, text: String) {
         val dir = path.substringBeforeLast('/', "")
-        val stem = path.substringAfterLast('/').removeSuffix(".md")
+        val stem = noteStem(path)
         val title = effectiveTitle(text, stem)
         if (title == stem) return
         val safe = sanitizeTitleForFilename(title) ?: return
@@ -682,9 +712,22 @@ class MainViewModel(
         deleteNote(note.path)
     }
 
+    // The list may predate a link typed since, so it is rebuilt from a fully
+    // pushed vault first; a file that gained a mention is kept.
     fun trashUnused(file: UnusedFile) {
         viewModelScope.launch {
             try {
+                flushEditor()
+                runSync()
+                if (notes.observeAll().first().any { it.localModifiedAt != null }) {
+                    throw IllegalStateException("some edits are not synced yet")
+                }
+                val fresh = notes.fetchUnused()
+                _unused.value = fresh
+                if (fresh.none { it.path == file.path }) {
+                    _sync.update { it.copy(error = "${file.path.substringAfterLast('/')} is used now; kept it") }
+                    return@launch
+                }
                 notes.trashRemote(file.path)
                 _unused.update { list -> list.filterNot { it.path == file.path } }
             } catch (e: Exception) {
@@ -794,8 +837,8 @@ class MainViewModel(
                 openNote(hit)
                 return@launch
             }
-            val stem = target.substringAfterLast('/').removeSuffix(".md")
-            val matches = paths.count { it.substringAfterLast('/').removeSuffix(".md").equals(stem, ignoreCase = true) }
+            val stem = noteStem(target)
+            val matches = paths.count { noteStem(it).equals(stem, ignoreCase = true) }
             _sync.update {
                 it.copy(error = if (matches == 0) "Note not found: $target" else "Multiple notes match: $target")
             }
@@ -986,7 +1029,7 @@ class MainViewModel(
                 null -> null
             }
         }
-        val title = effectiveTitle(text, notePath.substringAfterLast('/').removeSuffix(".md"))
+        val title = effectiveTitle(text, noteStem(notePath))
         return withContext(Dispatchers.Default) { noteHtml(title, text) { sources[it] } }
     }
 
@@ -1011,9 +1054,9 @@ class MainViewModel(
         _editor.value?.let { renameNote(it.path, newName) }
     }
 
-    // Renames a note, open or not. Filename -> title: the H1/frontmatter
-    // follows the new name, same as the web client; never injects a title
-    // into a note that has none.
+    // Renames a note, open or not. Filename -> title like the web's retitle:
+    // a title that matched the old name follows the new one, a custom title
+    // stays, and a note without one never gains one.
     fun renameNote(path: String, newName: String) {
         viewModelScope.launch {
             flushEditor()
@@ -1023,12 +1066,10 @@ class MainViewModel(
                 followMove(source, newPath)
                 val open = _editor.value?.takeIf { it.path == newPath }
                 val text = open?.text ?: notes.get(newPath)?.content ?: return@launch
-                val stem = newPath.substringAfterLast('/').removeSuffix(".md")
-                if (effectiveTitle(text, "") != stem) {
-                    setEffectiveTitle(text, stem)?.let { updated ->
-                        notes.saveLocally(newPath, updated)
-                        if (open != null) _editor.value = open.copy(text = updated)
-                    }
+                val updated = retitle(text, source, newPath)
+                if (updated != text) {
+                    notes.saveLocally(newPath, updated)
+                    if (open != null) _editor.value = open.copy(text = updated)
                 }
                 scheduleAutoSync()
             } catch (e: Exception) {

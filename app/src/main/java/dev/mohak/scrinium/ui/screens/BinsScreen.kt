@@ -55,6 +55,7 @@ import dev.mohak.scrinium.ui.TextTabs
 import dev.mohak.scrinium.ui.TopBar
 import dev.mohak.scrinium.ui.Type
 import dev.mohak.scrinium.ui.startOfToday
+import dev.mohak.scrinium.ui.noteStem
 import java.text.DateFormat
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -122,7 +123,7 @@ private fun ArchiveTab(vm: MainViewModel, loading: Boolean) {
         items(entries.sortedByDescending { it.archivedAt }, key = { it.name }) { e ->
             BinRow(
                 if (e.isDir) R.drawable.ms_folder else R.drawable.ms_description,
-                e.originalPath.substringAfterLast('/').removeSuffix(".md"),
+                noteStem(e.originalPath),
                 e.originalPath.substringBeforeLast('/', "").ifBlank { "/" },
                 deletedLabel(e.archivedAt, today)
             ) { open = e }
@@ -131,7 +132,7 @@ private fun ArchiveTab(vm: MainViewModel, loading: Boolean) {
     open?.let { e ->
         val dir = e.originalPath.substringBeforeLast('/', "").ifBlank { "vault root" }
         Sheet(onDismiss = { open = null }) {
-            SheetTitle(e.originalPath.substringAfterLast('/').removeSuffix(".md"), "was in $dir  ·  archived ${deletedLabel(e.archivedAt, today)}")
+            SheetTitle(noteStem(e.originalPath), "was in $dir  ·  archived ${deletedLabel(e.archivedAt, today)}")
             Divider()
             MenuRow(R.drawable.ms_unarchive, "Restore to $dir", { open = null; vm.restoreArchived(e) }, tint = Sc.accent)
             MenuRow(R.drawable.ms_delete, "Move to trash", { open = null; vm.trashArchived(e) }, danger = true)
@@ -172,7 +173,7 @@ private fun TrashTab(vm: MainViewModel, entries: List<TrashEntry>, loading: Bool
     open?.let { e ->
         val dir = e.originalPath.substringBeforeLast('/', "").ifBlank { "vault root" }
         Sheet(onDismiss = { open = null }) {
-            SheetTitle(e.originalPath.substringAfterLast('/').removeSuffix(".md"), "was in $dir  ·  deleted ${deletedLabel(e.deletedAt, today)}")
+            SheetTitle(noteStem(e.originalPath), "was in $dir  ·  deleted ${deletedLabel(e.deletedAt, today)}")
             Divider()
             MenuRow(R.drawable.ms_restore_from_trash, "Restore to $dir", { open = null; vm.restoreTrashEntry(e) }, tint = Sc.accent)
             MenuRow(R.drawable.ms_delete_forever, "Delete forever", { open = null; purge = e }, danger = true)
@@ -312,7 +313,7 @@ private fun SwipeRow(e: TrashEntry, today: Long, onRestore: () -> Unit, onPurge:
         ) {
             Sym(if (e.isDir) R.drawable.ms_folder else R.drawable.ms_description, tint = Sc.text3, size = 17.dp)
             Column(Modifier.weight(1f).padding(start = 10.dp)) {
-                Text(e.originalPath.substringAfterLast('/').removeSuffix(".md"), style = Type.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(noteStem(e.originalPath), style = Type.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(e.originalPath.substringBeforeLast('/', "").ifBlank { "/" }, style = Type.meta, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Text(deletedLabel(e.deletedAt, today), style = Type.mono, modifier = Modifier.padding(start = 8.dp))

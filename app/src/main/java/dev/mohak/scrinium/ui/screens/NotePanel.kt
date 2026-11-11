@@ -43,6 +43,7 @@ import dev.mohak.scrinium.ui.frontmatterProperties
 import dev.mohak.scrinium.ui.noteTitle
 import dev.mohak.scrinium.ui.parseOutline
 import dev.mohak.scrinium.ui.wordCount
+import dev.mohak.scrinium.ui.noteStem
 import java.text.DateFormat
 import java.util.Date
 
@@ -77,7 +78,7 @@ fun NotePanel(
 
     fun titleOf(p: String): String =
         notes.firstOrNull { it.path == p }?.let { noteTitle(it.path, it.content) }
-            ?: p.substringAfterLast('/').removeSuffix(".md")
+            ?: noteStem(p)
 
     Sheet(onDismiss) {
         TextTabs(

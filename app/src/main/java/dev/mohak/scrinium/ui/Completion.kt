@@ -19,7 +19,7 @@ fun completions(text: String, cursor: Int, sourcePath: String, notePaths: List<S
         val typed = m.groupValues[1].lowercase()
         val from = cursor - m.groupValues[1].length
         return notePaths.asSequence()
-            .map { it to it.substringAfterLast('/').removeSuffix(".md") }
+            .map { it to noteStem(it) }
             .filter { (_, stem) -> typed in stem.lowercase() }
             .sortedWith(compareBy({ !it.second.lowercase().startsWith(typed) }, { it.second.lowercase() }))
             .take(20)

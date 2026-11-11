@@ -24,6 +24,7 @@ class SyncEngine(
 
         val remote = api.fetchManifest().associateBy { it.path }
         val local = dao.getAll()
+        val liveContent = local.filter { !it.isDeleted }.mapTo(HashSet()) { it.content }
         var pulled = 0
         var pushed = 0
         var removed = 0
@@ -36,7 +37,14 @@ class SyncEngine(
             try {
                 when {
                     note.isDeleted -> {
-                        if (remote.containsKey(note.path)) api.deleteNote(note.path)
+                        if (remote.containsKey(note.path)) {
+                            api.deleteNote(note.path)
+                        } else if (note.contentHash.isEmpty() && note.content.isNotBlank() && note.content !in liveContent) {
+                            // Never reached the server, and no rename carried the
+                            // text on: upload it into the trash so it can come back.
+                            api.pushNote(note.path, note.content)
+                            api.deleteNote(note.path)
+                        }
                         dao.delete(note.path)
                         removed++
                     }

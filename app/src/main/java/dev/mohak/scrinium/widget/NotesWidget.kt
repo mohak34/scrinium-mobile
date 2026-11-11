@@ -13,6 +13,7 @@ import dev.mohak.scrinium.MainActivity
 import dev.mohak.scrinium.R
 import dev.mohak.scrinium.ScriniumApplication
 import dev.mohak.scrinium.data.local.NoteEntity
+import dev.mohak.scrinium.ui.noteStem
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -41,7 +42,7 @@ object NotesWidget {
         val recent = recentNotes(notes, MAX_ROWS)
         for (note in recent) {
             val row = RemoteViews(context.packageName, R.layout.widget_note_row)
-            row.setTextViewText(R.id.row_title, note.path.substringAfterLast('/').removeSuffix(".md"))
+            row.setTextViewText(R.id.row_title, noteStem(note.path))
             val folder = note.path.substringBeforeLast('/', "")
             row.setTextViewText(R.id.row_folder, folder)
             row.setViewVisibility(R.id.row_folder, if (folder.isEmpty()) View.GONE else View.VISIBLE)

@@ -16,6 +16,9 @@ interface NoteDao {
     @Query("SELECT * FROM notes WHERE path = :path")
     suspend fun get(path: String): NoteEntity?
 
+    @Query("SELECT * FROM notes WHERE path = :path")
+    fun observe(path: String): Flow<NoteEntity?>
+
     @Upsert
     suspend fun upsert(note: NoteEntity)
 
