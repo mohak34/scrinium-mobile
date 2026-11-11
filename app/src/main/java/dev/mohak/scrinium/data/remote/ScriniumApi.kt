@@ -2,6 +2,7 @@ package dev.mohak.scrinium.data.remote
 
 import android.net.Uri
 import java.io.File
+import java.security.MessageDigest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
@@ -22,6 +23,7 @@ import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.HTTP
+import retrofit2.http.Header
 import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.PUT
@@ -182,6 +184,12 @@ private interface ScriniumService {
     @GET("api/notes/{path}")
     suspend fun note(@Path("path", encoded = true) path: String): ResponseBody
 
+    @GET("api/notes/{path}")
+    suspend fun noteIfChanged(
+        @Path("path", encoded = true) path: String,
+        @Header("If-None-Match") version: String
+    ): Response<ResponseBody>
+
     @PUT("api/notes/{path}")
     suspend fun putNote(
         @Path("path", encoded = true) path: String,
@@ -294,6 +302,15 @@ private interface ScriniumService {
 
 class ApiException(val status: Int) : Exception("API error $status")
 
+// What SyncEngine needs from the server, so tests can fake it.
+interface NotesSyncApi {
+    suspend fun fetchManifest(): List<ManifestEntry>
+    suspend fun fetchNote(path: String): String
+    suspend fun pushNote(path: String, content: String)
+    suspend fun deleteNote(path: String)
+    suspend fun serverHolds(path: String, content: String): Boolean
+}
+
 // What TasksViewModel needs from the server, so tests can fake it.
 interface TasksApi {
     suspend fun fetchTasks(): List<TaskDto>
@@ -313,7 +330,7 @@ class ScriniumApi(
     tokenProvider: () -> String?,
     onUnauthorized: () -> Unit,
     cacheDir: File
-) : TasksApi {
+) : TasksApi, NotesSyncApi {
     private val textMediaType = "text/plain".toMediaType()
     private val root = baseUrl.trimEnd('/') + "/"
 
@@ -338,11 +355,21 @@ class ScriniumApi(
     suspend fun exchangeGoogleIdToken(idToken: String): MobileAuthResponse =
         service.mobileAuth(MobileAuthRequest(idToken))
 
-    suspend fun fetchManifest(): List<ManifestEntry> = service.manifest()
+    override suspend fun fetchManifest(): List<ManifestEntry> = service.manifest()
 
-    suspend fun fetchNote(path: String): String = service.note(encPath(path)).string()
+    override suspend fun fetchNote(path: String): String = service.note(encPath(path)).string()
 
-    suspend fun pushNote(path: String, content: String) {
+    // True when the server's copy is exactly [content]: a 304 against the
+    // note's version, the server's noteVersion() (sha256 hex, first 16).
+    override suspend fun serverHolds(path: String, content: String): Boolean {
+        val hash = MessageDigest.getInstance("SHA-256").digest(content.toByteArray())
+        val version = "\"" + hash.joinToString("") { "%02x".format(it) }.take(16) + "\""
+        val res = service.noteIfChanged(encPath(path), version)
+        res.body()?.close()
+        return res.code() == 304
+    }
+
+    override suspend fun pushNote(path: String, content: String) {
         val res = service.putNote(encPath(path), content.toRequestBody(textMediaType))
         if (!res.isSuccessful) throw ApiException(res.code())
     }
@@ -352,7 +379,7 @@ class ScriniumApi(
         if (!res.isSuccessful) throw ApiException(res.code())
     }
 
-    suspend fun deleteNote(path: String) {
+    override suspend fun deleteNote(path: String) {
         val res = service.delete(encPath(path))
         if (!res.isSuccessful) throw ApiException(res.code())
     }

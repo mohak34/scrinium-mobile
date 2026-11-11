@@ -488,6 +488,8 @@ class TasksViewModel(
         fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 TasksViewModel(container.api) {
+                    // A load that lands after sign-out must not re-arm alarms.
+                    if (container.tokenStore.token.value == null) return@TasksViewModel
                     container.reminders.sync(it)
                     container.loadedTasks.value = it
                 }

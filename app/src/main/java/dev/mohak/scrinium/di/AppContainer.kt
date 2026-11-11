@@ -19,6 +19,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
@@ -63,9 +64,11 @@ class AppContainer(context: Context) {
         notesRepository = NotesRepository(database.noteDao(), api)
         imageLoader = ImageLoader(api)
         syncEngine = SyncEngine(database.noteDao(), api) { tokenStore.token.value }
-        // Keep the home screen widget in step with Room; no-op when none is placed.
+        // Keep the home screen widget in step with Room; no-op when none is
+        // placed. Signed out, it lists nothing (Room keeps the notes).
         scope.launch {
-            database.noteDao().observeAll().debounce(1000).collect { NotesWidget.render(appContext, it) }
+            database.noteDao().observeAll().combine(tokenStore.token) { notes, token -> if (token == null) emptyList() else notes }
+                .debounce(1000).collect { NotesWidget.render(appContext, it) }
         }
         // A sign-out's null replaces a save still waiting on the debounce and
         // clears again after one already running. The startup null is skipped

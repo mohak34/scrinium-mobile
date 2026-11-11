@@ -101,9 +101,10 @@ class SessionRepository(
     }
 
     suspend fun forceSignOut() {
+        // Token first: task loads still in flight check it before arming alarms.
+        tokenStore.setToken(null)
         reminders.clearAll()
         onSignOut()
-        tokenStore.setToken(null)
         tokenStore.setEmail(null)
         _email.value = null
         _signedIn.value = false

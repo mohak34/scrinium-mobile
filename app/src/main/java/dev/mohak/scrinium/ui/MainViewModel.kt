@@ -212,7 +212,8 @@ class MainViewModel(
         autoSyncJob?.cancel()
         autoSyncJob = viewModelScope.launch {
             delay(AUTO_PUSH_DELAY_MS)
-            if (!session.isSignedIn()) return@launch
+            // Backgrounded: the edit waits in Room for the next foreground sync.
+            if (!session.isSignedIn() || !inForeground()) return@launch
             syncNow(force = true, quiet = true)
         }
     }
@@ -367,12 +368,7 @@ class MainViewModel(
         viewModelScope.launch {
             while (true) {
                 delay(FOREGROUND_PULL_MS)
-                if (ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(
-                        androidx.lifecycle.Lifecycle.State.STARTED
-                    )
-                ) {
-                    syncTick()
-                }
+                if (inForeground()) syncTick()
             }
         }
     }
@@ -410,8 +406,8 @@ class MainViewModel(
         }
     }
 
-    // Server-only hits aren't in Room yet — pull them in (with manifest hash
-    // so sync stays consistent) and open straight from the pulled content.
+    // Server-only hits aren't in Room yet: a sync brings them in (and pushes
+    // a local delete of the same path first, so a deleted note stays deleted).
     fun openSearchHit(hit: SearchHit) {
         viewModelScope.launch {
             val local = notes.get(hit.path)
@@ -420,21 +416,10 @@ class MainViewModel(
                 return@launch
             }
             try {
-                val pulled = notes.pullNote(hit.path)
-                if (pulled == null) {
-                    _sync.update { it.copy(error = "Note is no longer on the server") }
-                    return@launch
-                }
                 flushEditor()
-                if (_editor.value?.path == pulled.path) {
-                    _screen.value = Screen.Editor(pulled.path)
-                    return@launch
-                }
-                pushHistoryForLeave()
-                _editor.value = EditorState(pulled.path, pulled.content)
-                editorEdits.value = null
-                titleSyncEdits.value = null
-                _screen.value = Screen.Editor(pulled.path)
+                runSync()
+                if (notes.get(hit.path)?.isDeleted == false) openNote(hit.path)
+                else _sync.update { it.copy(error = "Note is no longer on the server") }
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Couldn't open note: ${e.message}") }
             }
@@ -1163,8 +1148,15 @@ class MainViewModel(
         }
     }
 
+    // A forced sync asked for while one runs is queued, so an edit made during
+    // a sync still pushes right after it.
+    private var syncQueued = false
+
     fun syncNow(force: Boolean = false, quiet: Boolean = false) {
-        if (_sync.value.syncing) return
+        if (_sync.value.syncing) {
+            if (force) syncQueued = true
+            return
+        }
         if (!force) {
             // Null means "never synced" — that is exactly when a sync is due.
             // Only throttle when we have a previous timestamp.
@@ -1192,6 +1184,10 @@ class MainViewModel(
             val report = syncEngine.syncOnce()
             session.updateLastSyncAt(report.completedAt)
             _sync.update { it.copy(syncing = false, lastSyncAt = report.completedAt, report = report) }
+            if (syncQueued) {
+                syncQueued = false
+                syncNow(force = true, quiet = true)
+            }
         } catch (e: Exception) {
             _sync.update { it.copy(syncing = false) }
             throw e
@@ -1209,12 +1205,11 @@ class MainViewModel(
     }
 
     fun syncOnForeground() {
-        if (!session.isSignedIn()) return
-        val last = _sync.value.lastSyncAt ?: session.lastSyncAt.value
-        if (_sync.value.syncing) return
-        if (last != 0L && System.currentTimeMillis() - last < 30 * 60_000) return
-        syncNow()
+        if (session.isSignedIn()) syncNow(quiet = true)
     }
+
+    private fun inForeground() =
+        ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)
 
     // Settings > Devices: every phone signed in to this account.
     private val _devices = MutableStateFlow<List<ApiTokenDto>>(emptyList())
