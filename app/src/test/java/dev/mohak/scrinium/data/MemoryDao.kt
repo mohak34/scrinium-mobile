@@ -3,6 +3,7 @@ package dev.mohak.scrinium.data
 import dev.mohak.scrinium.data.local.MoveEntity
 import dev.mohak.scrinium.data.local.NoteDao
 import dev.mohak.scrinium.data.local.NoteEntity
+import dev.mohak.scrinium.data.local.NoteMeta
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
@@ -12,11 +13,19 @@ class MemoryDao : NoteDao {
     val rows = MutableStateFlow(mapOf<String, NoteEntity>())
     val moves = mutableListOf<MoveEntity>()
     override fun observeAll(): Flow<List<NoteEntity>> = rows.map { it.values.sortedBy(NoteEntity::path) }
-    override suspend fun getAll() = rows.value.values.toList()
+    private fun NoteEntity.meta() = NoteMeta(path, remoteUpdatedAt, localModifiedAt, contentHash, isDeleted, version)
+    override suspend fun getAllMeta() = rows.value.values.map { it.meta() }
+    override fun observePending() = rows.map { r -> r.values.filter { it.localModifiedAt != null }.sortedByDescending { it.localModifiedAt }.map { it.meta() } }
+    private fun recentNow(limit: Int) = rows.value.values.filter { !it.isDeleted }
+        .sortedByDescending { maxOf(it.localModifiedAt ?: 0L, it.remoteUpdatedAt) }.take(limit).map { it.meta() }
+    override fun observeRecent(limit: Int) = rows.map { recentNow(limit) }
+    override suspend fun recent(limit: Int) = recentNow(limit)
+    override suspend fun tombstoneFolder(folder: String, now: Long) {
+        rows.value = rows.value.mapValues { (p, r) -> if (!r.isDeleted && p.startsWith("$folder/")) r.copy(isDeleted = true, localModifiedAt = now) else r }
+    }
     override suspend fun get(path: String) = rows.value[path]
     override fun observe(path: String): Flow<NoteEntity?> = rows.map { it[path] }
     override suspend fun upsert(note: NoteEntity) { rows.value += note.path to note }
-    override suspend fun upsertAll(notes: List<NoteEntity>) = notes.forEach { upsert(it) }
     override suspend fun delete(path: String) { rows.value -= path }
     override fun search(q: String): Flow<List<NoteEntity>> = observeAll()
     override suspend fun insertIfAbsent(note: NoteEntity) { if (note.path !in rows.value) upsert(note) }

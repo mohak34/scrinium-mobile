@@ -87,7 +87,9 @@ with server," non-null means "has local changes waiting to push."
 
 1. Send queued renames and moves as `PATCH` with an op id, so a retry
    after a lost reply never moves twice. Room already holds the new paths.
-2. Fetch `/api/notes/manifest` (cheap — metadata only)
+2. Fetch `/api/notes/manifest` (cheap — metadata only) and read Room's
+   rows without their text (`NoteMeta`); a note's text is loaded only to
+   push it
 3. For each note:
    - Local has unsynced edits (`localModifiedAt != null`) → push with
      `If-Match` on the version the edit builds on; the server answers 412
@@ -103,6 +105,9 @@ with server," non-null means "has local changes waiting to push."
    `localModifiedAt` only if the text is still what was pushed, and a
    remote note is inserted only if the path is still free. An edit,
    delete or new note made while a request is out waits for the next sync.
+   The open editor follows the same rule: a clean editor takes a pulled
+   change, and typing saved over a pull it never showed keeps the version
+   it was typed on, so its push conflicts instead of overwriting the pull.
 6. After pushes, the fresh manifest fingerprint is stored only if the
    server still holds the pushed text (`If-None-Match` with its version
    answers 304); otherwise the next sync fetches what changed.
@@ -131,9 +136,10 @@ This is worth being explicit about since it's your stated top priority:
   only to post its notification.
 - **Manifest-first sync** (above) means most sync cycles transfer a few
   KB of metadata and nothing else, not full note bodies.
-- **Lazy content loading**: don't hold the entire vault's text in memory
-  at once. Room + Compose's lazy lists mean only visible note previews
-  and the currently-open note's full content need to be in memory.
+- **Lazy content loading**: sync, the home screen widget (its eight most
+  recent notes, sorted in SQL), the waiting-to-upload list and path
+  checks read `NoteMeta` rows without text. The notes list still loads
+  every body: titles, tags and backlinks are parsed from it.
 - **Debounced autosave**, same principle as the web app's existing
   debounced autosave — write to Room locally on a short debounce while
   typing (cheap, local, no network), but only _sync to server_ on the

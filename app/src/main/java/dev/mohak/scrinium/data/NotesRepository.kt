@@ -2,7 +2,9 @@ package dev.mohak.scrinium.data
 
 import dev.mohak.scrinium.data.local.NoteDao
 import dev.mohak.scrinium.data.local.NoteEntity
+import dev.mohak.scrinium.data.local.NoteMeta
 import dev.mohak.scrinium.data.remote.ScriniumApi
+import dev.mohak.scrinium.data.remote.noteVersion
 import kotlinx.coroutines.flow.Flow
 import okhttp3.RequestBody
 
@@ -21,6 +23,12 @@ class NotesRepository(
 ) {
     fun observeAll(): Flow<List<NoteEntity>> = noteDao.observeAll()
 
+    fun observePending(): Flow<List<NoteMeta>> = noteDao.observePending()
+
+    suspend fun allMeta(): List<NoteMeta> = noteDao.getAllMeta()
+
+    suspend fun hasPendingMoves(): Boolean = noteDao.pendingMoves().isNotEmpty()
+
     fun observeUnsyncedCount(): Flow<Int> = noteDao.observeUnsyncedCount()
 
     fun search(q: String): Flow<List<NoteEntity>> = noteDao.search(q)
@@ -29,8 +37,13 @@ class NotesRepository(
 
     fun observe(path: String): Flow<NoteEntity?> = noteDao.observe(path)
 
-    suspend fun saveLocally(path: String, content: String) {
+    // [base] is the text the edit was typed over. If a pull replaced it in
+    // the meantime, the row keeps base's version so the push conflicts
+    // instead of overwriting the pulled text (a clean row's version is its
+    // content's).
+    suspend fun saveLocally(path: String, content: String, base: String? = null) {
         val existing = noteDao.get(path)
+        val pulledOver = base?.takeIf { existing != null && existing.localModifiedAt == null && existing.content != it }
         noteDao.upsert(
             NoteEntity(
                 path = path,
@@ -38,7 +51,7 @@ class NotesRepository(
                 remoteUpdatedAt = existing?.remoteUpdatedAt ?: 0L,
                 localModifiedAt = System.currentTimeMillis(),
                 contentHash = existing?.contentHash ?: "",
-                version = existing?.version ?: ""
+                version = pulledOver?.let(::noteVersion) ?: existing?.version ?: ""
             )
         )
     }
@@ -118,7 +131,7 @@ class NotesRepository(
 
     suspend fun setSharePassword(id: String, password: String?) = api.setSharePassword(id, password)
 
-    suspend fun createShare(path: String, password: String?) = api.createShare(path, password)
+    suspend fun createShare(path: String, password: String?, expiresInDays: Int?) = api.createShare(path, password, expiresInDays)
 
     suspend fun deleteShare(id: String) = api.deleteShare(id)
 
@@ -178,7 +191,7 @@ class NotesRepository(
 
     // Tombstones move with the folder, so their deletes follow it.
     private suspend fun rewritePrefix(folder: String, newPrefix: String): String? {
-        val all = noteDao.getAll()
+        val all = noteDao.getAllMeta()
         if (all.none { !it.isDeleted && it.path.startsWith("$folder/") }) return null
         if (all.any { it.path == newPrefix || it.path.startsWith("$newPrefix/") }) {
             throw IllegalArgumentException("A folder already exists at $newPrefix")
@@ -189,11 +202,7 @@ class NotesRepository(
 
     /** Local-only folder delete: tombstones every note under [folder] in one transaction. */
     suspend fun deleteFolder(folder: String) {
-        val now = System.currentTimeMillis()
-        noteDao.upsertAll(
-            noteDao.getAll().filter { !it.isDeleted && it.path.startsWith("$folder/") }
-                .map { it.copy(isDeleted = true, localModifiedAt = now) }
-        )
+        noteDao.tombstoneFolder(folder, System.currentTimeMillis())
     }
 
     private fun normalizeFolder(raw: String): String {
@@ -220,7 +229,7 @@ class NotesRepository(
     // First free "base (N)" for a colliding folder destination. Tombstones
     // count: a row can't move onto one.
     private suspend fun uniqueFolderPrefix(want: String): String {
-        val all = noteDao.getAll()
+        val all = noteDao.getAllMeta()
         fun taken(prefix: String) = all.any { it.path == prefix || it.path.startsWith("$prefix/") }
         if (!taken(want)) return want
         var i = 1

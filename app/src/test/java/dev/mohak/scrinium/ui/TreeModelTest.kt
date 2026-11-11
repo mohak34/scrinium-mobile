@@ -33,4 +33,12 @@ class TreeModelTest {
     fun quotidianLeavesProjectsOut() {
         assertEquals(listOf("0:Daily/", "1:Daily/Mon.md", "0:Ideas.md"), rows(ProjectView.Project(null)))
     }
+
+    @Test
+    fun foldersCountEveryNoteBelowThem() {
+        val dirty = notes.map { if (it.path == "Jobs/Apps/Waymo.md") it.copy(localModifiedAt = 1L) else it }
+        val folders = buildTree(dirty, emptySet()).filterIsInstance<TreeItem.Folder>().associateBy { it.path }
+        assertEquals(2, folders.getValue("Jobs").noteCount)
+        assertEquals(listOf("Jobs", "Jobs/Apps"), folders.values.filter { it.hasUnsynced }.map { it.path })
+    }
 }

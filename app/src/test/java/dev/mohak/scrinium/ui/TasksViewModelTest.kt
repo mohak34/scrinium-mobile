@@ -10,7 +10,6 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
@@ -209,16 +208,16 @@ class TasksViewModelTest {
         vm.loadNoteTasks("a.md")
         runCurrent()
         api.noteFetches[0].ok(emptyList())
-        vm.create("t", linkPath = "a.md")
+        vm.create("t", link = { "a.md" })
         runCurrent()
         vm.loadNoteTasks("b.md")
         runCurrent()
         api.noteFetches[1].ok(emptyList())
+        assertEquals(listOf("a.md"), (api.creates.single().arg as NewTaskRequest).notePaths)
         api.creates.single().ok(task("t"))
         runCurrent()
-        api.linkAdds.single().ok(listOf("a.md"))
-        runCurrent()
         assertEquals(emptyList(), vm.noteTasks.value)
+        assertEquals(1, row("t").linkCount)
     }
 
     @Test
@@ -268,12 +267,42 @@ class TasksViewModelTest {
 
     @Test
     fun failedCreateKeepsTheFormText() = runTest(main) {
-        var created = false
-        vm.create("t", linkPath = "a.md", onCreated = { created = true })
+        var done: Boolean? = null
+        vm.create("t", link = { "a.md" }, onDone = { done = it })
         runCurrent()
         api.creates.single().fail()
         runCurrent()
-        assertFalse(created)
+        assertEquals(false, done)
         assertTrue(vm.error.value!!.startsWith("Couldn't add task"))
+    }
+
+    // A note that can't reach the server makes no task at all.
+    @Test
+    fun anUnsyncedNoteMakesNoTask() = runTest(main) {
+        var done: Boolean? = null
+        vm.create("t", link = { throw IllegalStateException("the note isn't synced yet") }, onDone = { done = it })
+        runCurrent()
+        assertEquals(false, done)
+        assertTrue(api.creates.isEmpty())
+    }
+
+    @Test
+    fun aFailedFieldSaveKeepsItsTextForARetry() = runTest(main) {
+        loaded(task("a"))
+        vm.openTask("a")
+        vm.draft("a", TasksViewModel.TextField.Title, "Typed")
+        advanceTimeBy(700)
+        runCurrent()
+        api.patches.single().fail()
+        runCurrent()
+        assertEquals("a", row("a").title)
+        assertEquals("Typed", vm.draftOf("a", TasksViewModel.TextField.Title))
+        assertEquals(setOf("a" to TasksViewModel.TextField.Title), vm.failedFields.value)
+        vm.retryField("a", TasksViewModel.TextField.Title)
+        runCurrent()
+        api.patches.last().ok(task("a", "Typed"))
+        runCurrent()
+        assertEquals("Typed", row("a").title)
+        assertEquals(emptySet(), vm.failedFields.value)
     }
 }

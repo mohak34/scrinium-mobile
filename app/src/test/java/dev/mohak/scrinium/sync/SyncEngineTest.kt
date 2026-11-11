@@ -1,14 +1,17 @@
 package dev.mohak.scrinium.sync
 
 import dev.mohak.scrinium.data.MemoryDao
+import dev.mohak.scrinium.data.NotesRepository
 import dev.mohak.scrinium.data.local.NoteEntity
 import dev.mohak.scrinium.data.remote.ApiException
 import dev.mohak.scrinium.data.remote.ManifestEntry
 import dev.mohak.scrinium.data.remote.MoveResult
 import dev.mohak.scrinium.data.remote.NotesSyncApi
+import dev.mohak.scrinium.data.remote.ScriniumApi
 import dev.mohak.scrinium.data.remote.noteVersion
 import kotlinx.coroutines.runBlocking
 import java.io.IOException
+import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -120,6 +123,20 @@ class SyncEngineTest {
         assertEquals(listOf("mine"), server.filterKeys { it.contains("(conflict, phone") }.values.toList())
     }
 
+    // The editor typed over "base" while a pull put "theirs" in Room.
+    @Test
+    fun typingOverAPulledEditKeepsBoth() = runBlocking {
+        val repo = NotesRepository(dao, ScriniumApi("http://localhost", { null }, {}, Files.createTempDirectory("api").toFile()))
+        server["a.md"] = "theirs"
+        hashes = mapOf("a.md" to "h1")
+        dao.upsert(synced("a.md", "base"))
+        sync.syncOnce()
+        repo.saveLocally("a.md", "mine", base = "base")
+        assertEquals(1, sync.syncOnce().conflicts)
+        assertEquals("theirs", dao.get("a.md")!!.content)
+        assertEquals(listOf("mine"), server.filterKeys { it.contains("(conflict, phone") }.values.toList())
+    }
+
     @Test
     fun aDeleteLosesToAnEditMadeElsewhere() = runBlocking {
         server["a.md"] = "theirs"
@@ -142,7 +159,7 @@ class SyncEngineTest {
         val report = sync.syncOnce()
         assertEquals(0, report.errors)
         assertEquals(mapOf("b.md" to "x"), server.toMap())
-        assertEquals(listOf("b.md"), dao.getAll().map { it.path })
+        assertEquals(listOf("b.md"), dao.getAllMeta().map { it.path })
         assertTrue(dao.pendingMoves().isEmpty())
     }
 

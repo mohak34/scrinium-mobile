@@ -90,7 +90,9 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
 - `GET /api/search?q=` → `[{ path, title, snippet }]` (FTS5)
 - `GET /api/tasks` (`?note=<path>` for one note's tasks), `POST /api/tasks`,
   `PATCH|DELETE /api/tasks/<id>`, `GET|POST|DELETE /api/tasks/<id>/links`.
-  Rows are snake_case. Tasks live in the server's SQLite, not the vault, so
+  `POST /api/tasks` takes `note_paths` to link in the same request; a
+  note is pushed first (`MainViewModel.noteOnServer`), and a task is not
+  made when it can't be. Rows are snake_case. Tasks live in the server's SQLite, not the vault, so
   they are online-only: `TasksViewModel` calls the API directly, no Room.
   `waiting_since` is stamped on entering Waiting; a PATCH may set an
   earlier start, never a future one.
@@ -104,9 +106,12 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
   folder, Quotidian is everything outside one. Projects are created and
   removed on the web; the phone only picks them.
 - `GET /api/shares` (`?path=` for one note's links, none for every link),
-  `POST /api/shares { path, password? }`, `PATCH /api/shares/<id>
+  `POST /api/shares { path, password?, expiresInDays? }` (1-365, none
+  never expires; listings return `expiresAt`), `PATCH /api/shares/<id>
   { password }` (null removes it), `DELETE /api/shares/<id>`. The note menu
-  manages one note's links, Settings > Shared links all of them.
+  manages one note's links, Settings > Shared links all of them; the list
+  remembers which path it holds, so a late reply never shows another
+  note's links. A note is pushed before a link is made.
 - `GET|DELETE /api/tokens` → API tokens `[{ token_hash, created_at,
   last_used_at, label }]`; DELETE body `{ token_hash }` revokes one.
   Settings lists only phones (`label` null; agent tokens are labeled). The

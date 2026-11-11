@@ -68,6 +68,7 @@ fun NotePanel(
     val notes by vm.notesFlow.collectAsStateWithLifecycle()
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var newTask by remember(path) { mutableStateOf("") }
+    var adding by remember(path) { mutableStateOf(false) }
     val outline = remember(content) { parseOutline(content) }
     val properties = remember(content) { frontmatterProperties(content) }
     val words = remember(content) { wordCount(content) }
@@ -150,11 +151,14 @@ fun NotePanel(
                             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                             icon = R.drawable.ms_add,
                             keyboardOptions = KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Done),
-                            keyboardActions = KeyboardActions(onDone = {
+                            keyboardActions = KeyboardActions(onDone = add@{
                                 val title = newTask
+                                if (adding) return@add
+                                adding = true
                                 // Kept on failure for a retry; cleared unless more was typed.
-                                tasksVm.create(title, status = TaskStatus.Inbox, linkPath = path, onCreated = {
-                                    if (newTask == title) newTask = ""
+                                tasksVm.create(title, status = TaskStatus.Inbox, link = { vm.noteOnServer(path) }, onDone = { ok ->
+                                    adding = false
+                                    if (ok && newTask == title) newTask = ""
                                 })
                             })
                         )

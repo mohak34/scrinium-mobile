@@ -47,9 +47,10 @@ class SyncEngine(
         }
 
         val remote = api.fetchManifest().associateBy { it.path }
-        // A snapshot: edits made while a request is out are caught by the
+        // A snapshot without bodies: a note's text is read only to upload
+        // it. Edits made while a request is out are caught by the
         // compare-and-set writes in NoteDao and pushed on the next sync.
-        val local = dao.getAll()
+        val local = dao.getAllMeta()
         val localPaths = local.mapTo(HashSet()) { it.path }
         var pulled = 0
         var pushed = 0
@@ -84,6 +85,8 @@ class SyncEngine(
 
         for (note in local) {
             val meta = remote[note.path]
+            // The current row with its text; null once sync removed it.
+            suspend fun body() = dao.get(note.path)
             try {
                 when {
                     note.isDeleted -> {
@@ -95,18 +98,21 @@ class SyncEngine(
                                 // it; that edit wins and comes back next sync.
                                 if (e.status != 412 && e.status != 404) throw e
                             }
-                        } else if (meta == null && note.contentHash.isEmpty() && note.content.isNotBlank()) {
+                        } else if (meta == null && note.contentHash.isEmpty()) {
                             // Never reached the server: upload it into the
                             // trash so it can come back.
-                            api.pushNote(note.path, note.content, createOnly = true)
-                            api.deleteNote(note.path)
+                            val text = body()?.content.orEmpty()
+                            if (text.isNotBlank()) {
+                                api.pushNote(note.path, text, createOnly = true)
+                                api.deleteNote(note.path)
+                            }
                         }
                         dao.dropTombstone(note.path)
                         removed++
                     }
                     meta == null -> {
                         if (note.localModifiedAt != null) {
-                            push(note, null, null)
+                            body()?.let { push(it, null, null) }
                         } else {
                             dao.deleteIfClean(note.path)
                             removed++
@@ -120,15 +126,16 @@ class SyncEngine(
                     }
                     // The server checks the version, so a changed fingerprint
                     // with the same text is no conflict.
-                    note.version.isNotEmpty() -> push(note, note.version, meta)
+                    note.version.isNotEmpty() -> body()?.let { push(it, it.version, meta) }
                     note.contentHash == meta.contentHash -> {
                         // Rows from before versions: unchecked, as they were.
-                        api.pushNote(note.path, note.content)
-                        dao.markPushed(note.path, note.content, noteVersion(note.content))
-                        written += note.path to note.content
+                        val full = body() ?: continue
+                        api.pushNote(full.path, full.content)
+                        dao.markPushed(full.path, full.content, noteVersion(full.content))
+                        written += full.path to full.content
                         pushed++
                     }
-                    else -> conflict(note, meta)
+                    else -> body()?.let { conflict(it, meta) }
                 }
             } catch (e: Exception) {
                 fail(note.path, e)

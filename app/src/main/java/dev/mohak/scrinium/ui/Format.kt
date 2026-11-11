@@ -13,6 +13,19 @@ fun relativeTime(epoch: Long, now: Long = System.currentTimeMillis()): String {
     }
 }
 
+// "expires in 3 days", "expires in 5 hours", "expired"; "" for never.
+// Same wording as the web's expiryLabel.
+fun expiryLabel(expiresAt: Long?, now: Long = System.currentTimeMillis()): String {
+    if (expiresAt == null) return ""
+    val hours = (expiresAt - now) / 3_600_000.0
+    if (hours <= 0) return "expired"
+    if (hours < 1) return "expires within the hour"
+    val (n, unit) = if (hours < 23) Math.round(hours) to "hour" else Math.round(hours / 24) to "day"
+    return "expires in $n $unit${if (n == 1L) "" else "s"}"
+}
+
+fun lifetimeLabel(days: Int?): String = if (days == null) "Never expires" else "Expires in $days day${if (days == 1) "" else "s"}"
+
 /** A note's filename without its .md extension, in any case. */
 fun noteStem(path: String): String =
     path.substringAfterLast('/').let { if (it.endsWith(".md", ignoreCase = true)) it.dropLast(3) else it }

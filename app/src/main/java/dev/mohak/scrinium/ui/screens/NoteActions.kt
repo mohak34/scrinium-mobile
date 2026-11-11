@@ -45,6 +45,9 @@ import dev.mohak.scrinium.ui.Sym
 import dev.mohak.scrinium.ui.Type
 import dev.mohak.scrinium.ui.printHtml
 import dev.mohak.scrinium.ui.noteStem
+import dev.mohak.scrinium.ui.expiryLabel
+import dev.mohak.scrinium.ui.lifetimeLabel
+import dev.mohak.scrinium.data.remote.SHARE_LIFETIMES
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -164,10 +167,11 @@ private fun FolderPick(icon: Int, label: String, depth: Int, selected: Boolean, 
 /** Public read-only links for a note: copy, remove, or add one (optionally locked). */
 @Composable
 private fun ShareSheet(vm: MainViewModel, path: String, onDismiss: () -> Unit) {
-    val shares by vm.shares.collectAsStateWithLifecycle()
+    val shares = vm.shares.collectAsStateWithLifecycle().value.let { if (it.path == path) it.links else emptyList() }
     val clipboard = LocalClipboard.current
     val copyScope = rememberCoroutineScope()
     var password by remember(path) { mutableStateOf("") }
+    var lifetime by remember(path) { mutableStateOf<Int?>(null) }
     androidx.compose.runtime.LaunchedEffect(path) { vm.loadShares(path) }
     Sheet(onDismiss) {
         SheetTitle("Share links", "Anyone with a link can read this note.")
@@ -177,15 +181,23 @@ private fun ShareSheet(vm: MainViewModel, path: String, onDismiss: () -> Unit) {
             Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(url.substringAfter("://"), style = Type.mono.copy(color = Sc.text), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(if (share.hasPassword) "password" else "open", style = Type.meta)
+                    val expiry = expiryLabel(share.expiresAt)
+                    Text(
+                        listOf(if (share.hasPassword) "password" else "open", expiry).filter { it.isNotEmpty() }.joinToString("  ·  "),
+                        style = Type.meta.copy(color = if (expiry == "expired") Sc.red else Sc.text3)
+                    )
                 }
                 IconBtn(R.drawable.ms_content_copy, "Copy link", { copyScope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("link", url))) } })
                 IconBtn(R.drawable.ms_close, "Remove link", { vm.deleteShareLink(share.id) }, tint = Sc.red)
             }
         }
         InputBox(password, { password = it }, "Password (optional)", Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), icon = R.drawable.ms_lock)
+        // Tapping cycles through the lifetimes the web offers.
+        dev.mohak.scrinium.ui.MenuRow(R.drawable.ms_schedule, lifetimeLabel(lifetime), {
+            lifetime = SHARE_LIFETIMES[(SHARE_LIFETIMES.indexOf(lifetime) + 1) % SHARE_LIFETIMES.size]
+        })
         FillButton("New link", {
-            vm.createShareLink(path, password.ifBlank { null })
+            vm.createShareLink(path, password.ifBlank { null }, lifetime)
             password = ""
         }, Modifier.fillMaxWidth().padding(horizontal = 16.dp))
     }
