@@ -4,8 +4,10 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
+import java.util.UUID
 
 @Dao
 interface NoteDao {
@@ -38,19 +40,29 @@ interface NoteDao {
     suspend fun insertIfAbsent(note: NoteEntity)
 
     @Query(
-        "UPDATE notes SET content = :content, contentHash = :hash, remoteUpdatedAt = :updatedAt " +
+        "UPDATE notes SET content = :content, contentHash = :hash, remoteUpdatedAt = :updatedAt, version = :version " +
             "WHERE path = :path AND localModifiedAt IS NULL AND isDeleted = 0"
     )
-    suspend fun applyPull(path: String, content: String, hash: String, updatedAt: Long): Int
+    suspend fun applyPull(path: String, content: String, hash: String, updatedAt: Long, version: String): Int
 
-    @Query("UPDATE notes SET localModifiedAt = NULL WHERE path = :path AND content = :pushed AND isDeleted = 0")
-    suspend fun markPushed(path: String, pushed: String): Int
+    // The server holds [pushed] whatever happened to the row meanwhile, so the
+    // version always moves on; the row is clean only if it still holds it.
+    @Query(
+        "UPDATE notes SET version = :version, localModifiedAt = CASE WHEN content = :pushed AND isDeleted = 0 " +
+            "THEN NULL ELSE localModifiedAt END WHERE path = :path"
+    )
+    suspend fun markPushed(path: String, pushed: String, version: String): Int
 
     @Query(
-        "UPDATE notes SET content = :server, contentHash = :hash, remoteUpdatedAt = :updatedAt, localModifiedAt = NULL " +
-            "WHERE path = :path AND content = :local AND isDeleted = 0"
+        "UPDATE notes SET content = :server, contentHash = :hash, remoteUpdatedAt = :updatedAt, localModifiedAt = NULL, " +
+            "version = :version WHERE path = :path AND content = :local AND isDeleted = 0"
     )
-    suspend fun resolveConflict(path: String, local: String, server: String, hash: String, updatedAt: Long): Int
+    suspend fun resolveConflict(path: String, local: String, server: String, hash: String, updatedAt: Long, version: String): Int
+
+    // A server move rewrote this note's text: the row now builds on that
+    // text, if it was based on what the move started from.
+    @Query("UPDATE notes SET version = :now WHERE path = :path AND version = :was")
+    suspend fun rebase(path: String, was: String, now: String)
 
     @Query("UPDATE notes SET contentHash = :hash, remoteUpdatedAt = :updatedAt WHERE path = :path")
     suspend fun stampRemote(path: String, hash: String, updatedAt: Long)
@@ -60,6 +72,29 @@ interface NoteDao {
 
     @Query("DELETE FROM notes WHERE path = :path AND localModifiedAt IS NULL")
     suspend fun deleteIfClean(path: String)
+
+    // Moves a note, or every row under a folder, to [to] and queues the
+    // server PATCH, in one transaction.
+    @Transaction
+    suspend fun move(from: String, to: String) {
+        movePaths(from, to)
+        queueMove(MoveEntity(opId = UUID.randomUUID().toString(), fromPath = from, toPath = to))
+    }
+
+    @Query(
+        "UPDATE notes SET path = :to || substr(path, length(:from) + 1) " +
+            "WHERE path = :from OR substr(path, 1, length(:from) + 1) = :from || '/'"
+    )
+    suspend fun movePaths(from: String, to: String)
+
+    @Insert
+    suspend fun queueMove(move: MoveEntity)
+
+    @Query("SELECT * FROM moves ORDER BY seq")
+    suspend fun pendingMoves(): List<MoveEntity>
+
+    @Query("DELETE FROM moves WHERE seq = :seq")
+    suspend fun dropMove(seq: Long)
 
     @Query(
         "SELECT * FROM notes WHERE path LIKE '%' || :q || '%' OR content LIKE '%' || :q || '%' " +

@@ -66,10 +66,16 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
 - `GET /api/notes/manifest` → `[{ path, updatedAt, contentHash }]` for every
   `.md` note; `contentHash` = `"<size>:<mtimeMs>"` fingerprint (stat only).
 - `GET /api/notes/<path>` → note content as `text/plain`
-- `PUT /api/notes/<path>` → write note, body `text/plain`
+- `PUT /api/notes/<path>` → write note, body `text/plain`. `If-Match:
+  <version>` + `X-Note-Strict: 1` → 412 if the note changed;
+  `If-None-Match: *` → 409 if it exists. A version is the server's
+  `noteVersion()` (quoted sha256 hex, first 16), computed on the phone too.
 - `POST /api/notes/<path>` → `{ folder: true }` creates a folder
-- `PATCH /api/notes/<path>` → `{ newPath }` rename/move
-- `DELETE /api/notes/<path>` → move to trash (recovers to vault `.trash`)
+- `PATCH /api/notes/<path>` → `{ newPath }` rename/move, note or folder;
+  relinks and retitles, returning `{ versions, previous }` of what it
+  rewrote. `X-Op-Id` makes a retry answer "done" instead of moving again.
+- `DELETE /api/notes/<path>` → move to trash (recovers to vault `.trash`);
+  `If-Match: <version>` → 412 if the note changed.
 - `GET /api/trash`, `POST /api/trash/restore`, `DELETE /api/trash` → the
   server trash. `GET /api/archive` → `[{ name, originalPath, archivedAt,
   isDir, notes }]`; `POST /api/archive { path }` archives a note or folder
@@ -129,16 +135,22 @@ web it does not pick the shortest path when a name is ambiguous.
 On trigger (app foreground, 5s after edits settle, the 60s foreground tick,
 pull-to-refresh; a forced sync asked for mid-sync runs right after it):
 
-1. Fetch manifest; build `{path: contentHash}` remote map.
-2. For each Room note compare `contentHash`:
-   - local has unsynced edits (`localModifiedAt != null`) + remote changed →
-     **conflict**: fetch server copy, keep both (conflict-renamed local push)
-   - local unsynced, remote unchanged → push `PUT`
-   - remote changed, no local edits → pull `GET`, update Room
+1. Send queued moves (`moves` table) as `PATCH` with their op id, in
+   order. Renames and moves rewrite Room paths at once and only queue the
+   PATCH. A move the server refuses for good (400/404/409) is dropped; any
+   other failure ends the sync.
+2. Fetch manifest; build `{path: contentHash}` remote map.
+3. For each Room note:
+   - local has unsynced edits (`localModifiedAt != null`) → `PUT` with
+     `If-Match` on the row's `version` (the server text it builds on), or
+     `If-None-Match: *` for a new note. 412/409 → **conflict**: fetch
+     server copy, keep both (conflict-renamed local push)
+   - remote `contentHash` changed, no local edits → pull `GET`, update Room
    - neither changed → skip (the cheap majority)
-3. Room notes missing from remote + no local edits → they were deleted
-   elsewhere; delete locally. Local deletes push `DELETE`.
-4. On success, clear `localModifiedAt` and update `contentHash`/`updatedAt`.
+4. Room notes missing from remote + no local edits → they were deleted
+   elsewhere; delete locally. Local deletes push `DELETE` with `If-Match`;
+   a 412 means it changed elsewhere, and that edit wins.
+5. On success, clear `localModifiedAt` and update `contentHash`/`updatedAt`.
    Every write is compare-and-set against the state read before the
    request (`NoteDao`), so edits made mid-request survive. A pushed note
    takes the fresh manifest hash only if a 304 shows the server still
