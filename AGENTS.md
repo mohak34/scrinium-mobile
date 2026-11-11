@@ -40,7 +40,7 @@ rules below are the decisions that keep it small and battery-friendly.
 ## Stack
 
 Kotlin + Jetpack Compose (Material 3, dark theme ported from the web app's
-`DESIGN.md` palette), Room, Retrofit + OkHttp, WorkManager, DataStore for
+`DESIGN.md` palette), Room, Retrofit + OkHttp, DataStore for
 preferences, Android Keystore (AES-GCM) for token encryption, Credential
 Manager for Google Sign-In. MVVM, manual DI via an `AppContainer`.
 
@@ -66,10 +66,21 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
 - `GET /api/notes/manifest` → `[{ path, updatedAt, contentHash }]` for every
   `.md` note; `contentHash` = `"<size>:<mtimeMs>"` fingerprint (stat only).
 - `GET /api/notes/<path>` → note content as `text/plain`
-- `PUT /api/notes/<path>` → write note, body `text/plain`
+- `PUT /api/notes/<path>` → write note, body `text/plain`. `If-Match:
+  <version>` + `X-Note-Strict: 1` → 412 if the note changed;
+  `If-None-Match: *` → 409 if it exists. A version is the server's
+  `noteVersion()` (quoted sha256 hex, first 16), computed on the phone too.
+- `GET /api/history?note=<path>` → `[{ id, author, at, size, mine }]`,
+  newest first; `&id=` → that version's text. The note menu's History
+  diffs a version against the current text; Restore pushes pending edits,
+  then PUTs the version with `If-Match` + `X-Note-Restore: 1` (a version of
+  its own on the server) and writes it to Room if no typing began.
 - `POST /api/notes/<path>` → `{ folder: true }` creates a folder
-- `PATCH /api/notes/<path>` → `{ newPath }` rename/move
-- `DELETE /api/notes/<path>` → move to trash (recovers to vault `.trash`)
+- `PATCH /api/notes/<path>` → `{ newPath }` rename/move, note or folder;
+  relinks and retitles, returning `{ versions, previous }` of what it
+  rewrote. `X-Op-Id` makes a retry answer "done" instead of moving again.
+- `DELETE /api/notes/<path>` → move to trash (recovers to vault `.trash`);
+  `If-Match: <version>` → 412 if the note changed.
 - `GET /api/trash`, `POST /api/trash/restore`, `DELETE /api/trash` → the
   server trash. `GET /api/archive` → `[{ name, originalPath, archivedAt,
   isDir, notes }]`; `POST /api/archive { path }` archives a note or folder
@@ -77,67 +88,108 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
   `POST /api/archive/trash { name }` move it back or on to the trash.
   `GET /api/archive/review?days=` lists stale notes nothing links to,
   `GET /api/archive/unused` vault files no note mentions. The Bins screen
-  shows all four. Archiving is a server move: the phone pushes pending
+  shows all four. The Archive tab searches with `GET /api/search?scope=archive`
+  and reads an archived note (`GET /api/notes/.archive/...`) read-only,
+  never into Room. Archiving is a server move: the phone pushes pending
   edits first, then syncs so the notes leave Room. Task links follow notes
   into `.archive/` and `.trash/`; the phone never opens those paths as notes.
-- `GET /api/tree` → nested vault listing
-- `GET /api/search?q=` → `[{ path, title, snippet }]` (FTS5)
+- `GET /api/tree` → nested vault listing `[{ name, path, type, children }]`,
+  fetched after each sync (metadata only, memory only). It adds empty
+  folders and non-note files to the Notes tree. A file (or a relative link
+  to one) opens in another app: `GET /api/assets/` into the cache, then a
+  FileProvider `ACTION_VIEW` (`ui/OpenFile.kt`).
+- `GET /api/search?q=&folder=` → `[{ path, title, snippet }]` (FTS5),
+  `GET /api/tagged?tag=` → the same shape for a tag and its nested tags.
+  Search runs Room and the server side by side; each reply is keyed by the
+  query and folder it answers, so a late one never shows under another.
+  An exact `#tag` query uses the tag index. Opened from a project's Notes
+  tab, search stays in that folder until "Search all".
 - `GET /api/tasks` (`?note=<path>` for one note's tasks), `POST /api/tasks`,
   `PATCH|DELETE /api/tasks/<id>`, `GET|POST|DELETE /api/tasks/<id>/links`.
-  Rows are snake_case. Tasks live in the server's SQLite, not the vault, so
+  `POST /api/tasks` takes `note_paths` to link in the same request; a
+  note is pushed first (`MainViewModel.noteOnServer`), and a task is not
+  made when it can't be. Rows are snake_case. Tasks live in the server's SQLite, not the vault, so
   they are online-only: `TasksViewModel` calls the API directly, no Room.
   `waiting_since` is stamped on entering Waiting; a PATCH may set an
-  earlier start, never a future one.
-- `GET /api/projects` → `[{ path, area, created_at }]`, vault folders the
-  web registered as project boards. A task's `project` is that path;
-  subtasks follow their root's project. A project's Inbox is its backlog:
-  the main list and the All board leave it out (`onMainBoard`). Tasks with
-  no project are Quotidian; the board shows All, Quotidian or one project
-  (`ProjectView`). The Notes tab has the same tabs: All lists project
+  earlier start, never a future one. Reminders that went off (`remind_at`
+  past, task not done) sit behind a bell in the Tasks bar; snooze sets a
+  new `remind_at` (the web's choices), clear sets it null.
+- `GET /api/projects` → `[{ path, icon, color, created_at }]`, vault
+  folders the web registered as project boards. Each shows in its icon and
+  color everywhere (`projectStyle`, the web's `projects.ts`): the pick, else
+  a color hashed from the path; Quotidian is a gray home. A task's `project` is that path;
+  subtasks follow their root's project. Tasks have no areas; projects
+  replaced them. A project's undated Inbox is its backlog: All leaves it
+  out, along with its subtasks (`selectTasks`, the web's rule). Tasks with
+  no project are Quotidian; the Tasks tab and board show All, Quotidian or
+  one project (`ProjectView`), and the calendar every dated task, subtasks
+  included. The Notes tab has the same tabs: All lists project
   folders first, a project tab roots the tree (and new notes) at its
   folder, Quotidian is everything outside one. Projects are created and
   removed on the web; the phone only picks them.
 - `GET /api/shares` (`?path=` for one note's links, none for every link),
-  `POST /api/shares { path, password? }`, `PATCH /api/shares/<id>
+  `POST /api/shares { path, password?, expiresInDays? }` (1-365, none
+  never expires; listings return `expiresAt`), `PATCH /api/shares/<id>
   { password }` (null removes it), `DELETE /api/shares/<id>`. The note menu
-  manages one note's links, Settings > Shared links all of them.
+  manages one note's links, Settings > Shared links all of them; the list
+  remembers which path it holds, so a late reply never shows another
+  note's links. A note is pushed before a link is made.
 - `GET|DELETE /api/tokens` → API tokens `[{ token_hash, created_at,
   last_used_at, label }]`; DELETE body `{ token_hash }` revokes one.
   Settings lists only phones (`label` null; agent tokens are labeled). The
   phone finds its own row by hashing its token.
 - `GET /api/calendar/events?from=&to=` (epoch ms, at most 93 days) →
   `{ events: [{ id, title, start, end, allDay }], needsConnect? }`, the
-  Google Calendar linked by the web sign-in.
+  Google Calendar linked by the web sign-in. `start`/`end` are Google's
+  strings: an RFC 3339 time, or `YYYY-MM-DD` (exclusive end) for all-day
+  events, decoded to local days on the phone.
 - In-app updates do not use the backend: Settings reads the latest GitHub
   release of `BuildConfig.UPDATE_REPO` (the repo CI built from; empty in
   local builds, which skip the check) and installs its APK via
   PackageInstaller (`update/Updater.kt`).
 - `GET /api/assets/<path>` → file bytes; `POST /api/attachments?name=&folder=`
   with the file as the raw body (any type, a Content-Type is required, max
-  100 MB) → `{ path }`. Phone uploads go to `attachments/`, the web
-  default, and the note gets a note-relative `![name](path)` for images or
-  `[file](path)` for anything else.
+  100 MB) → `{ path }`. Phone uploads go where the web's do: the note's
+  project `<project>/attachments/`, else `attachments/`. The note gets a
+  `![name](path)` for images or `[file](path)` for anything else, relative
+  to where the note is when the upload ends, in `<...>` if the path has
+  spaces. Image references resolve like the web's `resolveAssetUrl`
+  (`data/Images.kt`): percent-decoded, `?`/`#` dropped.
 
 Paths are URL-encoded per segment. Backlinks are computed on the phone from
 Room (`ui/Backlinks.kt`, a port of the web's `wikilinks.ts`), not fetched.
-One `resolveWikilink` serves link taps, backlinks and `[[` autocomplete:
-vault path, then the source note's folder, then a unique name. Unlike the
-web it does not pick the shortest path when a name is ambiguous.
+One `WikiResolver` serves link taps, backlinks, mention linking and `[[`
+autocomplete: vault path, then the source note's folder, then a unique
+name. Unlike the web it does not pick the shortest path when a name is
+ambiguous; a link it writes names the path instead. Code (fences and
+inline spans) holds no links or mentions. Relative `[text](href)` links
+open notes; links with a scheme open outside the app.
 
 ## Sync engine rules
 
-On trigger (app foreground, pull-to-refresh, periodic WorkManager):
+On trigger (app foreground, 5s after edits settle, the 60s foreground tick,
+pull-to-refresh; a forced sync asked for mid-sync runs right after it):
 
-1. Fetch manifest; build `{path: contentHash}` remote map.
-2. For each Room note compare `contentHash`:
-   - local has unsynced edits (`localModifiedAt != null`) + remote changed →
-     **conflict**: fetch server copy, keep both (conflict-renamed local push)
-   - local unsynced, remote unchanged → push `PUT`
-   - remote changed, no local edits → pull `GET`, update Room
+1. Send queued moves (`moves` table) as `PATCH` with their op id, in
+   order. Renames and moves rewrite Room paths at once and only queue the
+   PATCH. A move the server refuses for good (400/404/409) is dropped; any
+   other failure ends the sync.
+2. Fetch manifest; build `{path: contentHash}` remote map.
+3. For each Room note:
+   - local has unsynced edits (`localModifiedAt != null`) → `PUT` with
+     `If-Match` on the row's `version` (the server text it builds on), or
+     `If-None-Match: *` for a new note. 412/409 → **conflict**: fetch
+     server copy, keep both (conflict-renamed local push)
+   - remote `contentHash` changed, no local edits → pull `GET`, update Room
    - neither changed → skip (the cheap majority)
-3. Room notes missing from remote + no local edits → they were deleted
-   elsewhere; delete locally. Local deletes push `DELETE`.
-4. On success, clear `localModifiedAt` and update `contentHash`/`updatedAt`.
+4. Room notes missing from remote + no local edits → they were deleted
+   elsewhere; delete locally. Local deletes push `DELETE` with `If-Match`;
+   a 412 means it changed elsewhere, and that edit wins.
+5. On success, clear `localModifiedAt` and update `contentHash`/`updatedAt`.
+   Every write is compare-and-set against the state read before the
+   request (`NoteDao`), so edits made mid-request survive. A pushed note
+   takes the fresh manifest hash only if a 304 shows the server still
+   holds the pushed text.
 
 ## Commands
 

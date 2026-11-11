@@ -2,7 +2,10 @@ package dev.mohak.scrinium.sync
 
 import dev.mohak.scrinium.data.local.NoteDao
 import dev.mohak.scrinium.data.local.NoteEntity
-import dev.mohak.scrinium.data.remote.ScriniumApi
+import dev.mohak.scrinium.data.remote.ApiException
+import dev.mohak.scrinium.data.remote.ManifestEntry
+import dev.mohak.scrinium.data.remote.NotesSyncApi
+import dev.mohak.scrinium.data.remote.noteVersion
 
 data class SyncReport(
     val pulled: Int,
@@ -16,111 +19,159 @@ data class SyncReport(
 
 class SyncEngine(
     private val dao: NoteDao,
-    private val api: ScriniumApi,
+    private val api: NotesSyncApi,
     private val tokenProvider: () -> String?
 ) {
     suspend fun syncOnce(): SyncReport {
         if (tokenProvider() == null) return emptyReport()
+        var errors = 0
+        val failures = mutableListOf<String>()
+        fun fail(what: String, e: Exception) {
+            errors++
+            if (failures.size < 5) failures += "$what: ${e.message}"
+        }
+
+        // Moves go first, in order, so the manifest already shows them. One
+        // that can never apply (source gone, target taken) is dropped and the
+        // diff below settles its notes; any other failure ends the sync, so
+        // the diff never sees the rows at paths the server doesn't have yet.
+        for (move in dao.pendingMoves()) {
+            try {
+                val result = api.moveNote(move.fromPath, move.toPath, move.opId)
+                for ((path, now) in result.versions) dao.rebase(path, result.previous[path] ?: continue, now)
+            } catch (e: ApiException) {
+                if (e.status !in GONE) throw e
+                fail("move ${move.fromPath}", e)
+            }
+            dao.dropMove(move.seq)
+        }
 
         val remote = api.fetchManifest().associateBy { it.path }
-        val local = dao.getAll()
+        // A snapshot without bodies: a note's text is read only to upload
+        // it. Edits made while a request is out are caught by the
+        // compare-and-set writes in NoteDao and pushed on the next sync.
+        val local = dao.getAllMeta()
+        val localPaths = local.mapTo(HashSet()) { it.path }
         var pulled = 0
         var pushed = 0
         var removed = 0
         var conflicts = 0
-        var errors = 0
-        val rehash = mutableListOf<String>()
-        val failures = mutableListOf<String>()
+        val written = mutableListOf<Pair<String, String>>()
+
+        // Keeps both: the server text in the row, the local text as a copy.
+        suspend fun conflict(note: NoteEntity, meta: ManifestEntry?) {
+            val server = api.fetchNote(note.path)
+            api.pushNote(conflictName(note.path), note.content, createOnly = true)
+            dao.resolveConflict(
+                note.path, note.content, server, meta?.contentHash ?: "",
+                meta?.updatedAt?.toLong() ?: 0L, noteVersion(server)
+            )
+            conflicts++
+        }
+
+        // [ifMatch] null creates; a 412 or 409 means the server holds text
+        // this edit never saw.
+        suspend fun push(note: NoteEntity, ifMatch: String?, meta: ManifestEntry?) {
+            try {
+                api.pushNote(note.path, note.content, ifMatch, createOnly = ifMatch == null)
+            } catch (e: ApiException) {
+                if (e.status != 412 && e.status != 409) throw e
+                return conflict(note, meta)
+            }
+            dao.markPushed(note.path, note.content, noteVersion(note.content))
+            written += note.path to note.content
+            pushed++
+        }
 
         for (note in local) {
+            val meta = remote[note.path]
+            // The current row with its text; null once sync removed it.
+            suspend fun body() = dao.get(note.path)
             try {
                 when {
                     note.isDeleted -> {
-                        if (remote.containsKey(note.path)) api.deleteNote(note.path)
-                        dao.delete(note.path)
+                        if (meta != null && note.contentHash.isNotEmpty()) {
+                            try {
+                                api.deleteNote(note.path, note.version.ifEmpty { null })
+                            } catch (e: ApiException) {
+                                // 412: edited elsewhere since this phone saw
+                                // it; that edit wins and comes back next sync.
+                                if (e.status != 412 && e.status != 404) throw e
+                            }
+                        } else if (meta == null && note.contentHash.isEmpty()) {
+                            // Never reached the server: upload it into the
+                            // trash so it can come back.
+                            val text = body()?.content.orEmpty()
+                            if (text.isNotBlank()) {
+                                api.pushNote(note.path, text, createOnly = true)
+                                api.deleteNote(note.path)
+                            }
+                        }
+                        dao.dropTombstone(note.path)
                         removed++
                     }
-                    !remote.containsKey(note.path) -> {
+                    meta == null -> {
                         if (note.localModifiedAt != null) {
-                            api.pushNote(note.path, note.content)
-                            dao.upsert(note.copy(localModifiedAt = null))
-                            rehash += note.path
-                            pushed++
+                            body()?.let { push(it, null, null) }
                         } else {
-                            dao.delete(note.path)
+                            dao.deleteIfClean(note.path)
                             removed++
                         }
                     }
                     note.localModifiedAt == null -> {
-                        val meta = remote.getValue(note.path)
                         if (note.contentHash == meta.contentHash) continue
                         val content = api.fetchNote(note.path)
-                        dao.upsert(
-                            note.copy(
-                                content = content,
-                                contentHash = meta.contentHash,
-                                remoteUpdatedAt = meta.updatedAt.toLong()
-                            )
-                        )
+                        dao.applyPull(note.path, content, meta.contentHash, meta.updatedAt.toLong(), noteVersion(content))
                         pulled++
                     }
-                    else -> {
-                        val meta = remote.getValue(note.path)
-                        if (note.contentHash == meta.contentHash) {
-                            api.pushNote(note.path, note.content)
-                            dao.upsert(note.copy(localModifiedAt = null))
-                            rehash += note.path
-                            pushed++
-                        } else {
-                            val serverContent = api.fetchNote(note.path)
-                            val conflictPath = conflictName(note.path)
-                            api.pushNote(conflictPath, note.content)
-                            dao.upsert(
-                                note.copy(
-                                    content = serverContent,
-                                    contentHash = meta.contentHash,
-                                    remoteUpdatedAt = meta.updatedAt.toLong(),
-                                    localModifiedAt = null
-                                )
-                            )
-                            rehash += conflictPath
-                            conflicts++
-                        }
+                    // The server checks the version, so a changed fingerprint
+                    // with the same text is no conflict.
+                    note.version.isNotEmpty() -> body()?.let { push(it, it.version, meta) }
+                    note.contentHash == meta.contentHash -> {
+                        // Rows from before versions: unchecked, as they were.
+                        val full = body() ?: continue
+                        api.pushNote(full.path, full.content)
+                        dao.markPushed(full.path, full.content, noteVersion(full.content))
+                        written += full.path to full.content
+                        pushed++
                     }
+                    else -> body()?.let { conflict(it, meta) }
                 }
             } catch (e: Exception) {
-                errors++
-                if (failures.size < 5) failures += "${note.path}: ${e.message}"
+                fail(note.path, e)
             }
         }
 
         for ((path, meta) in remote) {
-            if (local.any { it.path == path }) continue
+            if (path in localPaths) continue
             try {
                 val content = api.fetchNote(path)
-                dao.upsert(
+                dao.insertIfAbsent(
                     NoteEntity(
                         path = path,
                         content = content,
                         remoteUpdatedAt = meta.updatedAt.toLong(),
                         localModifiedAt = null,
-                        contentHash = meta.contentHash
+                        contentHash = meta.contentHash,
+                        version = noteVersion(content)
                     )
                 )
                 pulled++
             } catch (e: Exception) {
-                errors++
-                if (failures.size < 5) failures += "${path}: ${e.message}"
+                fail(path, e)
             }
         }
 
-        if (rehash.isNotEmpty()) {
+        // The PUT doesn't return the manifest fingerprint, so read it back.
+        // It is kept only when the server still holds what we wrote; if
+        // another device wrote in between, the old hash makes the next sync
+        // fetch that change.
+        if (written.isNotEmpty()) {
             try {
                 val fresh = api.fetchManifest().associateBy { it.path }
-                for (path in rehash) {
+                for ((path, content) in written) {
                     val meta = fresh[path] ?: continue
-                    val current = dao.get(path) ?: continue
-                    dao.upsert(current.copy(contentHash = meta.contentHash, remoteUpdatedAt = meta.updatedAt.toLong()))
+                    if (api.serverHolds(path, content)) dao.stampRemote(path, meta.contentHash, meta.updatedAt.toLong())
                 }
             } catch (e: Exception) {
                 // stale hashes self-correct on the next sync
@@ -131,6 +182,11 @@ class SyncEngine(
     }
 
     private fun emptyReport() = SyncReport(0, 0, 0, 0, 0, emptyList(), System.currentTimeMillis())
+
+    private companion object {
+        // A move the server refuses for good: bad target, source gone, target taken.
+        val GONE = setOf(400, 404, 409)
+    }
 
     private fun conflictName(path: String): String {
         val dot = path.lastIndexOf('.')

@@ -2,7 +2,10 @@ package dev.mohak.scrinium.data
 
 import dev.mohak.scrinium.data.local.NoteDao
 import dev.mohak.scrinium.data.local.NoteEntity
+import dev.mohak.scrinium.data.local.NoteMeta
 import dev.mohak.scrinium.data.remote.ScriniumApi
+import dev.mohak.scrinium.data.remote.VaultEntry
+import dev.mohak.scrinium.data.remote.noteVersion
 import kotlinx.coroutines.flow.Flow
 import okhttp3.RequestBody
 
@@ -15,27 +18,43 @@ fun sanitizePathSegment(raw: String): String? {
     return s.ifEmpty { null }
 }
 
+data class VaultListing(val dirs: Set<String> = emptySet(), val files: List<String> = emptyList())
+
 class NotesRepository(
     private val noteDao: NoteDao,
     private val api: ScriniumApi
 ) {
     fun observeAll(): Flow<List<NoteEntity>> = noteDao.observeAll()
 
+    fun observePending(): Flow<List<NoteMeta>> = noteDao.observePending()
+
+    suspend fun allMeta(): List<NoteMeta> = noteDao.getAllMeta()
+
+    suspend fun hasPendingMoves(): Boolean = noteDao.pendingMoves().isNotEmpty()
+
     fun observeUnsyncedCount(): Flow<Int> = noteDao.observeUnsyncedCount()
 
-    fun search(q: String): Flow<List<NoteEntity>> = noteDao.search(q)
+    fun search(q: String, prefix: String): Flow<List<NoteEntity>> = noteDao.search(q, prefix)
 
     suspend fun get(path: String): NoteEntity? = noteDao.get(path)
 
-    suspend fun saveLocally(path: String, content: String) {
+    fun observe(path: String): Flow<NoteEntity?> = noteDao.observe(path)
+
+    // [base] is the text the edit was typed over. If a pull replaced it in
+    // the meantime, the row keeps base's version so the push conflicts
+    // instead of overwriting the pulled text (a clean row's version is its
+    // content's).
+    suspend fun saveLocally(path: String, content: String, base: String? = null) {
         val existing = noteDao.get(path)
+        val pulledOver = base?.takeIf { existing != null && existing.localModifiedAt == null && existing.content != it }
         noteDao.upsert(
             NoteEntity(
                 path = path,
                 content = content,
                 remoteUpdatedAt = existing?.remoteUpdatedAt ?: 0L,
                 localModifiedAt = System.currentTimeMillis(),
-                contentHash = existing?.contentHash ?: ""
+                contentHash = existing?.contentHash ?: "",
+                version = pulledOver?.let(::noteVersion) ?: existing?.version ?: ""
             )
         )
     }
@@ -61,9 +80,8 @@ class NotesRepository(
     }
 
     /**
-     * Local-only rename. The old path is tombstoned ([isDeleted]) so the next
-     * sync pushes DELETE, and the new path carries [localModifiedAt] so the
-     * same sync pushes PUT. Never touches the network — safe offline.
+     * Local-only rename: the row moves now, and the next sync sends the
+     * server move (NoteDao.move). Never touches the network, safe offline.
      * Returns the new path, or null when there is nothing to do (including a
      * tombstoned source). Throws [IllegalArgumentException] when the target
      * path already exists.
@@ -79,21 +97,16 @@ class NotesRepository(
         if (noteDao.get(newPath) != null) {
             throw IllegalArgumentException("A note already exists at $newPath")
         }
-        val now = System.currentTimeMillis()
-        noteDao.upsert(existing.copy(isDeleted = true, localModifiedAt = now))
-        noteDao.upsert(
-            NoteEntity(
-                path = newPath,
-                content = existing.content,
-                remoteUpdatedAt = existing.remoteUpdatedAt,
-                localModifiedAt = now,
-                contentHash = existing.contentHash
-            )
-        )
+        noteDao.move(path, newPath)
         return newPath
     }
 
-    suspend fun networkSearch(q: String) = api.search(q)
+    suspend fun networkSearch(q: String, folder: String?) = api.search(q, folder)
+
+    suspend fun searchArchive(q: String) = api.searchArchive(q)
+
+    // Archived notes are read-only and never enter Room; reads reach them.
+    suspend fun archivedText(path: String) = api.fetchNote(path)
 
     suspend fun fetchTags() = api.fetchTags()
 
@@ -122,11 +135,44 @@ class NotesRepository(
     // Trashes any vault file on the server; for files Room doesn't hold.
     suspend fun trashRemote(path: String) = api.deleteNote(path)
 
+    suspend fun history(path: String) = api.history(path)
+
+    // What the manifest can't show: every folder (empty ones too) and the
+    // files that aren't notes. Metadata only.
+    suspend fun vaultListing(): VaultListing {
+        val dirs = mutableSetOf<String>()
+        val files = mutableListOf<String>()
+        fun walk(entries: List<VaultEntry>) {
+            for (e in entries) {
+                if (e.type == "directory") {
+                    dirs += e.path
+                    walk(e.children)
+                } else if (!e.path.endsWith(".md", ignoreCase = true)) files += e.path
+            }
+        }
+        walk(api.tree())
+        return VaultListing(dirs, files)
+    }
+
+    suspend fun fileBytes(path: String) = api.fetchAsset(path)
+
+    suspend fun historyText(path: String, id: Long) = api.historyText(path, id)
+
+    // Puts [content] back on the server over the clean row's text, then into
+    // Room unless typing began meanwhile (that edit then conflicts on push).
+    // The blank hash makes the next sync take the server's fingerprint.
+    suspend fun restoreVersion(path: String, content: String) {
+        val row = noteDao.get(path)?.takeIf { it.localModifiedAt == null && !it.isDeleted }
+            ?: throw IllegalStateException("the note has unsynced edits")
+        api.restoreNote(path, content, row.version.ifEmpty { noteVersion(row.content) })
+        noteDao.applyPull(path, content, "", System.currentTimeMillis(), noteVersion(content))
+    }
+
     suspend fun fetchShares(path: String?) = api.fetchShares(path)
 
     suspend fun setSharePassword(id: String, password: String?) = api.setSharePassword(id, password)
 
-    suspend fun createShare(path: String, password: String?) = api.createShare(path, password)
+    suspend fun createShare(path: String, password: String?, expiresInDays: Int?) = api.createShare(path, password, expiresInDays)
 
     suspend fun deleteShare(id: String) = api.deleteShare(id)
 
@@ -136,30 +182,8 @@ class NotesRepository(
         api.uploadAttachment(body, fileName, folder)
 
     /**
-     * Pulls a server-side note into Room with its manifest hash, so the next
-     * sync treats it as up to date instead of re-pulling or — worse —
-     * conflict-duplicating it. Returns null when the note is already gone
-     * server-side.
-     */
-    suspend fun pullNote(path: String): NoteEntity? {
-        val content = api.fetchNote(path)
-        val meta = api.fetchManifest().firstOrNull { it.path == path } ?: return null
-        val entity = NoteEntity(
-            path = path,
-            content = content,
-            remoteUpdatedAt = meta.updatedAt.toLong(),
-            localModifiedAt = null,
-            contentHash = meta.contentHash
-        )
-        noteDao.upsert(entity)
-        return entity
-    }
-
-    /**
-     * Local-only move. Same tombstone + PUT mechanism as [renameNote], so the
-     * next sync deletes the old path and pushes the new one — the server
-     * creates intermediate directories on PUT. Never touches the network.
-     * A colliding destination gets a "name (N)" suffix instead of failing
+     * Local-only move, synced like [renameNote]; the server creates missing
+     * folders. Never touches the network. A colliding destination gets a "name (N)" suffix instead of failing
      * (same convention as the web client's uniquePath): a drag never typed
      * a name, so there is nothing to correct.
      * Returns the new path, or null when there is nothing to do.
@@ -173,23 +197,13 @@ class NotesRepository(
         if (noteDao.get(newPath) != null) {
             newPath = uniqueNotePath(newParent, base)
         }
-        val now = System.currentTimeMillis()
-        noteDao.upsert(existing.copy(isDeleted = true, localModifiedAt = now))
-        noteDao.upsert(
-            NoteEntity(
-                path = newPath,
-                content = existing.content,
-                remoteUpdatedAt = existing.remoteUpdatedAt,
-                localModifiedAt = now,
-                contentHash = existing.contentHash
-            )
-        )
+        noteDao.move(path, newPath)
         return newPath
     }
 
     /**
      * Local-only folder rename: rewrites the path prefix of every note under
-     * [folder]. Sync pushes one DELETE + PUT per note. Returns the new
+     * [folder] and queues one server move for the folder. Returns the new
      * folder path, or null when there is nothing to do.
      */
     suspend fun renameFolder(folder: String, newName: String): String? {
@@ -216,42 +230,20 @@ class NotesRepository(
         return rewritePrefix(folder, uniqueFolderPrefix(newPrefix))
     }
 
+    // Tombstones move with the folder, so their deletes follow it.
     private suspend fun rewritePrefix(folder: String, newPrefix: String): String? {
-        val all = noteDao.getAll().filter { !it.isDeleted }
-        val affected = all.filter { it.path.startsWith("$folder/") }
-        if (affected.isEmpty()) return null
-        if (all.any { it.path.startsWith("$newPrefix/") }) {
+        val all = noteDao.getAllMeta()
+        if (all.none { !it.isDeleted && it.path.startsWith("$folder/") }) return null
+        if (all.any { it.path == newPrefix || it.path.startsWith("$newPrefix/") }) {
             throw IllegalArgumentException("A folder already exists at $newPrefix")
         }
-        for (note in affected) {
-            val target = newPrefix + note.path.removePrefix(folder)
-            if (noteDao.get(target) != null) {
-                throw IllegalArgumentException("A note already exists at $target")
-            }
-        }
-        val now = System.currentTimeMillis()
-        for (note in affected) {
-            val target = newPrefix + note.path.removePrefix(folder)
-            noteDao.upsert(note.copy(isDeleted = true, localModifiedAt = now))
-            noteDao.upsert(
-                NoteEntity(
-                    path = target,
-                    content = note.content,
-                    remoteUpdatedAt = note.remoteUpdatedAt,
-                    localModifiedAt = now,
-                    contentHash = note.contentHash
-                )
-            )
-        }
+        noteDao.move(folder, newPrefix)
         return newPrefix
     }
 
-    /** Local-only folder delete: tombstones every note under [folder]. */
+    /** Local-only folder delete: tombstones every note under [folder] in one transaction. */
     suspend fun deleteFolder(folder: String) {
-        val now = System.currentTimeMillis()
-        for (note in noteDao.getAll().filter { !it.isDeleted && it.path.startsWith("$folder/") }) {
-            noteDao.upsert(note.copy(isDeleted = true, localModifiedAt = now))
-        }
+        noteDao.tombstoneFolder(folder, System.currentTimeMillis())
     }
 
     private fun normalizeFolder(raw: String): String {
@@ -275,11 +267,11 @@ class NotesRepository(
         }
     }
 
-    // First free "base (N)" for a colliding folder destination. Only live
-    // notes count — tombstones are already on their way out.
+    // First free "base (N)" for a colliding folder destination. Tombstones
+    // count: a row can't move onto one.
     private suspend fun uniqueFolderPrefix(want: String): String {
-        val live = noteDao.getAll().filter { !it.isDeleted }
-        fun taken(prefix: String) = live.any { it.path == prefix || it.path.startsWith("$prefix/") }
+        val all = noteDao.getAllMeta()
+        fun taken(prefix: String) = all.any { it.path == prefix || it.path.startsWith("$prefix/") }
         if (!taken(want)) return want
         var i = 1
         while (true) {

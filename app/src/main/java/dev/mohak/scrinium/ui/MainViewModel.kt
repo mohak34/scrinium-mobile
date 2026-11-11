@@ -13,10 +13,12 @@ import dev.mohak.scrinium.data.ImageLoader
 import dev.mohak.scrinium.data.ImageSource
 import dev.mohak.scrinium.data.NotesRepository
 import dev.mohak.scrinium.data.Prefs
-import dev.mohak.scrinium.data.attachmentMarkdown
+import dev.mohak.scrinium.data.VaultListing
 import dev.mohak.scrinium.data.resolveImage
 import dev.mohak.scrinium.data.SessionRepository
 import dev.mohak.scrinium.data.local.NoteEntity
+import dev.mohak.scrinium.data.local.NoteMeta
+import dev.mohak.scrinium.data.remote.ApiException
 import dev.mohak.scrinium.data.remote.ApiTokenDto
 import dev.mohak.scrinium.data.remote.PublicShare
 import dev.mohak.scrinium.data.remote.SearchResult
@@ -49,6 +51,7 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -98,7 +101,18 @@ private var nextEditorId = 0L
 // [id] names one open-note session: a fresh one per note opened, kept by
 // renames (copy), so the editor field survives its note changing path.
 // `isNew` notes open in edit mode; everything else opens in reading view.
-data class EditorState(val path: String, val text: String, val isNew: Boolean = false, val id: Long = ++nextEditorId)
+// [dirty] is typing not yet saved to Room. A clean editor follows Room, so a
+// sync pull shows up in it and closing it never writes the old copy back.
+// [base] is the Room text the typing builds on; a save over a newer pull
+// pushes as a conflict instead of overwriting it.
+data class EditorState(
+    val path: String,
+    val text: String,
+    val isNew: Boolean = false,
+    val dirty: Boolean = false,
+    val base: String = text,
+    val id: Long = ++nextEditorId
+)
 
 class MainViewModel(
     private val session: SessionRepository,
@@ -124,8 +138,7 @@ class MainViewModel(
 
     // Everything waiting to upload, deletion markers included (a rename or
     // move is a marker at the old path plus an edit at the new one).
-    val pendingNotes: StateFlow<List<NoteEntity>> = notes.observeAll()
-        .map { list -> list.filter { it.localModifiedAt != null }.sortedByDescending { it.localModifiedAt } }
+    val pendingNotes: StateFlow<List<NoteMeta>> = notes.observePending()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _unsyncedCount = MutableStateFlow(0)
@@ -203,7 +216,8 @@ class MainViewModel(
         autoSyncJob?.cancel()
         autoSyncJob = viewModelScope.launch {
             delay(AUTO_PUSH_DELAY_MS)
-            if (!session.isSignedIn()) return@launch
+            // Backgrounded: the edit waits in Room for the next foreground sync.
+            if (!session.isSignedIn() || !inForeground()) return@launch
             syncNow(force = true, quiet = true)
         }
     }
@@ -235,46 +249,79 @@ class MainViewModel(
         }
     }
 
-    // Saves in-flight editor text to Room (with title sync + auto-push).
-    // openNote used to drop text typed right before a wikilink tap.
+    // Saves unsaved editor typing to Room (with title sync + auto-push)
+    // before the editor switches note, closes or the vault is checked.
     private suspend fun flushEditor() {
-        val current = _editor.value ?: return
+        val current = _editor.value?.takeIf { it.dirty } ?: return
         if (isArchiving(current.path)) return
         val stored = notes.get(current.path)
         if (stored != null && !stored.isDeleted && stored.content != current.text) {
-            notes.saveLocally(current.path, current.text)
+            notes.saveLocally(current.path, current.text, current.base)
             maybeSyncTitleToFilename(current.path, current.text)
             scheduleAutoSync()
         }
+        markSaved(current.path, current.text)
     }
+
+    // Room now holds [text]: later typing builds on it, and the editor is
+    // clean again if that is exactly what it shows.
+    private fun markSaved(path: String, text: String) =
+        _editor.update { if (it?.path == path) it.copy(base = text, dirty = it.dirty && it.text != text) else it }
 
     data class SearchHit(val path: String, val title: String, val snippet: String?)
 
-    @OptIn(ExperimentalCoroutinesApi::class)
-    private val localHits = searchQuery
+    // Search runs inside one project folder when opened from that project's
+    // Notes tab; null searches the vault.
+    private val _searchFolder = MutableStateFlow<String?>(null)
+    val searchFolder: StateFlow<String?> = _searchFolder.asStateFlow()
+    fun clearSearchFolder() { _searchFolder.value = null }
+
+    private data class SearchKey(val query: String, val folder: String?) {
+        /** The tag of an exact `#tag` query, matched like the web's tag pane. */
+        val tag: String? get() = tagQueryRe.matchEntire(query)?.groupValues?.get(1)
+        fun holds(path: String) = folder == null || path.startsWith("$folder/")
+    }
+
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
+    private val searchKey = combine(searchQuery, _searchFolder) { q, f -> SearchKey(q.trim(), f) }
         .debounce(250)
         .distinctUntilChanged()
-        .flatMapLatest { q ->
-            if (q.isBlank()) notes.observeAll() else notes.search(q)
-        }
-        .map { list -> list.filter { !it.isDeleted } }
 
-    // Server FTS runs alongside local search: better ranking plus notes the
-    // phone hasn't synced yet. Read-only and quiet — offline just yields
-    // local results.
+    // Each result list carries the key it answers, so a slow reply for an
+    // older query or scope never shows under the current one.
     @OptIn(ExperimentalCoroutinesApi::class)
-    private val serverHits: StateFlow<List<SearchResult>> = searchQuery
-        .debounce(400)
-        .distinctUntilChanged()
-        .filter { it.isNotBlank() }
-        .flatMapLatest { q ->
-            flow { emit(notes.networkSearch(q)) }.catch { emit(emptyList()) }
+    private val localHits = searchKey.flatMapLatest { k ->
+        val tag = k.tag
+        when {
+            k.query.isBlank() -> flowOf(k to emptyList())
+            tag != null -> notesFlow.map { list -> k to list.filter { k.holds(it.path) && hasTag(it.content, tag) } }
+            else -> notes.search(k.query, k.folder?.let { "$it/" } ?: "").map { k to it }
+        }
+    }
+
+    // Server FTS (or the tag index for `#tag`) runs alongside local search:
+    // better ranking, frontmatter tags, and notes the phone hasn't synced
+    // yet. Read-only and quiet: offline just yields local results.
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val serverHits: StateFlow<Pair<SearchKey, List<SearchResult>>?> = searchKey
+        .filter { it.query.isNotBlank() }
+        .flatMapLatest { k ->
+            flow {
+                val tag = k.tag
+                val hits = if (tag != null) {
+                    notes.fetchTagged(tag).filter { k.holds(it.path) }.map { SearchResult(it.path, it.title, it.snippet) }
+                } else {
+                    notes.networkSearch(k.query, k.folder)
+                }
+                emit(k to hits)
+            }.catch { emit(k to emptyList()) }
         }
         .flowOn(Dispatchers.IO)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     val searchResults: StateFlow<List<SearchHit>> =
-        combine(localHits, serverHits, searchQuery) { local, server, q ->
+        combine(localHits, serverHits) { (key, local), server ->
+            val q = key.query
             if (q.isBlank()) return@combine emptyList()
             val localPaths = local.map { it.path }.toSet()
             buildList {
@@ -289,7 +336,7 @@ class MainViewModel(
                 for (note in ranked) {
                     add(SearchHit(note.path, noteTitle(note.path, note.content), snippet(note.content, q)))
                 }
-                for (hit in server) {
+                if (server?.first == key) for (hit in server.second) {
                     if (hit.path !in localPaths) add(SearchHit(hit.path, hit.title, hit.snippet))
                 }
             }
@@ -313,10 +360,25 @@ class MainViewModel(
                     if (isArchiving(target)) return@collect
                     val stored = notes.get(target)
                     if (stored?.isDeleted == true) return@collect
-                    val latest = _editor.value?.takeIf { it.path == target }?.text ?: text
-                    if (stored?.content == latest) return@collect
-                    notes.saveLocally(target, latest)
-                    scheduleAutoSync()
+                    val open = _editor.value?.takeIf { it.path == target }
+                    val latest = open?.text ?: text
+                    if (stored?.content != latest) {
+                        notes.saveLocally(target, latest, open?.base)
+                        scheduleAutoSync()
+                    }
+                    markSaved(target, latest)
+                }
+        }
+        // A clean editor adopts what Room holds for its note (a sync pull);
+        // a dirty one keeps the typing, which saves over it.
+        viewModelScope.launch {
+            _editor.map { it?.path }
+                .distinctUntilChanged()
+                .flatMapLatest { path -> if (path == null) flowOf(null) else notes.observe(path) }
+                .filterNotNull()
+                .collect { note ->
+                    if (note.isDeleted) return@collect
+                    _editor.update { if (it != null && !it.dirty && it.path == note.path && it.text != note.content) it.copy(text = note.content, base = note.content) else it }
                 }
         }
         viewModelScope.launch {
@@ -339,12 +401,7 @@ class MainViewModel(
         viewModelScope.launch {
             while (true) {
                 delay(FOREGROUND_PULL_MS)
-                if (ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(
-                        androidx.lifecycle.Lifecycle.State.STARTED
-                    )
-                ) {
-                    syncTick()
-                }
+                if (inForeground()) syncTick()
             }
         }
     }
@@ -382,8 +439,8 @@ class MainViewModel(
         }
     }
 
-    // Server-only hits aren't in Room yet — pull them in (with manifest hash
-    // so sync stays consistent) and open straight from the pulled content.
+    // Server-only hits aren't in Room yet: a sync brings them in (and pushes
+    // a local delete of the same path first, so a deleted note stays deleted).
     fun openSearchHit(hit: SearchHit) {
         viewModelScope.launch {
             val local = notes.get(hit.path)
@@ -392,21 +449,10 @@ class MainViewModel(
                 return@launch
             }
             try {
-                val pulled = notes.pullNote(hit.path)
-                if (pulled == null) {
-                    _sync.update { it.copy(error = "Note is no longer on the server") }
-                    return@launch
-                }
                 flushEditor()
-                if (_editor.value?.path == pulled.path) {
-                    _screen.value = Screen.Editor(pulled.path)
-                    return@launch
-                }
-                pushHistoryForLeave()
-                _editor.value = EditorState(pulled.path, pulled.content)
-                editorEdits.value = null
-                titleSyncEdits.value = null
-                _screen.value = Screen.Editor(pulled.path)
+                runSync()
+                if (notes.get(hit.path)?.isDeleted == false) openNote(hit.path)
+                else _sync.update { it.copy(error = "Note is no longer on the server") }
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Couldn't open note: ${e.message}") }
             }
@@ -417,7 +463,8 @@ class MainViewModel(
 
     fun createNoteIn(folder: String) {
         viewModelScope.launch {
-            val existing = notes.observeAll().first().map { it.path }
+            flushEditor()
+            val existing = notes.allMeta().map { it.path }
             try {
                 val note = notes.createNote(existing, folder, prefs::newNoteBody)
                 _editor.value = EditorState(note.path, note.content, isNew = true)
@@ -433,18 +480,19 @@ class MainViewModel(
 
     fun updateEditorText(text: String) {
         val current = _editor.value ?: return
-        _editor.value = current.copy(text = text)
+        if (text == current.text) return
+        _editor.value = current.copy(text = text, dirty = true)
         editorEdits.value = current.path to text
         titleSyncEdits.value = current.path to text
     }
 
     // Web parity: editing the title renames the file — frontmatter `title:`
-    // first, else the H1. Local-only tombstone + PUT like a manual rename.
+    // first, else the H1. Local-only, synced like a manual rename.
     // Skips quietly on collision — the file keeps its name instead of
     // gaining a surprise suffix.
     private suspend fun maybeSyncTitleToFilename(path: String, text: String) {
         val dir = path.substringBeforeLast('/', "")
-        val stem = path.substringAfterLast('/').removeSuffix(".md")
+        val stem = noteStem(path)
         val title = effectiveTitle(text, stem)
         if (title == stem) return
         val safe = sanitizeTitleForFilename(title) ?: return
@@ -500,13 +548,21 @@ class MainViewModel(
 
     fun openSearch() {
         _searchOrigin.value = _screen.value
+        scopeSearchToProject()
         _screen.update { Screen.Search }
+    }
+
+    private fun scopeSearchToProject() {
+        _searchFolder.value = if (_screen.value == Screen.Notes) (_notesView.value as? ProjectView.Project)?.path else null
     }
     fun openSettings() = _screen.update { Screen.Settings }
 
     /** Bottom-tab switch. Search remembers the tab it was opened from. */
     fun openTab(tab: Screen) {
-        if (tab == Screen.Search && _screen.value != Screen.Search) _searchOrigin.value = _screen.value
+        if (tab == Screen.Search && _screen.value != Screen.Search) {
+            _searchOrigin.value = _screen.value
+            scopeSearchToProject()
+        }
         _screen.value = tab
     }
 
@@ -591,7 +647,7 @@ class MainViewModel(
                     if (tab == BinTab.Review) _review.value = emptyList() else _unused.value = emptyList()
                     flushEditor()
                     runSync()
-                    if (notes.observeAll().first().any { it.localModifiedAt != null }) {
+                    if (notes.allMeta().any { it.localModifiedAt != null }) {
                         throw IllegalStateException("some edits are not synced yet")
                     }
                 }
@@ -635,7 +691,7 @@ class MainViewModel(
                     if (_screen.value is Screen.Editor) _screen.value = Screen.Notes
                 }
                 runSync()
-                if (notes.observeAll().first().any { under(it.path) && it.localModifiedAt != null }) {
+                if (notes.allMeta().any { under(it.path) && it.localModifiedAt != null }) {
                     throw IllegalStateException("some edits are not synced yet")
                 }
                 notes.archive(target)
@@ -682,9 +738,22 @@ class MainViewModel(
         deleteNote(note.path)
     }
 
+    // The list may predate a link typed since, so it is rebuilt from a fully
+    // pushed vault first; a file that gained a mention is kept.
     fun trashUnused(file: UnusedFile) {
         viewModelScope.launch {
             try {
+                flushEditor()
+                runSync()
+                if (notes.allMeta().any { it.localModifiedAt != null }) {
+                    throw IllegalStateException("some edits are not synced yet")
+                }
+                val fresh = notes.fetchUnused()
+                _unused.value = fresh
+                if (fresh.none { it.path == file.path }) {
+                    _sync.update { it.copy(error = "${file.path.substringAfterLast('/')} is used now; kept it") }
+                    return@launch
+                }
                 notes.trashRemote(file.path)
                 _unused.update { list -> list.filterNot { it.path == file.path } }
             } catch (e: Exception) {
@@ -699,11 +768,12 @@ class MainViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             _taggedLoading.value = true
             try {
-                _taggedHits.value = notes.fetchTagged(tag)
+                val hits = notes.fetchTagged(tag)
+                if (_selectedTag.value == tag) _taggedHits.value = hits
             } catch (e: Exception) {
-                _sync.update { it.copy(error = "Couldn't load tag: ${e.message}") }
+                if (_selectedTag.value == tag) _sync.update { it.copy(error = "Couldn't load tag: ${e.message}") }
             } finally {
-                _taggedLoading.value = false
+                if (_selectedTag.value == tag) _taggedLoading.value = false
             }
         }
     }
@@ -788,19 +858,40 @@ class MainViewModel(
         val target = targetRaw.substringBefore('#').trim()
         if (target.isEmpty()) return
         viewModelScope.launch {
-            val paths = notes.observeAll().first().filter { !it.isDeleted }.map { it.path }
+            val paths = livePaths()
             val hit = resolveWikilink(target, _editor.value?.path ?: "", paths)
             if (hit != null) {
                 openNote(hit)
                 return@launch
             }
-            val stem = target.substringAfterLast('/').removeSuffix(".md")
-            val matches = paths.count { it.substringAfterLast('/').removeSuffix(".md").equals(stem, ignoreCase = true) }
+            val stem = noteStem(target)
+            val matches = paths.count { noteStem(it).equals(stem, ignoreCase = true) }
             _sync.update {
                 it.copy(error = if (matches == 0) "Note not found: $target" else "Multiple notes match: $target")
             }
         }
     }
+
+    // A relative Markdown link in the open note: a note opens, anything
+    // else says the phone can't open it. External links open in the UI.
+    fun openMarkdownLink(href: String) {
+        val source = _editor.value?.path ?: return
+        val path = resolveMarkdownLink(href, source) ?: return
+        viewModelScope.launch {
+            val paths = livePaths()
+            val hit = paths.firstOrNull { it.equals(path, ignoreCase = true) }
+                ?: paths.firstOrNull { it.equals("$path.md", ignoreCase = true) }
+            if (hit != null) openNote(hit)
+            else _sync.update { it.copy(error = if (path.endsWith(".md", ignoreCase = true)) "Note not found: $path" else "Can't open $path on the phone") }
+        }
+    }
+
+    // `[[name]]` for [path] as a link written in the open note (or the vault
+    // root) would name it.
+    suspend fun wikilinkTo(path: String): String =
+        "[[${WikiResolver(livePaths()).targetFor(path, _editor.value?.path ?: "")}]]"
+
+    private suspend fun livePaths(): List<String> = notes.allMeta().filter { !it.isDeleted }.map { it.path }
 
     fun toggleTaskLine(lineIdx: Int) {
         val current = _editor.value ?: return
@@ -820,15 +911,18 @@ class MainViewModel(
 
     fun searchTag(tag: String) {
         searchQuery.value = "#$tag"
+        _searchFolder.value = null
         _searchOrigin.value = _screen.value
         _screen.update { Screen.Search }
     }
 
-    // Public share links: the open note's, or every link (null path) for
-    // Settings. Server holds the links; the public URL is base + /s/<id>,
-    // same as the web client builds.
-    private val _shares = MutableStateFlow<List<PublicShare>>(emptyList())
-    val shares: StateFlow<List<PublicShare>> = _shares.asStateFlow()
+    // Public share links: one note's, or every link (null path) for
+    // Settings. A response only lands if the list still belongs to the
+    // path it was asked for. Server holds the links; the public URL is
+    // base + /s/<id>, same as the web client builds.
+    data class ShareList(val path: String?, val links: List<PublicShare>)
+    private val _shares = MutableStateFlow(ShareList(null, emptyList()))
+    val shares: StateFlow<ShareList> = _shares.asStateFlow()
     private val _sharesLoading = MutableStateFlow(false)
     val sharesLoading: StateFlow<Boolean> = _sharesLoading.asStateFlow()
 
@@ -836,10 +930,12 @@ class MainViewModel(
         "${BuildConfig.SCRINIUM_API_URL.trimEnd('/')}/s/$id"
 
     fun loadShares(path: String?) {
+        _shares.value = ShareList(path, emptyList())
         viewModelScope.launch(Dispatchers.IO) {
             _sharesLoading.value = true
             try {
-                _shares.value = notes.fetchShares(path)
+                val links = notes.fetchShares(path)
+                _shares.update { if (it.path == path) ShareList(path, links) else it }
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Couldn't load links: ${e.message}") }
             } finally {
@@ -848,15 +944,63 @@ class MainViewModel(
         }
     }
 
-    fun createShareLink(path: String, password: String?) {
+    /**
+     * Pushes [path]'s unsaved typing and unsynced edits, and any queued
+     * move, so the server holds the note as shown. Returns its current
+     * path; throws when it still isn't there (offline). Share links and
+     * task links point at the server's copy, so they call this first.
+     */
+    suspend fun noteOnServer(path: String): String {
+        flushEditor()
+        fun ready(row: NoteEntity?) = row != null && !row.isDeleted && row.localModifiedAt == null &&
+            (row.version.isNotEmpty() || row.contentHash.isNotEmpty())
+        if (!ready(notes.get(currentPath(path))) || notes.hasPendingMoves()) runSync()
+        val target = currentPath(path)
+        if (!ready(notes.get(target)) || notes.hasPendingMoves()) throw IllegalStateException("the note isn't synced yet")
+        return target
+    }
+
+    suspend fun searchArchive(q: String) = notes.searchArchive(q)
+
+    suspend fun archivedText(path: String) = notes.archivedText(path)
+
+    // The note's text as Room holds it, after any unsaved typing.
+    suspend fun noteContent(path: String): String {
+        flushEditor()
+        return notes.get(currentPath(path))?.content.orEmpty()
+    }
+
+    // A note's saved versions on the server, newest first, and one's text.
+    suspend fun noteHistory(path: String) = notes.history(currentPath(path))
+
+    suspend fun historyText(path: String, id: Long) = notes.historyText(currentPath(path), id)
+
+    // Puts a past version back as a new write. Pending edits go first, so
+    // the server's history keeps them as the version before the restore.
+    fun restoreVersion(path: String, content: String) {
+        viewModelScope.launch {
+            try {
+                notes.restoreVersion(noteOnServer(path), content)
+            } catch (e: ApiException) {
+                _sync.update { it.copy(error = if (e.status == 412) "The note changed meanwhile. Try again." else "Restore failed: ${e.message}") }
+            } catch (e: Exception) {
+                _sync.update { it.copy(error = "Restore failed: ${e.message}") }
+            }
+        }
+    }
+
+    // The note is pushed first: the server shares what it holds, and a
+    // note it has never seen can't be shared at all.
+    fun createShareLink(path: String, password: String?, expiresInDays: Int?) {
         if (password != null && password.isNotBlank() && password.length < 4) {
             _sync.update { it.copy(error = "Password needs at least 4 characters") }
             return
         }
         viewModelScope.launch {
             try {
-                val share = notes.createShare(path, password)
-                _shares.update { listOf(share) + it }
+                val target = noteOnServer(path)
+                val share = notes.createShare(target, password, expiresInDays)
+                _shares.update { if (it.path == path || it.path == target) it.copy(links = listOf(share) + it.links) else it }
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Share failed: ${e.message}") }
             }
@@ -872,7 +1016,7 @@ class MainViewModel(
         viewModelScope.launch {
             try {
                 val share = notes.setSharePassword(id, password)
-                _shares.update { list -> list.map { if (it.id == id) share else it } }
+                _shares.update { list -> list.copy(links = list.links.map { if (it.id == id) share else it }) }
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Password change failed: ${e.message}") }
             }
@@ -883,7 +1027,7 @@ class MainViewModel(
         viewModelScope.launch {
             try {
                 notes.deleteShare(id)
-                _shares.update { it.filterNot { s -> s.id == id } }
+                _shares.update { list -> list.copy(links = list.links.filterNot { it.id == id }) }
             } catch (e: Exception) {
                 _sync.update { it.copy(error = "Unshare failed: ${e.message}") }
             }
@@ -910,7 +1054,7 @@ class MainViewModel(
         val target = _editor.value?.path ?: return
         viewModelScope.launch {
             val source = notes.get(sourcePath) ?: return@launch
-            val updated = linkFirstMention(source.content, target) ?: return@launch
+            val updated = linkFirstMention(source.content, sourcePath, target, WikiResolver(livePaths())) ?: return@launch
             notes.saveLocally(sourcePath, updated)
             scheduleAutoSync()
             loadBacklinks()
@@ -929,26 +1073,26 @@ class MainViewModel(
     }
 
     /**
-     * Uploads a picked image to the vault's attachments folder (the web
-     * default) and returns the markdown to insert, path relative to the note.
-     * Online only; failures surface in the error banner.
+     * Uploads a picked image into [folder] (see attachmentFolder) and returns
+     * the vault path it landed at. Online only; failures surface in the
+     * error banner.
      */
-    suspend fun uploadImage(notePath: String, bytes: ByteArray, mimeType: String?, name: String): String? =
-        upload(notePath) {
+    suspend fun uploadImage(folder: String, bytes: ByteArray, mimeType: String?, name: String): String? =
+        upload {
             val (body, mime) = withContext(Dispatchers.Default) { ImageLoader.prepareUpload(bytes, mimeType) }
                 ?: throw IllegalArgumentException("Unsupported image")
             val ext = mime.substringAfter('/').replace("jpeg", "jpg")
             val base = name.substringBeforeLast('.').ifBlank { "image" }
-            notes.uploadAttachment(body.toRequestBody(mime.toMediaType()), "$base.$ext", ATTACHMENTS_FOLDER)
+            notes.uploadAttachment(body.toRequestBody(mime.toMediaType()), "$base.$ext", folder)
         }
 
     /** Any other file, streamed as-is; same contract as [uploadImage]. */
-    suspend fun uploadFile(notePath: String, body: RequestBody, name: String): String? =
-        upload(notePath) { notes.uploadAttachment(body, name, ATTACHMENTS_FOLDER) }
+    suspend fun uploadFile(folder: String, body: RequestBody, name: String): String? =
+        upload { notes.uploadAttachment(body, name, folder) }
 
-    private suspend fun upload(notePath: String, send: suspend () -> String): String? {
+    private suspend fun upload(send: suspend () -> String): String? {
         return try {
-            attachmentMarkdown(notePath, send())
+            send()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -986,7 +1130,7 @@ class MainViewModel(
                 null -> null
             }
         }
-        val title = effectiveTitle(text, notePath.substringAfterLast('/').removeSuffix(".md"))
+        val title = effectiveTitle(text, noteStem(notePath))
         return withContext(Dispatchers.Default) { noteHtml(title, text) { sources[it] } }
     }
 
@@ -1011,9 +1155,9 @@ class MainViewModel(
         _editor.value?.let { renameNote(it.path, newName) }
     }
 
-    // Renames a note, open or not. Filename -> title: the H1/frontmatter
-    // follows the new name, same as the web client; never injects a title
-    // into a note that has none.
+    // Renames a note, open or not. Filename -> title like the web's retitle:
+    // a title that matched the old name follows the new one, a custom title
+    // stays, and a note without one never gains one.
     fun renameNote(path: String, newName: String) {
         viewModelScope.launch {
             flushEditor()
@@ -1023,12 +1167,10 @@ class MainViewModel(
                 followMove(source, newPath)
                 val open = _editor.value?.takeIf { it.path == newPath }
                 val text = open?.text ?: notes.get(newPath)?.content ?: return@launch
-                val stem = newPath.substringAfterLast('/').removeSuffix(".md")
-                if (effectiveTitle(text, "") != stem) {
-                    setEffectiveTitle(text, stem)?.let { updated ->
-                        notes.saveLocally(newPath, updated)
-                        if (open != null) _editor.value = open.copy(text = updated)
-                    }
+                val updated = retitle(text, source, newPath)
+                if (updated != text) {
+                    notes.saveLocally(newPath, updated)
+                    if (open != null) _editor.value = open.copy(text = updated, base = updated)
                 }
                 scheduleAutoSync()
             } catch (e: Exception) {
@@ -1079,14 +1221,14 @@ class MainViewModel(
 
     // Where the open note went on each rename or move this session. Dialogs,
     // history and pending saves can hold a path an automatic title rename
-    // has since tombstoned; [currentPath] follows the chain to the live note.
+    // has since moved; [currentPath] follows the chain to the live note.
     private val movedTo = mutableMapOf<String, String>()
 
     private suspend fun currentPath(path: String): String {
         var p = path
         repeat(32) {
             val next = movedTo[p] ?: return p
-            if (notes.get(p)?.isDeleted != true) return p
+            if (notes.get(p)?.isDeleted == false) return p
             p = next
         }
         return p
@@ -1122,8 +1264,15 @@ class MainViewModel(
         }
     }
 
+    // A forced sync asked for while one runs is queued, so an edit made during
+    // a sync still pushes right after it.
+    private var syncQueued = false
+
     fun syncNow(force: Boolean = false, quiet: Boolean = false) {
-        if (_sync.value.syncing) return
+        if (_sync.value.syncing) {
+            if (force) syncQueued = true
+            return
+        }
         if (!force) {
             // Null means "never synced" — that is exactly when a sync is due.
             // Only throttle when we have a previous timestamp.
@@ -1150,11 +1299,37 @@ class MainViewModel(
         try {
             val report = syncEngine.syncOnce()
             session.updateLastSyncAt(report.completedAt)
+            refreshListing()
             _sync.update { it.copy(syncing = false, lastSyncAt = report.completedAt, report = report) }
+            if (syncQueued) {
+                syncQueued = false
+                syncNow(force = true, quiet = true)
+            }
         } catch (e: Exception) {
             _sync.update { it.copy(syncing = false) }
             throw e
         }
+    }
+
+    // Server folders and non-note files for the tree, refreshed after each
+    // sync. A failure keeps the last listing; notes don't depend on it.
+    private val _listing = MutableStateFlow(VaultListing())
+    val listing: StateFlow<VaultListing> = _listing.asStateFlow()
+
+    private fun refreshListing() {
+        viewModelScope.launch {
+            try { _listing.value = notes.vaultListing() } catch (_: Exception) {}
+        }
+    }
+
+    suspend fun fileBytes(path: String) = notes.fileBytes(path)
+
+    // A relative Markdown link to a vault file that isn't a note, or null.
+    fun linkedFile(href: String): String? {
+        val source = _editor.value?.path ?: return null
+        val path = resolveMarkdownLink(href, source) ?: return null
+        val ext = path.substringAfterLast('/').substringAfterLast('.', "")
+        return path.takeIf { ext.isNotEmpty() && !ext.equals("md", ignoreCase = true) }
     }
 
     // Minutely foreground pull. Quiet: never interrupts the user.
@@ -1168,12 +1343,11 @@ class MainViewModel(
     }
 
     fun syncOnForeground() {
-        if (!session.isSignedIn()) return
-        val last = _sync.value.lastSyncAt ?: session.lastSyncAt.value
-        if (_sync.value.syncing) return
-        if (last != 0L && System.currentTimeMillis() - last < 30 * 60_000) return
-        syncNow()
+        if (session.isSignedIn()) syncNow(quiet = true)
     }
+
+    private fun inForeground() =
+        ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)
 
     // Settings > Devices: every phone signed in to this account.
     private val _devices = MutableStateFlow<List<ApiTokenDto>>(emptyList())
@@ -1230,7 +1404,6 @@ class MainViewModel(
     companion object {
         private const val AUTO_PUSH_DELAY_MS = 5_000L
         private const val FOREGROUND_PULL_MS = 60_000L
-        private const val ATTACHMENTS_FOLDER = "attachments"
         // Review lists notes untouched this long, the web default.
         private const val REVIEW_DAYS = 60
 
@@ -1249,3 +1422,5 @@ class MainViewModel(
         }
     }
 }
+
+private val tagQueryRe = Regex("""^#([A-Za-z][\w/-]*)$""")

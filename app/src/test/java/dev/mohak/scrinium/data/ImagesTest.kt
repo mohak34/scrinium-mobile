@@ -20,4 +20,19 @@ class ImagesTest {
         assertEquals("attachments/x.png", noteRelative("a.md", "attachments/x.png"))
         assertEquals("x.png", noteRelative("attachments/a.md", "attachments/x.png"))
     }
+
+    @Test
+    fun decodesTheDestinationOnly() {
+        assertEquals(ImageSource.Vault("my notes/my img.png"), resolveImage("<my img.png>", "my notes/a.md"))
+        assertEquals(ImageSource.Vault("a/my img.png"), resolveImage("my%20img.png?v=2#x", "a/b.md"))
+        assertEquals(ImageSource.Vault("a+b.png"), resolveImage("a+b.png", "n.md"))
+        assertEquals(ImageSource.Vault("x/100%.png"), resolveImage("/api/assets/x/100%.png", "n.md"))
+    }
+
+    @Test
+    fun uploadsGoToTheProjectAndKeepSpacesInOneLink() {
+        assertEquals("work/attachments", attachmentFolder("work/plan/a.md", listOf("work", "home")))
+        assertEquals("attachments", attachmentFolder("workshop/a.md", listOf("work")))
+        assertEquals("![my pic](<attachments/my pic.png>)", attachmentMarkdown("a.md", "attachments/my pic.png"))
+    }
 }

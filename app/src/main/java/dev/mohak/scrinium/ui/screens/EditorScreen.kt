@@ -1,5 +1,6 @@
 package dev.mohak.scrinium.ui.screens
 
+import dev.mohak.scrinium.ui.openVaultFile
 import android.content.ContentResolver
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -40,7 +41,11 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
+import android.content.ClipData
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
@@ -50,6 +55,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.mohak.scrinium.data.attachmentFolder
+import dev.mohak.scrinium.data.attachmentMarkdown
 import dev.mohak.scrinium.R
 import dev.mohak.scrinium.ui.Divider
 import dev.mohak.scrinium.ui.ErrorStrip
@@ -67,9 +74,12 @@ import dev.mohak.scrinium.ui.Type
 import dev.mohak.scrinium.ui.completions
 import dev.mohak.scrinium.ui.folderPaths
 import dev.mohak.scrinium.ui.insertText
+import dev.mohak.scrinium.ui.isExternalLink
+import dev.mohak.scrinium.ui.linkDestination
 import dev.mohak.scrinium.ui.lineStartOffset
 import dev.mohak.scrinium.ui.toggleLinePrefix
 import dev.mohak.scrinium.ui.wrapSelection
+import dev.mohak.scrinium.ui.noteStem
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -101,6 +111,9 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
     val pinned by vm.pinned.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val clipboard = LocalClipboard.current
+    val uriHandler = LocalUriHandler.current
+    fun copy(label: String, text: String) = scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(label, text))) }
     var uploading by remember { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
     val previewScroll = rememberScrollState()
@@ -157,11 +170,11 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
     // Raster images are downscaled/re-encoded in memory; other files
     // (SVG included, which can't be decoded) stream from the provider. Either way the markdown lands at the cursor.
     fun attach(uri: Uri) {
-        val notePath = state.path
+        val folder = attachmentFolder(state.path, tasksVm.projects.value.map { it.path })
         val editorId = state.id
         scope.launch {
             uploading = true
-            val markdown = try {
+            val uploaded = try {
                 // Providers throw for unreadable picks (an offline cloud photo,
                 // a revoked grant); that is an upload error, not a crash.
                 val resolver = context.contentResolver
@@ -173,11 +186,11 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                 if (mime?.startsWith("image/") == true && mime != "image/svg+xml") {
                     val bytes = withContext(Dispatchers.IO) { resolver.openInputStream(uri)?.use { it.readBytes() } }
                         ?: throw IOException("no data")
-                    vm.uploadImage(notePath, bytes, mime, name)
+                    vm.uploadImage(folder, bytes, mime, name)
                 } else {
                     if (size > MAX_ATTACHMENT_BYTES) throw IOException("over 100 MB")
                     val type = (mime ?: "application/octet-stream").toMediaType()
-                    vm.uploadFile(notePath, UriBody(resolver, uri, type, size), name)
+                    vm.uploadFile(folder, UriBody(resolver, uri, type, size), name)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -187,7 +200,9 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
             } finally {
                 uploading = false
             }
-            if (markdown == null || vm.editor.value?.id != editorId) return@launch
+            // Relative to where the note is now: it may have moved mid-upload.
+            val notePath = vm.editor.value?.takeIf { it.id == editorId }?.path ?: return@launch
+            val markdown = attachmentMarkdown(notePath, uploaded ?: return@launch)
             // Own line, like the web's paste: break before it if mid-line.
             val at = field.selection.start
             val needsBreak = at > 0 && field.text[at - 1] != '\n'
@@ -223,7 +238,11 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                     MenuRow(R.drawable.ms_edit, "Rename", act { actions.rename = state.path })
                     MenuRow(R.drawable.ms_drive_file_move, "Move", act { actions.move = state.path })
                     MenuRow(R.drawable.ms_link, "Share link", act { actions.share = state.path })
+                    MenuRow(R.drawable.ms_history, "History", act { actions.history = state.path })
                     MenuRow(R.drawable.ms_picture_as_pdf, "Export PDF", act { exportPdf(context, scope, vm, state.path, field.text) })
+                    MenuRow(R.drawable.ms_share, "Share Markdown", act { shareMarkdown(context, state.path, field.text) })
+                    MenuRow(R.drawable.ms_content_copy, "Copy path", act { copy("path", state.path) })
+                    MenuRow(R.drawable.ms_data_array, "Copy wikilink", act { scope.launch { copy("wikilink", vm.wikilinkTo(state.path)) } })
                     Divider()
                     MenuRow(R.drawable.ms_archive, "Archive", act { vm.archivePath(state.path) })
                     MenuRow(R.drawable.ms_delete, "Delete", act { actions.delete = state.path }, danger = true)
@@ -240,6 +259,16 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                     .verticalScroll(previewScroll)
                     .padding(horizontal = 18.dp, vertical = 8.dp),
                 onWikilinkClick = { vm.openWikilink(it) },
+                onLinkClick = { href ->
+                    val file = if (isExternalLink(href)) null else vm.linkedFile(href)
+                    if (file != null) scope.launch { openVaultFile(context, vm, file) }
+                    else if (!isExternalLink(href)) vm.openMarkdownLink(href)
+                    else try {
+                        uriHandler.openUri(linkDestination(href))
+                    } catch (_: RuntimeException) {
+                        vm.reportError("No app opens ${linkDestination(href)}")
+                    }
+                },
                 onToggleTaskLine = { vm.toggleTaskLine(it) },
                 onTagClick = { vm.searchTag(it) },
                 imageBase = state.path,
@@ -320,7 +349,8 @@ fun EditorScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
         }
     }
 
-    actions.Host(vm, remember(notes) { folderPaths(notes) })
+    val listing by vm.listing.collectAsStateWithLifecycle()
+    actions.Host(vm, remember(notes, listing) { folderPaths(notes, listing.dirs) })
 
     if (showPanel) {
         NotePanel(
@@ -368,7 +398,7 @@ private fun Crumbs(path: String) {
     Text(
         buildAnnotatedString {
             if (dir.isNotBlank()) withStyle(SpanStyle(color = Sc.text3)) { append(dir.replace("/", " / ") + " / ") }
-            withStyle(SpanStyle(color = Sc.text2)) { append(path.substringAfterLast('/').removeSuffix(".md")) }
+            withStyle(SpanStyle(color = Sc.text2)) { append(noteStem(path)) }
         },
         style = Type.body.copy(fontWeight = FontWeight.Medium, fontSize = Type.meta.fontSize * 1.1f),
         maxLines = 1,

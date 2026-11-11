@@ -2,6 +2,8 @@ package dev.mohak.scrinium.ui
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class CompletionTest {
     private val paths = listOf("Plan.md", "work/Planning.md", "Ideas.md")
@@ -36,5 +38,13 @@ class CompletionTest {
         val text = "todo #wo"
         assertEquals(listOf("#work", "#work/q4"), completions(text, text.length, "Note.md", paths, tags).map { it.label })
         assertEquals(emptyList(), completions("a#wo", 4, "Note.md", paths, tags))
+    }
+
+    @Test
+    fun tagSearchMatchesNestedTagsButNotCode() {
+        assertTrue(hasTag("notes #Work/Deep here", "work"))
+        assertTrue(hasTag("#work", "work"))
+        assertFalse(hasTag("#workshop", "work"))
+        assertFalse(hasTag("`#work` and\n```\n#work\n```", "work"))
     }
 }

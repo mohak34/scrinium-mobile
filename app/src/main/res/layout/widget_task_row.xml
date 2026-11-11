@@ -8,18 +8,10 @@
     android:orientation="horizontal"
     android:paddingVertical="6dp">
 
-    <ImageView
-        android:id="@+id/row_dot"
-        android:layout_width="6dp"
-        android:layout_height="6dp"
-        android:importantForAccessibility="no"
-        android:src="@drawable/widget_dot" />
-
     <TextView
         android:id="@+id/row_title"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:layout_marginStart="10dp"
         android:layout_weight="1"
         android:ellipsize="end"
         android:maxLines="1"
