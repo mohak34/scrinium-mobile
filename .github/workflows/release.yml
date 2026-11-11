@@ -17,6 +17,12 @@ jobs:
         with:
           fetch-depth: 0 # full history: versionCode is the commit count
 
+      # Pinned: Gradle 8.14 can't run on the runner's default JDK 25.
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
       - name: Write signing config
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
