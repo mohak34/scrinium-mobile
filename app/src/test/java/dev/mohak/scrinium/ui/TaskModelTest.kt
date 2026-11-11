@@ -69,4 +69,37 @@ class TaskModelTest {
         val tasks = listOf(t, t.copy(id = "b", status = "done"), t.copy(id = "c", remindAt = 300), t.copy(id = "d", remindAt = 50))
         assertEquals(listOf("d", "a"), firedReminders(tasks, 200).map { it.id })
     }
+
+    @Test
+    fun projectColorsHashLikeTheWeb() {
+        // Expected values from the web's projectStyle, run in node.
+        assertEquals("green", projectColorName("scrinium", null))
+        assertEquals("sand", projectColorName("robotics", null))
+        assertEquals("violet", projectColorName("Robotics/Arm", null))
+        assertEquals("blue", projectColorName("caf\u00e9", null))
+        assertEquals("rose", projectColorName("scrinium", "rose"))
+        assertEquals("green", projectColorName("scrinium", "pink"))
+    }
+
+    @Test
+    fun dueGroupsSplitByDay() {
+        val now = local(2026, 11, 10, 15)
+        val t = TaskDto(id = "x", title = "x", status = "todo")
+        val tasks = listOf(
+            t.copy(id = "late", dueAt = local(2026, 11, 9, 23)),
+            t.copy(id = "tonight", dueAt = local(2026, 11, 10, 20)),
+            t.copy(id = "today", dueAt = local(2026, 11, 10)),
+            t.copy(id = "sixth", dueAt = local(2026, 11, 16, 23)),
+            t.copy(id = "week", dueAt = local(2026, 11, 17)),
+            t.copy(id = "none")
+        )
+        val groups = dueGroups(tasks, now)
+        assertEquals(10, groups.size)
+        assertEquals(listOf("late"), groups[0].rows.map { it.id })
+        assertEquals(listOf("today", "tonight"), groups[1].rows.map { it.id })
+        assertEquals(local(2026, 11, 10), groups[1].day)
+        assertEquals(listOf("sixth"), groups[7].rows.map { it.id })
+        assertEquals(listOf("week"), groups[8].rows.map { it.id })
+        assertEquals(listOf("none"), groups[9].rows.map { it.id })
+    }
 }

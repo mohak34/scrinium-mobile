@@ -70,6 +70,10 @@ import dev.mohak.scrinium.ui.MenuRow
 import dev.mohak.scrinium.ui.ProjectView
 import dev.mohak.scrinium.ui.PromptDialog
 import dev.mohak.scrinium.ui.QUOTIDIAN
+import dev.mohak.scrinium.ui.ProjectStyle
+import dev.mohak.scrinium.ui.GroupHeader
+import dev.mohak.scrinium.ui.recentNotes
+import dev.mohak.scrinium.ui.projectStyle
 import dev.mohak.scrinium.ui.Sc
 import dev.mohak.scrinium.ui.Sheet
 import dev.mohak.scrinium.ui.SheetTitle
@@ -140,6 +144,10 @@ fun NotesScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
 
     val items = remember(notes, collapsed, pinned, view, projects, listing) { buildTree(notes, collapsed, pinned, view, projects.toSet(), listing) }
     val folders = remember(notes, listing) { folderPaths(notes, listing.dirs) }
+    // Recent only earns its space once the tab holds more notes than it lists.
+    val recent = remember(notes, view, projects) {
+        recentNotes(notes, view, projects.toSet(), RECENT + 1).let { if (it.size > RECENT) it.take(RECENT) else emptyList() }
+    }
     var folderMenu by remember { mutableStateOf<String?>(null) }
     var noteMenu by remember { mutableStateOf<NoteEntity?>(null) }
     var moveFolderTarget by remember { mutableStateOf<String?>(null) }
@@ -168,6 +176,7 @@ fun NotesScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
         // root — the footer must not be a dead zone that swallows drops.
         if (key == null) return root
         return when {
+            key is String && (key.startsWith("r:") || key.startsWith("h:")) -> null
             key is String && key.startsWith("d:") -> {
                 val path = key.removePrefix("d:")
                 if (path in blockedPrefixes(item)) null else path
@@ -254,6 +263,15 @@ fun NotesScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
 
     Column(Modifier.fillMaxSize()) {
         TopBar("Notes") {
+            if (unsynced > 0) {
+                Row(
+                    Modifier.clip(RoundedCornerShape(8.dp)).clickable { vm.syncNow(force = true) }.padding(horizontal = 8.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Sym(R.drawable.ms_cloud_upload, tint = Sc.text2, size = 20.dp, desc = "Sync now")
+                    Text("$unsynced", style = Type.meta.copy(color = Sc.text2), modifier = Modifier.padding(start = 4.dp))
+                }
+            }
             IconBtn(R.drawable.ms_sell, "Tags", { vm.openTags() })
             Box {
                 IconBtn(R.drawable.ms_more_vert, "More", { overflow = true }, active = overflow)
@@ -271,7 +289,8 @@ fun NotesScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
             val tabs = listOf(ProjectView.All, ProjectView.Project(null)) + projects.map { ProjectView.Project(it) }
             TextTabs(
                 tabs.map { v -> if (v is ProjectView.Project) v.path?.let { projectLabel(it, projects) } ?: QUOTIDIAN else "All" },
-                tabs.indexOf(view)
+                tabs.indexOf(view),
+                icons = tabs.map { v -> (v as? ProjectView.Project)?.let { projectStyle(it.path, projectRows).let { s -> s.icon to s.color } } }
             ) { vm.setNotesView(tabs[it]) }
         }
         sync.error?.let { ErrorStrip(it) { vm.dismissSyncError() } }
@@ -327,6 +346,13 @@ fun NotesScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                                 },
                             contentPadding = PaddingValues(top = 2.dp, bottom = 96.dp)
                         ) {
+                            if (recent.isNotEmpty()) {
+                                item(key = "h:recent") { GroupHeader("Recent") }
+                                items(recent, key = { "r:${it.path}" }) { note ->
+                                    RecentRow(note, now, onTap = { vm.openNote(note.path) }, onLongPress = { noteMenu = note })
+                                }
+                                item(key = "h:tree") { GroupHeader("All notes") }
+                            }
                             items(
                                 items,
                                 key = {
@@ -340,6 +366,7 @@ fun NotesScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                                 when (item) {
                                     is TreeItem.Folder -> FolderRow(
                                         folder = item,
+                                        style = if (item.project) projectStyle(item.path, projectRows) else null,
                                         expanded = item.path !in collapsed,
                                         highlighted = dropTarget == item.path,
                                         dimmed = (dragItem as? TreeItem.Folder)?.path == item.path,
@@ -359,7 +386,6 @@ fun NotesScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
                                         NoteRow(
                                             note = item.note,
                                             pinned = item.pinned,
-                                            now = now,
                                             depth = item.depth,
                                             highlighted = dropTarget != null && dropTarget == parent,
                                             dimmed = (dragItem as? TreeItem.Note)?.note?.path == item.note.path,
@@ -505,6 +531,7 @@ fun NotesScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
 @Composable
 private fun FolderRow(
     folder: TreeItem.Folder,
+    style: ProjectStyle?,
     expanded: Boolean,
     highlighted: Boolean,
     dimmed: Boolean,
@@ -524,12 +551,8 @@ private fun FolderRow(
         Sym(if (expanded) R.drawable.ms_expand_more else R.drawable.ms_chevron_right, tint = Sc.text3, size = 17.dp, desc = if (expanded) "Collapse" else "Expand")
         Spacer(Modifier.width(6.dp))
         Sym(
-            when {
-                folder.project -> R.drawable.ms_folder_special
-                expanded -> R.drawable.ms_folder_open
-                else -> R.drawable.ms_folder
-            },
-            tint = Sc.text3,
+            style?.icon ?: if (expanded) R.drawable.ms_folder_open else R.drawable.ms_folder,
+            tint = style?.color ?: Sc.text3,
             size = 17.dp
         )
         Column(Modifier.weight(1f).padding(start = 8.dp)) {
@@ -547,14 +570,12 @@ private fun FolderRow(
 private fun NoteRow(
     note: NoteEntity,
     pinned: Boolean,
-    now: Long,
     depth: Int,
     highlighted: Boolean,
     dimmed: Boolean,
     onTap: () -> Unit,
     onLongPress: () -> Unit
 ) {
-    val updatedAt = note.localModifiedAt ?: note.remoteUpdatedAt
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -577,7 +598,29 @@ private fun NoteRow(
             modifier = Modifier.weight(1f).padding(start = 8.dp)
         )
         if (note.localModifiedAt != null) Sym(R.drawable.ms_cloud_upload, tint = Sc.text3, size = 15.dp, desc = "Not synced", modifier = Modifier.padding(start = 8.dp))
-        Text(shortAge(updatedAt, now), style = Type.mono, modifier = Modifier.padding(start = 8.dp))
+    }
+}
+
+private const val RECENT = 5
+
+// A recently edited note: title, its folder, and how long ago.
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun RecentRow(note: NoteEntity, now: Long, onTap: () -> Unit, onLongPress: () -> Unit) {
+    val dir = note.path.substringBeforeLast('/', "")
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(onClick = onTap, onLongClick = onLongPress)
+            .padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(noteTitle(note.path, note.content), style = Type.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (dir.isNotEmpty()) Text(dir, style = Type.meta, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        if (note.localModifiedAt != null) Sym(R.drawable.ms_cloud_upload, tint = Sc.text3, size = 15.dp, desc = "Not synced", modifier = Modifier.padding(start = 8.dp))
+        Text(shortAge(note.localModifiedAt ?: note.remoteUpdatedAt, now), style = Type.mono, modifier = Modifier.padding(start = 8.dp))
     }
 }
 

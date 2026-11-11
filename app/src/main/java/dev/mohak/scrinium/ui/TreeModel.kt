@@ -96,3 +96,20 @@ fun buildTree(
     emit((view as? ProjectView.Project)?.path ?: "", 0)
     return out
 }
+
+/**
+ * The last [n] notes edited in a Notes tab: the whole vault, one project's
+ * folder, or (Quotidian) everything outside the project folders.
+ */
+fun recentNotes(notes: List<NoteEntity>, view: ProjectView, projects: Set<String>, n: Int = 5): List<NoteEntity> {
+    fun under(path: String, dir: String) = path.startsWith("$dir/")
+    return notes
+        .filter { note ->
+            when (view) {
+                ProjectView.All -> true
+                is ProjectView.Project -> view.path?.let { under(note.path, it) } ?: projects.none { under(note.path, it) }
+            }
+        }
+        .sortedByDescending { it.localModifiedAt ?: it.remoteUpdatedAt }
+        .take(n)
+}

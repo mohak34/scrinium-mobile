@@ -47,6 +47,7 @@ import dev.mohak.scrinium.ui.Segments
 import dev.mohak.scrinium.ui.Sheet
 import dev.mohak.scrinium.ui.SheetTitle
 import dev.mohak.scrinium.ui.Sym
+import dev.mohak.scrinium.ui.projectStyle
 import dev.mohak.scrinium.ui.TaskArea
 import dev.mohak.scrinium.ui.TaskPriority
 import dev.mohak.scrinium.ui.TaskStatus
@@ -139,7 +140,7 @@ fun TaskDetailScreen(vm: MainViewModel, tasksVm: TasksViewModel, id: String) {
             // Subtasks carry their root's project, so only roots pick one.
             if (task.parentId == null && (projects.isNotEmpty() || task.project != null)) {
                 DateRow(
-                    R.drawable.ms_folder_special,
+                    if (task.project != null) projectStyle(task.project, projects).icon else R.drawable.ms_folder_special,
                     task.project ?: "No project",
                     set = task.project != null,
                     onPick = { pickProject = true },
@@ -199,7 +200,10 @@ fun TaskDetailScreen(vm: MainViewModel, tasksVm: TasksViewModel, id: String) {
 
     if (pickProject) {
         val paths = projects.map { it.path }
-        ChoiceSheet("Project", paths.map { it to projectLabel(it, paths) }, task.project, onDismiss = { pickProject = false }) {
+        ChoiceSheet("Project", paths.map { it to projectLabel(it, paths) }, task.project, onDismiss = { pickProject = false }, lead = {
+            val style = projectStyle(it, projects)
+            Sym(style.icon, tint = style.color, size = 18.dp, modifier = Modifier.padding(end = 12.dp))
+        }) {
             pickProject = false
             tasksVm.setProject(task.id, it)
         }
@@ -408,6 +412,7 @@ private fun ChoiceSheet(
     options: List<Pair<String, String>>,
     selected: String?,
     onDismiss: () -> Unit,
+    lead: (@Composable (String?) -> Unit)? = null,
     onPick: (String?) -> Unit
 ) {
     Sheet(onDismiss) {
@@ -418,6 +423,7 @@ private fun ChoiceSheet(
                     Modifier.fillMaxWidth().clickable { onPick(value) }.padding(horizontal = 16.dp, vertical = 11.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    lead?.invoke(value)
                     Text(label, style = Type.body, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     if (value == selected) Sym(R.drawable.ms_check, tint = Sc.accent, size = 18.dp)
                 }

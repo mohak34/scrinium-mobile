@@ -141,7 +141,7 @@ fun NotePanel(
                         TaskRow(t, null, onToggle = { tasksVm.toggleDone(t) }, onOpen = {
                             onDismiss()
                             tasksVm.openTask(t.id)
-                        }, showStatus = true)
+                        })
                     }
                     item {
                         InputBox(
