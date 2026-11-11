@@ -13,7 +13,6 @@ import dev.mohak.scrinium.data.ImageLoader
 import dev.mohak.scrinium.data.ImageSource
 import dev.mohak.scrinium.data.NotesRepository
 import dev.mohak.scrinium.data.Prefs
-import dev.mohak.scrinium.data.attachmentMarkdown
 import dev.mohak.scrinium.data.resolveImage
 import dev.mohak.scrinium.data.SessionRepository
 import dev.mohak.scrinium.data.local.NoteEntity
@@ -269,31 +268,58 @@ class MainViewModel(
 
     data class SearchHit(val path: String, val title: String, val snippet: String?)
 
-    @OptIn(ExperimentalCoroutinesApi::class)
-    private val localHits = searchQuery
+    // Search runs inside one project folder when opened from that project's
+    // Notes tab; null searches the vault.
+    private val _searchFolder = MutableStateFlow<String?>(null)
+    val searchFolder: StateFlow<String?> = _searchFolder.asStateFlow()
+    fun clearSearchFolder() { _searchFolder.value = null }
+
+    private data class SearchKey(val query: String, val folder: String?) {
+        /** The tag of an exact `#tag` query, matched like the web's tag pane. */
+        val tag: String? get() = tagQueryRe.matchEntire(query)?.groupValues?.get(1)
+        fun holds(path: String) = folder == null || path.startsWith("$folder/")
+    }
+
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
+    private val searchKey = combine(searchQuery, _searchFolder) { q, f -> SearchKey(q.trim(), f) }
         .debounce(250)
         .distinctUntilChanged()
-        .flatMapLatest { q ->
-            if (q.isBlank()) notes.observeAll() else notes.search(q)
-        }
-        .map { list -> list.filter { !it.isDeleted } }
 
-    // Server FTS runs alongside local search: better ranking plus notes the
-    // phone hasn't synced yet. Read-only and quiet — offline just yields
-    // local results.
+    // Each result list carries the key it answers, so a slow reply for an
+    // older query or scope never shows under the current one.
     @OptIn(ExperimentalCoroutinesApi::class)
-    private val serverHits: StateFlow<List<SearchResult>> = searchQuery
-        .debounce(400)
-        .distinctUntilChanged()
-        .filter { it.isNotBlank() }
-        .flatMapLatest { q ->
-            flow { emit(notes.networkSearch(q)) }.catch { emit(emptyList()) }
+    private val localHits = searchKey.flatMapLatest { k ->
+        val tag = k.tag
+        when {
+            k.query.isBlank() -> flowOf(k to emptyList())
+            tag != null -> notesFlow.map { list -> k to list.filter { k.holds(it.path) && hasTag(it.content, tag) } }
+            else -> notes.search(k.query, k.folder?.let { "$it/" } ?: "").map { k to it }
+        }
+    }
+
+    // Server FTS (or the tag index for `#tag`) runs alongside local search:
+    // better ranking, frontmatter tags, and notes the phone hasn't synced
+    // yet. Read-only and quiet: offline just yields local results.
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val serverHits: StateFlow<Pair<SearchKey, List<SearchResult>>?> = searchKey
+        .filter { it.query.isNotBlank() }
+        .flatMapLatest { k ->
+            flow {
+                val tag = k.tag
+                val hits = if (tag != null) {
+                    notes.fetchTagged(tag).filter { k.holds(it.path) }.map { SearchResult(it.path, it.title, it.snippet) }
+                } else {
+                    notes.networkSearch(k.query, k.folder)
+                }
+                emit(k to hits)
+            }.catch { emit(k to emptyList()) }
         }
         .flowOn(Dispatchers.IO)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     val searchResults: StateFlow<List<SearchHit>> =
-        combine(localHits, serverHits, searchQuery) { local, server, q ->
+        combine(localHits, serverHits) { (key, local), server ->
+            val q = key.query
             if (q.isBlank()) return@combine emptyList()
             val localPaths = local.map { it.path }.toSet()
             buildList {
@@ -308,7 +334,7 @@ class MainViewModel(
                 for (note in ranked) {
                     add(SearchHit(note.path, noteTitle(note.path, note.content), snippet(note.content, q)))
                 }
-                for (hit in server) {
+                if (server?.first == key) for (hit in server.second) {
                     if (hit.path !in localPaths) add(SearchHit(hit.path, hit.title, hit.snippet))
                 }
             }
@@ -520,13 +546,21 @@ class MainViewModel(
 
     fun openSearch() {
         _searchOrigin.value = _screen.value
+        scopeSearchToProject()
         _screen.update { Screen.Search }
+    }
+
+    private fun scopeSearchToProject() {
+        _searchFolder.value = if (_screen.value == Screen.Notes) (_notesView.value as? ProjectView.Project)?.path else null
     }
     fun openSettings() = _screen.update { Screen.Settings }
 
     /** Bottom-tab switch. Search remembers the tab it was opened from. */
     fun openTab(tab: Screen) {
-        if (tab == Screen.Search && _screen.value != Screen.Search) _searchOrigin.value = _screen.value
+        if (tab == Screen.Search && _screen.value != Screen.Search) {
+            _searchOrigin.value = _screen.value
+            scopeSearchToProject()
+        }
         _screen.value = tab
     }
 
@@ -732,11 +766,12 @@ class MainViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             _taggedLoading.value = true
             try {
-                _taggedHits.value = notes.fetchTagged(tag)
+                val hits = notes.fetchTagged(tag)
+                if (_selectedTag.value == tag) _taggedHits.value = hits
             } catch (e: Exception) {
-                _sync.update { it.copy(error = "Couldn't load tag: ${e.message}") }
+                if (_selectedTag.value == tag) _sync.update { it.copy(error = "Couldn't load tag: ${e.message}") }
             } finally {
-                _taggedLoading.value = false
+                if (_selectedTag.value == tag) _taggedLoading.value = false
             }
         }
     }
@@ -821,7 +856,7 @@ class MainViewModel(
         val target = targetRaw.substringBefore('#').trim()
         if (target.isEmpty()) return
         viewModelScope.launch {
-            val paths = notes.allMeta().filter { !it.isDeleted }.map { it.path }
+            val paths = livePaths()
             val hit = resolveWikilink(target, _editor.value?.path ?: "", paths)
             if (hit != null) {
                 openNote(hit)
@@ -834,6 +869,27 @@ class MainViewModel(
             }
         }
     }
+
+    // A relative Markdown link in the open note: a note opens, anything
+    // else says the phone can't open it. External links open in the UI.
+    fun openMarkdownLink(href: String) {
+        val source = _editor.value?.path ?: return
+        val path = resolveMarkdownLink(href, source) ?: return
+        viewModelScope.launch {
+            val paths = livePaths()
+            val hit = paths.firstOrNull { it.equals(path, ignoreCase = true) }
+                ?: paths.firstOrNull { it.equals("$path.md", ignoreCase = true) }
+            if (hit != null) openNote(hit)
+            else _sync.update { it.copy(error = if (path.endsWith(".md", ignoreCase = true)) "Note not found: $path" else "Can't open $path on the phone") }
+        }
+    }
+
+    // `[[name]]` for [path] as a link written in the open note (or the vault
+    // root) would name it.
+    suspend fun wikilinkTo(path: String): String =
+        "[[${WikiResolver(livePaths()).targetFor(path, _editor.value?.path ?: "")}]]"
+
+    private suspend fun livePaths(): List<String> = notes.allMeta().filter { !it.isDeleted }.map { it.path }
 
     fun toggleTaskLine(lineIdx: Int) {
         val current = _editor.value ?: return
@@ -853,6 +909,7 @@ class MainViewModel(
 
     fun searchTag(tag: String) {
         searchQuery.value = "#$tag"
+        _searchFolder.value = null
         _searchOrigin.value = _screen.value
         _screen.update { Screen.Search }
     }
@@ -966,7 +1023,7 @@ class MainViewModel(
         val target = _editor.value?.path ?: return
         viewModelScope.launch {
             val source = notes.get(sourcePath) ?: return@launch
-            val updated = linkFirstMention(source.content, target) ?: return@launch
+            val updated = linkFirstMention(source.content, sourcePath, target, WikiResolver(livePaths())) ?: return@launch
             notes.saveLocally(sourcePath, updated)
             scheduleAutoSync()
             loadBacklinks()
@@ -985,26 +1042,26 @@ class MainViewModel(
     }
 
     /**
-     * Uploads a picked image to the vault's attachments folder (the web
-     * default) and returns the markdown to insert, path relative to the note.
-     * Online only; failures surface in the error banner.
+     * Uploads a picked image into [folder] (see attachmentFolder) and returns
+     * the vault path it landed at. Online only; failures surface in the
+     * error banner.
      */
-    suspend fun uploadImage(notePath: String, bytes: ByteArray, mimeType: String?, name: String): String? =
-        upload(notePath) {
+    suspend fun uploadImage(folder: String, bytes: ByteArray, mimeType: String?, name: String): String? =
+        upload {
             val (body, mime) = withContext(Dispatchers.Default) { ImageLoader.prepareUpload(bytes, mimeType) }
                 ?: throw IllegalArgumentException("Unsupported image")
             val ext = mime.substringAfter('/').replace("jpeg", "jpg")
             val base = name.substringBeforeLast('.').ifBlank { "image" }
-            notes.uploadAttachment(body.toRequestBody(mime.toMediaType()), "$base.$ext", ATTACHMENTS_FOLDER)
+            notes.uploadAttachment(body.toRequestBody(mime.toMediaType()), "$base.$ext", folder)
         }
 
     /** Any other file, streamed as-is; same contract as [uploadImage]. */
-    suspend fun uploadFile(notePath: String, body: RequestBody, name: String): String? =
-        upload(notePath) { notes.uploadAttachment(body, name, ATTACHMENTS_FOLDER) }
+    suspend fun uploadFile(folder: String, body: RequestBody, name: String): String? =
+        upload { notes.uploadAttachment(body, name, folder) }
 
-    private suspend fun upload(notePath: String, send: suspend () -> String): String? {
+    private suspend fun upload(send: suspend () -> String): String? {
         return try {
-            attachmentMarkdown(notePath, send())
+            send()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1294,7 +1351,6 @@ class MainViewModel(
     companion object {
         private const val AUTO_PUSH_DELAY_MS = 5_000L
         private const val FOREGROUND_PULL_MS = 60_000L
-        private const val ATTACHMENTS_FOLDER = "attachments"
         // Review lists notes untouched this long, the web default.
         private const val REVIEW_DAYS = 60
 
@@ -1313,3 +1369,5 @@ class MainViewModel(
         }
     }
 }
+
+private val tagQueryRe = Regex("""^#([A-Za-z][\w/-]*)$""")

@@ -77,6 +77,8 @@ fun MarkdownText(
     markdown: String,
     modifier: Modifier = Modifier,
     onWikilinkClick: (String) -> Unit = {},
+    // A Markdown `[text](href)` destination, as written.
+    onLinkClick: (String) -> Unit = {},
     onToggleTaskLine: (Int) -> Unit = {},
     onTagClick: (String) -> Unit = {},
     // [imageBase] is what relative image references resolve against (the
@@ -109,6 +111,10 @@ fun MarkdownText(
         }
         annotations.firstOrNull { it.tag == "wikilink" }?.let {
             onWikilinkClick(it.item)
+            return
+        }
+        annotations.firstOrNull { it.tag == "link" }?.let {
+            onLinkClick(it.item)
             return
         }
         annotations.firstOrNull { it.tag == "tag" }?.let {
@@ -622,11 +628,11 @@ private class MarkdownRenderer(
     }
 
     private fun AnnotatedString.Builder.appendInlineStyled(text: String, base: SpanStyle = SpanStyle()) {
-        // Wikilinks first: annotated spans the tap handler resolves.
-        var rest = text
-        while (true) {
-            val m = wikilinkPattern.find(rest) ?: break
-            if (m.range.first > 0) appendInlineTags(rest.substring(0, m.range.first), base)
+        // Wikilinks first: annotated spans the tap handler resolves. Found
+        // in the code-masked text, so `[[x]]` inside backticks stays code.
+        var last = 0
+        for (m in wikilinkPattern.findAll(maskCode(text))) {
+            if (m.range.first > last) appendInlineTags(text.substring(last, m.range.first), base)
             val target = m.groupValues[1].trim()
             val label = m.groupValues[2].ifBlank { target }
             pushStringAnnotation(tag = "wikilink", annotation = target)
@@ -634,25 +640,24 @@ private class MarkdownRenderer(
                 base.merge(SpanStyle(textDecoration = TextDecoration.Underline, color = primary))
             ) { append(label) }
             pop()
-            rest = rest.substring(m.range.last + 1)
+            last = m.range.last + 1
         }
-        appendInlineTags(rest, base)
+        appendInlineTags(text.substring(last), base)
     }
 
     private fun AnnotatedString.Builder.appendInlineTags(text: String, base: SpanStyle) {
         // Tag pills: primary on tinted background, tappable to browse.
-        var rest = text
-        while (true) {
-            val m = tagPattern.find(rest) ?: break
-            if (m.range.first > 0) appendInlineMath(rest.substring(0, m.range.first), base)
+        var last = 0
+        for (m in tagPattern.findAll(maskCode(text))) {
+            if (m.range.first > last) appendInlineMath(text.substring(last, m.range.first), base)
             pushStringAnnotation(tag = "tag", annotation = m.groupValues[1])
             withStyle(
                 base.merge(SpanStyle(color = primary, background = codeBackground))
             ) { append(m.value) }
             pop()
-            rest = rest.substring(m.range.last + 1)
+            last = m.range.last + 1
         }
-        appendInlineMath(rest, base)
+        appendInlineMath(text.substring(last), base)
     }
 
     // Inline `$…$`: an inline-content slot typeset by RaTeX, with the source
@@ -704,7 +709,9 @@ private class MarkdownRenderer(
                             color = primary
                         )
                     )
+                    pushStringAnnotation(tag = "link", annotation = rest.substring(close + 2, linkEnd))
                     withStyle(style) { append(rest.substring(1, close)) }
+                    pop()
                     i += linkEnd + 1
                 }
                 rest.startsWith("`") && rest.indexOf('`', 1) > 0 -> {

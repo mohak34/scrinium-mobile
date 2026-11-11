@@ -38,17 +38,21 @@ import dev.mohak.scrinium.ui.MenuRow
 import dev.mohak.scrinium.ui.Sc
 import dev.mohak.scrinium.ui.TasksViewModel
 import dev.mohak.scrinium.ui.TextTabs
+import dev.mohak.scrinium.ui.projectName
 import dev.mohak.scrinium.ui.Type
 
 /**
  * The center tab. Empty: recent searches and the vault's tags. Typing:
- * matching notes (local + server full-text) and matching tasks.
+ * matching notes (local + server full-text, or the tag index for an exact
+ * `#tag`) and matching tasks. Opened from a project's Notes tab, notes are
+ * searched inside that project until "Search all".
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SearchScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
     val query by vm.searchQuery.collectAsStateWithLifecycle()
     val results by vm.searchResults.collectAsStateWithLifecycle()
+    val folder by vm.searchFolder.collectAsStateWithLifecycle()
     val recent by vm.recentSearches.collectAsStateWithLifecycle()
     val tags by vm.tags.collectAsStateWithLifecycle()
     val tasks by tasksVm.tasks.collectAsStateWithLifecycle()
@@ -79,6 +83,11 @@ fun SearchScreen(vm: MainViewModel, tasksVm: TasksViewModel) {
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             trailing = if (query.isNotEmpty()) ({ IconBtn(R.drawable.ms_close, "Clear", { vm.setSearchQuery("") }, tint = Sc.text3) }) else null
         )
+        folder?.let { f ->
+            MenuRow(R.drawable.ms_folder, "Notes in ${projectName(f)}", { vm.clearSearchFolder() }, trailing = {
+                Text("Search all", style = Type.meta.copy(color = Sc.accent))
+            })
+        }
         if (query.isBlank()) {
             LazyColumn(Modifier.fillMaxSize()) {
                 if (recent.isNotEmpty()) {

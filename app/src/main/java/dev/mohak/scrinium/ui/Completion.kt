@@ -18,13 +18,14 @@ fun completions(text: String, cursor: Int, sourcePath: String, notePaths: List<S
     wikiTrigger.find(before)?.let { m ->
         val typed = m.groupValues[1].lowercase()
         val from = cursor - m.groupValues[1].length
+        val links by lazy { WikiResolver(notePaths) }
         return notePaths.asSequence()
             .map { it to noteStem(it) }
             .filter { (_, stem) -> typed in stem.lowercase() }
             .sortedWith(compareBy({ !it.second.lowercase().startsWith(typed) }, { it.second.lowercase() }))
             .take(20)
             .map { (path, stem) ->
-                val target = if (resolveWikilink(stem, sourcePath, notePaths) == path) stem else path.removeSuffix(".md")
+                val target = links.targetFor(path, sourcePath)
                 Suggestion(stem, path.takeIf { '/' in it }, from, "$target]]")
             }
             .toList()
@@ -42,6 +43,14 @@ fun completions(text: String, cursor: Int, sourcePath: String, notePaths: List<S
 }
 
 private val vaultTagRe = Regex("""(?<!\S)#([A-Za-z][\w/-]*)""")
+
+/** The web's matchTag: the tag itself or a tag nested under it, any case. */
+fun matchTag(tag: String, query: String): Boolean =
+    tag.equals(query, ignoreCase = true) || tag.startsWith("$query/", ignoreCase = true)
+
+/** Whether [content] has an inline tag [matchTag] accepts; code holds no tags. */
+fun hasTag(content: String, query: String): Boolean =
+    vaultTagRe.findAll(maskCode(content)).any { matchTag(it.groupValues[1], query) }
 
 /** Inline `#tags` across notes, most used first. */
 fun vaultTags(contents: List<String>): List<String> =

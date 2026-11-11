@@ -87,7 +87,12 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
   edits first, then syncs so the notes leave Room. Task links follow notes
   into `.archive/` and `.trash/`; the phone never opens those paths as notes.
 - `GET /api/tree` → nested vault listing
-- `GET /api/search?q=` → `[{ path, title, snippet }]` (FTS5)
+- `GET /api/search?q=&folder=` → `[{ path, title, snippet }]` (FTS5),
+  `GET /api/tagged?tag=` → the same shape for a tag and its nested tags.
+  Search runs Room and the server side by side; each reply is keyed by the
+  query and folder it answers, so a late one never shows under another.
+  An exact `#tag` query uses the tag index. Opened from a project's Notes
+  tab, search stays in that folder until "Search all".
 - `GET /api/tasks` (`?note=<path>` for one note's tasks), `POST /api/tasks`,
   `PATCH|DELETE /api/tasks/<id>`, `GET|POST|DELETE /api/tasks/<id>/links`.
   `POST /api/tasks` takes `note_paths` to link in the same request; a
@@ -125,15 +130,21 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
   PackageInstaller (`update/Updater.kt`).
 - `GET /api/assets/<path>` → file bytes; `POST /api/attachments?name=&folder=`
   with the file as the raw body (any type, a Content-Type is required, max
-  100 MB) → `{ path }`. Phone uploads go to `attachments/`, the web
-  default, and the note gets a note-relative `![name](path)` for images or
-  `[file](path)` for anything else.
+  100 MB) → `{ path }`. Phone uploads go where the web's do: the note's
+  project `<project>/attachments/`, else `attachments/`. The note gets a
+  `![name](path)` for images or `[file](path)` for anything else, relative
+  to where the note is when the upload ends, in `<...>` if the path has
+  spaces. Image references resolve like the web's `resolveAssetUrl`
+  (`data/Images.kt`): percent-decoded, `?`/`#` dropped.
 
 Paths are URL-encoded per segment. Backlinks are computed on the phone from
 Room (`ui/Backlinks.kt`, a port of the web's `wikilinks.ts`), not fetched.
-One `resolveWikilink` serves link taps, backlinks and `[[` autocomplete:
-vault path, then the source note's folder, then a unique name. Unlike the
-web it does not pick the shortest path when a name is ambiguous.
+One `WikiResolver` serves link taps, backlinks, mention linking and `[[`
+autocomplete: vault path, then the source note's folder, then a unique
+name. Unlike the web it does not pick the shortest path when a name is
+ambiguous; a link it writes names the path instead. Code (fences and
+inline spans) holds no links or mentions. Relative `[text](href)` links
+open notes; links with a scheme open outside the app.
 
 ## Sync engine rules
 

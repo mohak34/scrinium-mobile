@@ -224,7 +224,7 @@ private interface ScriniumService {
     ): Response<ResponseBody>
 
     @GET("api/search")
-    suspend fun search(@Query("q") q: String): List<SearchResult>
+    suspend fun search(@Query("q") q: String, @Query("folder") folder: String?): List<SearchResult>
 
     @GET("api/tags")
     suspend fun tags(): List<TagCount>
@@ -413,7 +413,7 @@ class ScriniumApi(
         res.body()?.close()
         if (!res.isSuccessful) throw ApiException(res.code())
     }
-    suspend fun search(q: String): List<SearchResult> = service.search(q)
+    suspend fun search(q: String, folder: String?): List<SearchResult> = service.search(q, folder)
 
     suspend fun fetchTags(): List<TagCount> = service.tags()
 
