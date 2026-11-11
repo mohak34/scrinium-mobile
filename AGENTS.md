@@ -70,6 +70,11 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
   <version>` + `X-Note-Strict: 1` → 412 if the note changed;
   `If-None-Match: *` → 409 if it exists. A version is the server's
   `noteVersion()` (quoted sha256 hex, first 16), computed on the phone too.
+- `GET /api/history?note=<path>` → `[{ id, author, at, size, mine }]`,
+  newest first; `&id=` → that version's text. The note menu's History
+  diffs a version against the current text; Restore pushes pending edits,
+  then PUTs the version with `If-Match` + `X-Note-Restore: 1` (a version of
+  its own on the server) and writes it to Room if no typing began.
 - `POST /api/notes/<path>` → `{ folder: true }` creates a folder
 - `PATCH /api/notes/<path>` → `{ newPath }` rename/move, note or folder;
   relinks and retitles, returning `{ versions, previous }` of what it
@@ -83,10 +88,16 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
   `POST /api/archive/trash { name }` move it back or on to the trash.
   `GET /api/archive/review?days=` lists stale notes nothing links to,
   `GET /api/archive/unused` vault files no note mentions. The Bins screen
-  shows all four. Archiving is a server move: the phone pushes pending
+  shows all four. The Archive tab searches with `GET /api/search?scope=archive`
+  and reads an archived note (`GET /api/notes/.archive/...`) read-only,
+  never into Room. Archiving is a server move: the phone pushes pending
   edits first, then syncs so the notes leave Room. Task links follow notes
   into `.archive/` and `.trash/`; the phone never opens those paths as notes.
-- `GET /api/tree` → nested vault listing
+- `GET /api/tree` → nested vault listing `[{ name, path, type, children }]`,
+  fetched after each sync (metadata only, memory only). It adds empty
+  folders and non-note files to the Notes tree. A file (or a relative link
+  to one) opens in another app: `GET /api/assets/` into the cache, then a
+  FileProvider `ACTION_VIEW` (`ui/OpenFile.kt`).
 - `GET /api/search?q=&folder=` → `[{ path, title, snippet }]` (FTS5),
   `GET /api/tagged?tag=` → the same shape for a tag and its nested tags.
   Search runs Room and the server side by side; each reply is keyed by the
@@ -100,7 +111,9 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
   made when it can't be. Rows are snake_case. Tasks live in the server's SQLite, not the vault, so
   they are online-only: `TasksViewModel` calls the API directly, no Room.
   `waiting_since` is stamped on entering Waiting; a PATCH may set an
-  earlier start, never a future one.
+  earlier start, never a future one. Reminders that went off (`remind_at`
+  past, task not done) sit behind a bell in the Tasks bar; snooze sets a
+  new `remind_at` (the web's choices), clear sets it null.
 - `GET /api/projects` → `[{ path, area, created_at }]`, vault folders the
   web registered as project boards. A task's `project` is that path;
   subtasks follow their root's project. A project's Inbox is its backlog:

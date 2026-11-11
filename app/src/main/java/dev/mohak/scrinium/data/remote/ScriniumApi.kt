@@ -49,6 +49,14 @@ data class MoveResult(val versions: Map<String, String> = emptyMap(), val previo
 @Serializable
 data class SearchResult(val path: String, val title: String, val snippet: String)
 
+// One saved version of a note; [mine] when the caller wrote it.
+@Serializable
+data class NoteVersionRow(val id: Long, val author: String? = null, val at: Long, val size: Int, val mine: Boolean = false)
+
+// One entry of the vault listing; dot folders are left out by the server.
+@Serializable
+data class VaultEntry(val name: String, val path: String, val type: String, val children: List<VaultEntry> = emptyList())
+
 @Serializable
 data class TagCount(val tag: String, val count: Int)
 
@@ -207,8 +215,18 @@ private interface ScriniumService {
         @Body body: RequestBody,
         @Header("If-Match") ifMatch: String?,
         @Header("X-Note-Strict") strict: String?,
-        @Header("If-None-Match") ifNoneMatch: String?
+        @Header("If-None-Match") ifNoneMatch: String?,
+        @Header("X-Note-Restore") restore: String? = null
     ): Response<ResponseBody>
+
+    @GET("api/tree")
+    suspend fun tree(): List<VaultEntry>
+
+    @GET("api/history")
+    suspend fun history(@Query("note") note: String): List<NoteVersionRow>
+
+    @GET("api/history")
+    suspend fun historyText(@Query("note") note: String, @Query("id") id: Long): ResponseBody
 
     @PATCH("api/notes/{path}")
     suspend fun rename(
@@ -224,7 +242,7 @@ private interface ScriniumService {
     ): Response<ResponseBody>
 
     @GET("api/search")
-    suspend fun search(@Query("q") q: String, @Query("folder") folder: String?): List<SearchResult>
+    suspend fun search(@Query("q") q: String, @Query("folder") folder: String?, @Query("scope") scope: String? = null): List<SearchResult>
 
     @GET("api/tags")
     suspend fun tags(): List<TagCount>
@@ -403,6 +421,19 @@ class ScriniumApi(
         if (!res.isSuccessful) throw ApiException(res.code())
     }
 
+    // A restore is a guarded write the server books as a version of its own.
+    suspend fun restoreNote(path: String, content: String, ifMatch: String) {
+        val res = service.putNote(encPath(path), content.toRequestBody(textMediaType), ifMatch, "1", null, "1")
+        res.body()?.close()
+        if (!res.isSuccessful) throw ApiException(res.code())
+    }
+
+    suspend fun history(path: String): List<NoteVersionRow> = service.history(path)
+
+    suspend fun tree(): List<VaultEntry> = service.tree()
+
+    suspend fun historyText(path: String, id: Long): String = service.historyText(path, id).use { it.string() }
+
     override suspend fun moveNote(from: String, to: String, opId: String): MoveResult {
         val res = service.rename(encPath(from), RenameRequest(to), opId)
         return res.body()?.takeIf { res.isSuccessful } ?: throw ApiException(res.code())
@@ -414,6 +445,9 @@ class ScriniumApi(
         if (!res.isSuccessful) throw ApiException(res.code())
     }
     suspend fun search(q: String, folder: String?): List<SearchResult> = service.search(q, folder)
+
+    // Archived notes only; hits carry their ".archive/..." path.
+    suspend fun searchArchive(q: String): List<SearchResult> = service.search(q, null, "archive")
 
     suspend fun fetchTags(): List<TagCount> = service.tags()
 

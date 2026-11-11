@@ -55,6 +55,31 @@ val TaskDto.isDone: Boolean get() = status == TaskStatus.Done.key
 // main list and board show a project task only once it is planned.
 val TaskDto.onMainBoard: Boolean get() = project == null || status != TaskStatus.Inbox.key
 
+// Reminders that went off and wait for an answer (snooze, clear or finish
+// the task), oldest first. The web's inbox lists the same tasks.
+fun firedReminders(tasks: List<TaskDto>, now: Long): List<TaskDto> =
+    tasks.filter { !it.isDone && it.remindAt != null && it.remindAt <= now }.sortedBy { it.remindAt }
+
+data class SnoozeChoice(val label: String, val at: Long)
+
+// The web's snoozeChoices: the evening slot only before 5 PM.
+fun snoozeChoices(now: Calendar = Calendar.getInstance()): List<SnoozeChoice> {
+    fun at(days: Int, hour: Int) = (now.clone() as Calendar).apply {
+        add(Calendar.DAY_OF_MONTH, days)
+        set(Calendar.HOUR_OF_DAY, hour)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
+    val t = now.timeInMillis
+    return listOfNotNull(
+        SnoozeChoice("10 minutes", t + 600_000),
+        SnoozeChoice("1 hour", t + 3_600_000),
+        if (now.get(Calendar.HOUR_OF_DAY) < 17) SnoozeChoice("This evening, 6 PM", at(0, 18)) else null,
+        SnoozeChoice("Tomorrow, 9 AM", at(1, 9))
+    )
+}
+
 fun projectName(path: String): String = path.substringAfterLast('/')
 
 // Which project the Board and the Notes tabs show, like the web's project

@@ -1,5 +1,6 @@
 package dev.mohak.scrinium.ui
 
+import dev.mohak.scrinium.data.VaultListing
 import dev.mohak.scrinium.data.local.NoteEntity
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -9,12 +10,14 @@ class TreeModelTest {
         .map { NoteEntity(it, "", 0L, null, "") }
     private val projects = setOf("Jobs")
 
-    private fun rows(view: ProjectView) = buildTree(notes, emptySet(), view = view, projects = projects).map {
-        when (it) {
-            is TreeItem.Folder -> "${it.depth}:${it.path}/"
-            is TreeItem.Note -> "${it.depth}:${it.note.path}"
+    private fun rows(view: ProjectView, listing: VaultListing = VaultListing()) =
+        buildTree(notes, emptySet(), view = view, projects = projects, listing = listing).map {
+            when (it) {
+                is TreeItem.Folder -> "${it.depth}:${it.path}/"
+                is TreeItem.Note -> "${it.depth}:${it.note.path}"
+                is TreeItem.File -> "${it.depth}:${it.path}!"
+            }
         }
-    }
 
     @Test
     fun allPutsProjectFoldersFirst() {
@@ -40,5 +43,14 @@ class TreeModelTest {
         val folders = buildTree(dirty, emptySet()).filterIsInstance<TreeItem.Folder>().associateBy { it.path }
         assertEquals(2, folders.getValue("Jobs").noteCount)
         assertEquals(listOf("Jobs", "Jobs/Apps"), folders.values.filter { it.hasUnsynced }.map { it.path })
+    }
+
+    @Test
+    fun serverFoldersAndFilesJoinTheTree() {
+        val listing = VaultListing(setOf("Daily", "Empty", "Daily/attachments"), listOf("Daily/attachments/a.png", "scan.pdf"))
+        assertEquals(
+            listOf("0:Daily/", "1:Daily/attachments/", "2:Daily/attachments/a.png!", "1:Daily/Mon.md", "0:Empty/", "0:Ideas.md", "0:scan.pdf!"),
+            rows(ProjectView.Project(null), listing)
+        )
     }
 }
