@@ -104,9 +104,9 @@ fun TopBar(
     }
 }
 
-/** Text tabs with an accent underline, used for filters and sheet sections. */
+/** Text tabs with an accent underline, used for filters and sheet sections. [icons] puts a tinted icon before each label. */
 @Composable
-fun TextTabs(labels: List<String>, selected: Int, modifier: Modifier = Modifier, onSelect: (Int) -> Unit) {
+fun TextTabs(labels: List<String>, selected: Int, modifier: Modifier = Modifier, icons: List<Pair<Int, Color>?>? = null, onSelect: (Int) -> Unit) {
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -119,16 +119,18 @@ fun TextTabs(labels: List<String>, selected: Int, modifier: Modifier = Modifier,
     ) {
         labels.forEachIndexed { i, label ->
             val on = i == selected
-            Text(
-                label,
-                style = Type.body.copy(fontWeight = FontWeight.Medium, color = if (on) Sc.text else Sc.text3),
-                modifier = Modifier
+            Row(
+                Modifier
                     .clickable { onSelect(i) }
                     .drawBehind {
                         if (on) drawRect(Sc.accent, Offset(0f, size.height - 2.dp.toPx()), androidx.compose.ui.geometry.Size(size.width, 2.dp.toPx()))
                     }
-                    .padding(vertical = 10.dp)
-            )
+                    .padding(vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                icons?.getOrNull(i)?.let { (icon, tint) -> Sym(icon, tint = tint, size = 16.dp, modifier = Modifier.padding(end = 5.dp)) }
+                Text(label, style = Type.body.copy(fontWeight = FontWeight.Medium, color = if (on) Sc.text else Sc.text3))
+            }
         }
     }
 }

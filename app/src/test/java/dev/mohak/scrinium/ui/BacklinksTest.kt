@@ -51,10 +51,45 @@ class BacklinksTest {
 
     @Test
     fun linksFirstBareMentionKeepingCase() {
+        val links = WikiResolver(paths)
         assertEquals(
             "[[Plan]] here, [[Plan]] there\nPlan again",
-            linkFirstMention("[[Plan]] here, Plan there\nPlan again", "projects/Plan.md")
+            linkFirstMention("[[Plan]] here, Plan there\nPlan again", "Journal.md", "projects/Plan.md", links)
         )
-        assertNull(linkFirstMention("only [[Plan]]", "projects/Plan.md"))
+        assertNull(linkFirstMention("only [[Plan]]", "Journal.md", "projects/Plan.md", links))
+    }
+
+    @Test
+    fun anAmbiguousNameLinksByPath() {
+        val links = WikiResolver(paths)
+        assertEquals("see [[deep/Ideas|ideas]]", linkFirstMention("see ideas", "Journal.md", "deep/Ideas.md", links))
+    }
+
+    @Test
+    fun codeIsNotALinkOrAMention() {
+        val notes = listOf(
+            "projects/Plan.md" to "# Plan",
+            "Code.md" to "```\n[[Plan]] Plan\n```\nuse `[[Plan]]` and `Plan`",
+            "Prose.md" to "`Plan` then Plan"
+        )
+        val result = findBacklinks("projects/Plan.md", notes)
+        assertEquals(emptyList<Backlink>(), result.linked)
+        assertEquals(listOf("Prose.md"), result.unlinked.map { it.path })
+        assertEquals(
+            "`Plan` then [[Plan]]",
+            linkFirstMention("`Plan` then Plan", "Prose.md", "projects/Plan.md", WikiResolver(paths))
+        )
+    }
+
+    @Test
+    fun markdownLinksResolveAgainstTheNoteFolder() {
+        assertEquals("deep/My Note.md", resolveMarkdownLink("My%20Note.md#top", "deep/Ideas.md"))
+        assertEquals("Journal.md", resolveMarkdownLink("<../Journal.md> \"title\"", "deep/Ideas.md"))
+        assertEquals("a+b.md", resolveMarkdownLink("/a+b.md", "deep/Ideas.md"))
+        assertNull(resolveMarkdownLink("../../x.md", "deep/Ideas.md"))
+        assertNull(resolveMarkdownLink("https://example.com/a.md", "Ideas.md"))
+        assertNull(resolveMarkdownLink("#heading", "Ideas.md"))
+        assertEquals(true, isExternalLink("mailto:a@b.c"))
+        assertEquals("https://x.y/a", linkDestination("https://x.y/a \"t\""))
     }
 }

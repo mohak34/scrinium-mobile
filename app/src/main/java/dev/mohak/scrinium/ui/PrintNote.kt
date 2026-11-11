@@ -59,7 +59,7 @@ fun noteHtml(title: String, markdown: String, imageSrc: (String) -> String?): St
         val bullet = Regex("^[-*+]\\s+(\\[[ xX]]\\s+)?(.*)$").matchEntire(t)
         val ordered = Regex("^\\d+[.)]\\s+(.*)$").matchEntire(t)
         val image = printImageRe.matchEntire(t)
-        val table = if ('|' in t) parseTable(lines, i) else null
+        val table = parseTable(lines, i)
         when {
             t.startsWith("```") || t.startsWith("~~~") -> {
                 flushPara(); closeList()

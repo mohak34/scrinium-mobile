@@ -57,6 +57,16 @@ class MainActivity : ComponentActivity() {
     private val vm: MainViewModel by viewModels { MainViewModel.factory(container) }
     private val tasksVm: TasksViewModel by viewModels { TasksViewModel.factory(container) }
 
+    // App-wide foreground, not this activity's: rotation and returning from
+    // the sign-in sheet don't count. Removed in onDestroy so a recreated
+    // activity doesn't stack a second one.
+    private val foreground = object : DefaultLifecycleObserver {
+        override fun onStart(owner: LifecycleOwner) {
+            vm.syncOnForeground()
+            if (vm.signedIn.value) tasksVm.refresh(quiet = true)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Always dark, so light bar icons whatever the system theme is.
@@ -65,12 +75,7 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
         )
         vm.registerSignInAction { container.sessionRepository.signIn(this) }
-        ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
-            override fun onStart(owner: LifecycleOwner) {
-                vm.syncOnForeground()
-                if (vm.signedIn.value) tasksVm.refresh(quiet = true)
-            }
-        })
+        ProcessLifecycleOwner.get().lifecycle.addObserver(foreground)
         if (savedInstanceState == null) openFrom(intent)
         // Emulator testing without Google: `am start --es dev_token <raw token>`.
         if (BuildConfig.DEBUG) intent?.getStringExtra("dev_token")?.let { token ->
@@ -86,6 +91,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onDestroy() {
+        ProcessLifecycleOwner.get().lifecycle.removeObserver(foreground)
+        super.onDestroy()
     }
 
     override fun onNewIntent(intent: Intent) {

@@ -60,6 +60,7 @@ import dev.mohak.scrinium.ui.MenuRow
 import dev.mohak.scrinium.ui.MonoFont
 import dev.mohak.scrinium.ui.PromptDialog
 import dev.mohak.scrinium.ui.Sc
+import dev.mohak.scrinium.ui.expiryLabel
 import dev.mohak.scrinium.ui.Sheet
 import dev.mohak.scrinium.ui.SheetTitle
 import dev.mohak.scrinium.ui.Sym
@@ -106,7 +107,7 @@ private fun IndexPage(vm: MainViewModel, open: (Page) -> Unit) {
     val sync by vm.sync.collectAsStateWithLifecycle()
     val unsynced by vm.unsyncedCount.collectAsStateWithLifecycle()
     val devices by vm.devices.collectAsStateWithLifecycle()
-    val shares by vm.shares.collectAsStateWithLifecycle()
+    val shares = vm.shares.collectAsStateWithLifecycle().value.let { if (it.path == null) it.links else emptyList() }
     val template by vm.template.collectAsStateWithLifecycle()
     val trash by vm.trash.collectAsStateWithLifecycle()
     val remindersOn by vm.remindersOn.collectAsStateWithLifecycle()
@@ -299,7 +300,7 @@ private fun DevicesPage(vm: MainViewModel) {
 // and revoke; a password change signs out viewers who unlocked it.
 @Composable
 private fun SharesPage(vm: MainViewModel) {
-    val shares by vm.shares.collectAsStateWithLifecycle()
+    val shares = vm.shares.collectAsStateWithLifecycle().value.let { if (it.path == null) it.links else emptyList() }
     val loading by vm.sharesLoading.collectAsStateWithLifecycle()
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
@@ -318,8 +319,12 @@ private fun SharesPage(vm: MainViewModel) {
                 Column(Modifier.weight(1f).padding(start = 16.dp)) {
                     Text(share.notePath.removeSuffix(".md"), style = Type.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(
-                        (if (share.hasPassword) "password" else "open") + "  ·  " + DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(share.createdAt)),
-                        style = Type.mono
+                        listOf(
+                            if (share.hasPassword) "password" else "open",
+                            DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(share.createdAt)),
+                            expiryLabel(share.expiresAt)
+                        ).filter { it.isNotEmpty() }.joinToString("  ·  "),
+                        style = Type.mono.copy(color = if (expiryLabel(share.expiresAt) == "expired") Sc.red else Sc.text3)
                     )
                 }
             }

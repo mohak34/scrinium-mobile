@@ -2,6 +2,7 @@ package dev.mohak.scrinium.data.remote
 
 import android.net.Uri
 import java.io.File
+import java.security.MessageDigest
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.ZoneId
@@ -25,6 +26,7 @@ import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.HTTP
+import retrofit2.http.Header
 import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.PUT
@@ -43,8 +45,20 @@ data class MobileAuthResponse(val apiToken: String, val email: String)
 @Serializable
 data class RenameRequest(val newPath: String)
 
+// What a server move rewrote: path to its new version, and its version before.
+@Serializable
+data class MoveResult(val versions: Map<String, String> = emptyMap(), val previous: Map<String, String> = emptyMap())
+
 @Serializable
 data class SearchResult(val path: String, val title: String, val snippet: String)
+
+// One saved version of a note; [mine] when the caller wrote it.
+@Serializable
+data class NoteVersionRow(val id: Long, val author: String? = null, val at: Long, val size: Int, val mine: Boolean = false)
+
+// One entry of the vault listing; dot folders are left out by the server.
+@Serializable
+data class VaultEntry(val name: String, val path: String, val type: String, val children: List<VaultEntry> = emptyList())
 
 @Serializable
 data class TagCount(val tag: String, val count: Int)
@@ -96,11 +110,16 @@ data class PublicShare(
     val id: String,
     val notePath: String,
     val createdAt: Long = 0L,
-    val hasPassword: Boolean = false
+    val hasPassword: Boolean = false,
+    // Epoch ms; null never expires. An expired link still lists until removed.
+    val expiresAt: Long? = null
 )
 
+// Lifetimes offered when a link is made, as the web offers them (days; null never expires).
+val SHARE_LIFETIMES: List<Int?> = listOf(null, 1, 7, 30)
+
 @Serializable
-data class CreateShareRequest(val path: String, val password: String? = null)
+data class CreateShareRequest(val path: String, val password: String? = null, val expiresInDays: Int? = null)
 
 // No default: a null password must reach the server to remove it.
 @Serializable
@@ -136,13 +155,18 @@ data class NewTaskRequest(
     val status: String,
     @SerialName("due_at") val dueAt: Long?,
     @SerialName("parent_id") val parentId: String?,
-    val project: String?
+    val project: String?,
+    // Linked in the same request; a bad path fails it before the task exists.
+    @SerialName("note_paths") val notePaths: List<String>? = null
 )
 
 // A vault folder registered as a project board on the web.
 @Serializable
 data class ProjectDto(
     val path: String,
+    // Picked on the web; null means the default (projectStyle).
+    val icon: String? = null,
+    val color: String? = null,
     @SerialName("created_at") val createdAt: Long = 0L
 )
 
@@ -195,23 +219,46 @@ private interface ScriniumService {
     @GET("api/notes/{path}")
     suspend fun note(@Path("path", encoded = true) path: String): ResponseBody
 
+    @GET("api/notes/{path}")
+    suspend fun noteIfChanged(
+        @Path("path", encoded = true) path: String,
+        @Header("If-None-Match") version: String
+    ): Response<ResponseBody>
+
     @PUT("api/notes/{path}")
     suspend fun putNote(
         @Path("path", encoded = true) path: String,
-        @Body body: RequestBody
+        @Body body: RequestBody,
+        @Header("If-Match") ifMatch: String?,
+        @Header("X-Note-Strict") strict: String?,
+        @Header("If-None-Match") ifNoneMatch: String?,
+        @Header("X-Note-Restore") restore: String? = null
     ): Response<ResponseBody>
+
+    @GET("api/tree")
+    suspend fun tree(): List<VaultEntry>
+
+    @GET("api/history")
+    suspend fun history(@Query("note") note: String): List<NoteVersionRow>
+
+    @GET("api/history")
+    suspend fun historyText(@Query("note") note: String, @Query("id") id: Long): ResponseBody
 
     @PATCH("api/notes/{path}")
     suspend fun rename(
         @Path("path", encoded = true) path: String,
-        @Body body: RenameRequest
-    ): Response<ResponseBody>
+        @Body body: RenameRequest,
+        @Header("X-Op-Id") opId: String
+    ): Response<MoveResult>
 
     @DELETE("api/notes/{path}")
-    suspend fun delete(@Path("path", encoded = true) path: String): Response<ResponseBody>
+    suspend fun delete(
+        @Path("path", encoded = true) path: String,
+        @Header("If-Match") ifMatch: String?
+    ): Response<ResponseBody>
 
     @GET("api/search")
-    suspend fun search(@Query("q") q: String): List<SearchResult>
+    suspend fun search(@Query("q") q: String, @Query("folder") folder: String?, @Query("scope") scope: String? = null): List<SearchResult>
 
     @GET("api/tags")
     suspend fun tags(): List<TagCount>
@@ -307,6 +354,25 @@ private interface ScriniumService {
 
 class ApiException(val status: Int) : Exception("API error $status")
 
+// The server's noteVersion(): quoted sha256 hex of the text, first 16.
+fun noteVersion(content: String): String {
+    val hash = MessageDigest.getInstance("SHA-256").digest(content.toByteArray())
+    return "\"" + hash.joinToString("") { "%02x".format(it) }.take(16) + "\""
+}
+
+// What SyncEngine needs from the server, so tests can fake it.
+interface NotesSyncApi {
+    suspend fun fetchManifest(): List<ManifestEntry>
+    suspend fun fetchNote(path: String): String
+    // [ifMatch]: the version this text replaces, 412 if the server moved on.
+    // [createOnly]: 409 if the note exists. Neither overwrites.
+    suspend fun pushNote(path: String, content: String, ifMatch: String? = null, createOnly: Boolean = false)
+    // [ifMatch]: 412 if the note changed since that version.
+    suspend fun deleteNote(path: String, ifMatch: String? = null)
+    suspend fun moveNote(from: String, to: String, opId: String): MoveResult
+    suspend fun serverHolds(path: String, content: String): Boolean
+}
+
 // What TasksViewModel needs from the server, so tests can fake it.
 interface TasksApi {
     suspend fun fetchTasks(): List<TaskDto>
@@ -326,7 +392,7 @@ class ScriniumApi(
     tokenProvider: () -> String?,
     onUnauthorized: () -> Unit,
     cacheDir: File
-) : TasksApi {
+) : TasksApi, NotesSyncApi {
     private val textMediaType = "text/plain".toMediaType()
     private val root = baseUrl.trimEnd('/') + "/"
 
@@ -351,25 +417,53 @@ class ScriniumApi(
     suspend fun exchangeGoogleIdToken(idToken: String): MobileAuthResponse =
         service.mobileAuth(MobileAuthRequest(idToken))
 
-    suspend fun fetchManifest(): List<ManifestEntry> = service.manifest()
+    override suspend fun fetchManifest(): List<ManifestEntry> = service.manifest()
 
-    suspend fun fetchNote(path: String): String = service.note(encPath(path)).string()
+    override suspend fun fetchNote(path: String): String = service.note(encPath(path)).string()
 
-    suspend fun pushNote(path: String, content: String) {
-        val res = service.putNote(encPath(path), content.toRequestBody(textMediaType))
+    // True when the server's copy is exactly [content]: a 304 against its version.
+    override suspend fun serverHolds(path: String, content: String): Boolean {
+        val res = service.noteIfChanged(encPath(path), noteVersion(content))
+        res.body()?.close()
+        return res.code() == 304
+    }
+
+    override suspend fun pushNote(path: String, content: String, ifMatch: String?, createOnly: Boolean) {
+        val res = service.putNote(
+            encPath(path), content.toRequestBody(textMediaType),
+            ifMatch, ifMatch?.let { "1" }, if (createOnly) "*" else null
+        )
+        res.body()?.close()
         if (!res.isSuccessful) throw ApiException(res.code())
     }
 
-    suspend fun renameNote(oldPath: String, newPath: String) {
-        val res = service.rename(encPath(oldPath), RenameRequest(newPath))
+    // A restore is a guarded write the server books as a version of its own.
+    suspend fun restoreNote(path: String, content: String, ifMatch: String) {
+        val res = service.putNote(encPath(path), content.toRequestBody(textMediaType), ifMatch, "1", null, "1")
+        res.body()?.close()
         if (!res.isSuccessful) throw ApiException(res.code())
     }
 
-    suspend fun deleteNote(path: String) {
-        val res = service.delete(encPath(path))
+    suspend fun history(path: String): List<NoteVersionRow> = service.history(path)
+
+    suspend fun tree(): List<VaultEntry> = service.tree()
+
+    suspend fun historyText(path: String, id: Long): String = service.historyText(path, id).use { it.string() }
+
+    override suspend fun moveNote(from: String, to: String, opId: String): MoveResult {
+        val res = service.rename(encPath(from), RenameRequest(to), opId)
+        return res.body()?.takeIf { res.isSuccessful } ?: throw ApiException(res.code())
+    }
+
+    override suspend fun deleteNote(path: String, ifMatch: String?) {
+        val res = service.delete(encPath(path), ifMatch)
+        res.body()?.close()
         if (!res.isSuccessful) throw ApiException(res.code())
     }
-    suspend fun search(q: String): List<SearchResult> = service.search(q)
+    suspend fun search(q: String, folder: String?): List<SearchResult> = service.search(q, folder)
+
+    // Archived notes only; hits carry their ".archive/..." path.
+    suspend fun searchArchive(q: String): List<SearchResult> = service.search(q, null, "archive")
 
     suspend fun fetchTags(): List<TagCount> = service.tags()
 
@@ -412,8 +506,8 @@ class ScriniumApi(
     suspend fun setSharePassword(id: String, password: String?): PublicShare =
         service.setSharePassword(id, SharePasswordRequest(password))
 
-    suspend fun createShare(path: String, password: String?): PublicShare =
-        service.createShare(CreateShareRequest(path, password?.takeIf { it.isNotBlank() }))
+    suspend fun createShare(path: String, password: String?, expiresInDays: Int?): PublicShare =
+        service.createShare(CreateShareRequest(path, password?.takeIf { it.isNotBlank() }, expiresInDays))
 
     suspend fun deleteShare(id: String) {
         val res = service.deleteShare(id)

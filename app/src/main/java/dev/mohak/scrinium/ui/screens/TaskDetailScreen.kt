@@ -46,6 +46,7 @@ import dev.mohak.scrinium.ui.Segments
 import dev.mohak.scrinium.ui.Sheet
 import dev.mohak.scrinium.ui.SheetTitle
 import dev.mohak.scrinium.ui.Sym
+import dev.mohak.scrinium.ui.projectStyle
 import dev.mohak.scrinium.ui.TaskPriority
 import dev.mohak.scrinium.ui.TaskStatus
 import dev.mohak.scrinium.ui.TasksViewModel
@@ -57,6 +58,7 @@ import dev.mohak.scrinium.ui.isDone
 import dev.mohak.scrinium.ui.noteTitle
 import dev.mohak.scrinium.ui.stampLabel
 import dev.mohak.scrinium.ui.startOfDay
+import dev.mohak.scrinium.ui.noteStem
 
 /** Full-screen task editor, the phone's version of the web task drawer. */
 @OptIn(ExperimentalLayoutApi::class)
@@ -131,7 +133,7 @@ fun TaskDetailScreen(vm: MainViewModel, tasksVm: TasksViewModel, id: String) {
             // Subtasks carry their root's project, so only roots pick one.
             if (task.parentId == null && (projects.isNotEmpty() || task.project != null)) {
                 DateRow(
-                    R.drawable.ms_folder_special,
+                    if (task.project != null) projectStyle(task.project, projects).icon else R.drawable.ms_folder_special,
                     task.project ?: "No project",
                     set = task.project != null,
                     onPick = { pickProject = true },
@@ -191,7 +193,10 @@ fun TaskDetailScreen(vm: MainViewModel, tasksVm: TasksViewModel, id: String) {
 
     if (pickProject) {
         val paths = projects.map { it.path }
-        ChoiceSheet("Project", paths.map { it to projectLabel(it, paths) }, task.project, onDismiss = { pickProject = false }) {
+        ChoiceSheet("Project", paths.map { it to projectLabel(it, paths) }, task.project, onDismiss = { pickProject = false }, lead = {
+            val style = projectStyle(it, projects)
+            Sym(style.icon, tint = style.color, size = 18.dp, modifier = Modifier.padding(end = 12.dp))
+        }) {
             pickProject = false
             tasksVm.setProject(task.id, it)
         }
@@ -272,7 +277,7 @@ fun TaskDetailScreen(vm: MainViewModel, tasksVm: TasksViewModel, id: String) {
             onDismiss = { showLinkPicker = false },
             onPick = {
                 showLinkPicker = false
-                tasksVm.addLink(task.id, it)
+                tasksVm.addLink(task.id) { vm.noteOnServer(it) }
             }
         )
     }
@@ -283,6 +288,7 @@ private fun Subtasks(task: TaskDto, all: List<TaskDto>, tasksVm: TasksViewModel)
     val kids = all.filter { it.parentId == task.id }
         .sortedWith(compareBy({ it.position }, { it.createdAt }))
     var newTitle by remember(task.id) { mutableStateOf("") }
+    var adding by remember(task.id) { mutableStateOf(false) }
     GroupHeader("Subtasks", if (kids.isNotEmpty()) "${kids.count { it.isDone }}/${kids.size}" else null)
     kids.forEach { k ->
         TaskRow(k, null, onToggle = { tasksVm.toggleDone(k) }, onOpen = { tasksVm.openTask(k.id) })
@@ -294,15 +300,20 @@ private fun Subtasks(task: TaskDto, all: List<TaskDto>, tasksVm: TasksViewModel)
         Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
         icon = R.drawable.ms_add,
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-        keyboardActions = KeyboardActions(onDone = {
+        keyboardActions = KeyboardActions(onDone = add@{
             // Subtasks start in the parent's column; the server gives them its project.
             val title = newTitle
+            if (adding) return@add
+            adding = true
             tasksVm.create(
                 title,
                 parentId = task.id,
                 status = TaskStatus.of(task.status).takeIf { it != TaskStatus.Done } ?: TaskStatus.Todo,
                 // Kept on failure for a retry; cleared unless more was typed.
-                onCreated = { if (newTitle == title) newTitle = "" }
+                onDone = { ok ->
+                    adding = false
+                    if (ok && newTitle == title) newTitle = ""
+                }
             )
         })
     )
@@ -339,22 +350,31 @@ private fun DraftField(
         text = next
         tasksVm.draft(id, field, next)
     }
+    val failed by tasksVm.failedFields.collectAsStateWithLifecycle()
     if (boxed) {
         InputBox(text, onChange, placeholder, Modifier.fillMaxWidth().padding(horizontal = 16.dp), style = style)
-        return
+    } else {
+        BasicTextField(
+            value = text,
+            onValueChange = onChange,
+            singleLine = singleLine,
+            textStyle = style,
+            cursorBrush = SolidColor(Sc.accent),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+            decorationBox = { inner ->
+                if (text.isEmpty()) Text(placeholder, style = style.copy(color = Sc.text3))
+                inner()
+            }
+        )
     }
-    BasicTextField(
-        value = text,
-        onValueChange = onChange,
-        singleLine = singleLine,
-        textStyle = style,
-        cursorBrush = SolidColor(Sc.accent),
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-        decorationBox = { inner ->
-            if (text.isEmpty()) Text(placeholder, style = style.copy(color = Sc.text3))
-            inner()
-        }
-    )
+    // The text above stays as typed; the server still has the old value.
+    if ((id to field) in failed) {
+        Text(
+            "Not saved. Tap to retry.",
+            style = Type.meta.copy(color = Sc.red),
+            modifier = Modifier.clickable { tasksVm.retryField(id, field) }.padding(horizontal = 16.dp, vertical = 4.dp)
+        )
+    }
 }
 
 @Composable
@@ -384,6 +404,7 @@ private fun ChoiceSheet(
     options: List<Pair<String, String>>,
     selected: String?,
     onDismiss: () -> Unit,
+    lead: (@Composable (String?) -> Unit)? = null,
     onPick: (String?) -> Unit
 ) {
     Sheet(onDismiss) {
@@ -394,6 +415,7 @@ private fun ChoiceSheet(
                     Modifier.fillMaxWidth().clickable { onPick(value) }.padding(horizontal = 16.dp, vertical = 11.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    lead?.invoke(value)
                     Text(label, style = Type.body, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     if (value == selected) Sym(R.drawable.ms_check, tint = Sc.accent, size = 18.dp)
                 }
@@ -421,7 +443,7 @@ fun NotePickerDialog(paths: List<String>, onDismiss: () -> Unit, onPick: (String
                 ) {
                     Sym(R.drawable.ms_description, tint = Sc.text3, size = 17.dp)
                     Column(Modifier.padding(start = 10.dp)) {
-                        Text(p.substringAfterLast('/').removeSuffix(".md"), style = Type.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(noteStem(p), style = Type.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(p.substringBeforeLast('/', "").ifBlank { "/" }, style = Type.meta, maxLines = 1)
                     }
                 }

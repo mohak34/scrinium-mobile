@@ -1,6 +1,7 @@
 package dev.mohak.scrinium.ui.screens
 
 import android.content.Context
+import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
@@ -44,6 +45,17 @@ import dev.mohak.scrinium.ui.SheetTitle
 import dev.mohak.scrinium.ui.Sym
 import dev.mohak.scrinium.ui.Type
 import dev.mohak.scrinium.ui.printHtml
+import dev.mohak.scrinium.ui.noteStem
+import dev.mohak.scrinium.ui.expiryLabel
+import dev.mohak.scrinium.ui.lifetimeLabel
+import dev.mohak.scrinium.data.remote.SHARE_LIFETIMES
+import dev.mohak.scrinium.data.remote.NoteVersionRow
+import dev.mohak.scrinium.ui.DiffKind
+import dev.mohak.scrinium.ui.foldDiff
+import dev.mohak.scrinium.ui.lineDiff
+import androidx.compose.runtime.LaunchedEffect
+import java.text.DateFormat
+import java.util.Date
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -57,6 +69,7 @@ class NoteActions {
     var rename by mutableStateOf<String?>(null)
     var move by mutableStateOf<String?>(null)
     var share by mutableStateOf<String?>(null)
+    var history by mutableStateOf<String?>(null)
     var delete by mutableStateOf<String?>(null)
 
     @Composable
@@ -64,7 +77,7 @@ class NoteActions {
         rename?.let { path ->
             PromptDialog(
                 "Rename note",
-                path.substringAfterLast('/').removeSuffix(".md"),
+                noteStem(path),
                 "Rename",
                 onConfirm = { vm.renameNote(path, it) },
                 onDismiss = { rename = null }
@@ -72,7 +85,7 @@ class NoteActions {
         }
         move?.let { path ->
             MoveSheet(
-                title = "Move \"${path.substringAfterLast('/').removeSuffix(".md")}\"",
+                title = "Move \"${noteStem(path)}\"",
                 folders = folders,
                 current = path.substringBeforeLast('/', ""),
                 onDismiss = { move = null },
@@ -80,6 +93,7 @@ class NoteActions {
             )
         }
         share?.let { path -> ShareSheet(vm, path) { share = null } }
+        history?.let { path -> HistorySheet(vm, path) { history = null } }
         delete?.let { path ->
             ConfirmDialog(
                 "Delete note?",
@@ -98,8 +112,17 @@ fun rememberNoteActions(): NoteActions = remember { NoteActions() }
 /** Opens the print dialog for a note, where "Save as PDF" is a printer. */
 fun exportPdf(context: Context, scope: CoroutineScope, vm: MainViewModel, path: String, text: String) {
     scope.launch {
-        printHtml(context, path.substringAfterLast('/').removeSuffix(".md"), vm.printableHtml(path, text))
+        printHtml(context, noteStem(path), vm.printableHtml(path, text))
     }
+}
+
+// Hands the note's Markdown to any app (save to Files, mail, chat).
+fun shareMarkdown(context: Context, path: String, text: String) {
+    val send = Intent(Intent.ACTION_SEND)
+        .setType("text/markdown")
+        .putExtra(Intent.EXTRA_SUBJECT, noteStem(path))
+        .putExtra(Intent.EXTRA_TEXT, text)
+    context.startActivity(Intent.createChooser(send, null))
 }
 
 /**
@@ -163,10 +186,11 @@ private fun FolderPick(icon: Int, label: String, depth: Int, selected: Boolean, 
 /** Public read-only links for a note: copy, remove, or add one (optionally locked). */
 @Composable
 private fun ShareSheet(vm: MainViewModel, path: String, onDismiss: () -> Unit) {
-    val shares by vm.shares.collectAsStateWithLifecycle()
+    val shares = vm.shares.collectAsStateWithLifecycle().value.let { if (it.path == path) it.links else emptyList() }
     val clipboard = LocalClipboard.current
     val copyScope = rememberCoroutineScope()
     var password by remember(path) { mutableStateOf("") }
+    var lifetime by remember(path) { mutableStateOf<Int?>(null) }
     androidx.compose.runtime.LaunchedEffect(path) { vm.loadShares(path) }
     Sheet(onDismiss) {
         SheetTitle("Share links", "Anyone with a link can read this note.")
@@ -176,17 +200,134 @@ private fun ShareSheet(vm: MainViewModel, path: String, onDismiss: () -> Unit) {
             Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(url.substringAfter("://"), style = Type.mono.copy(color = Sc.text), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(if (share.hasPassword) "password" else "open", style = Type.meta)
+                    val expiry = expiryLabel(share.expiresAt)
+                    Text(
+                        listOf(if (share.hasPassword) "password" else "open", expiry).filter { it.isNotEmpty() }.joinToString("  ·  "),
+                        style = Type.meta.copy(color = if (expiry == "expired") Sc.red else Sc.text3)
+                    )
                 }
                 IconBtn(R.drawable.ms_content_copy, "Copy link", { copyScope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("link", url))) } })
                 IconBtn(R.drawable.ms_close, "Remove link", { vm.deleteShareLink(share.id) }, tint = Sc.red)
             }
         }
         InputBox(password, { password = it }, "Password (optional)", Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), icon = R.drawable.ms_lock)
+        // Tapping cycles through the lifetimes the web offers.
+        dev.mohak.scrinium.ui.MenuRow(R.drawable.ms_schedule, lifetimeLabel(lifetime), {
+            lifetime = SHARE_LIFETIMES[(SHARE_LIFETIMES.indexOf(lifetime) + 1) % SHARE_LIFETIMES.size]
+        })
         FillButton("New link", {
-            vm.createShareLink(path, password.ifBlank { null })
+            vm.createShareLink(path, password.ifBlank { null }, lifetime)
             password = ""
         }, Modifier.fillMaxWidth().padding(horizontal = 16.dp))
+    }
+}
+
+/**
+ * The note's saved versions on the server. Picking one shows what restoring
+ * it would change in the note's current text; Restore writes it back as a
+ * new version, so nothing is lost.
+ */
+@Composable
+private fun HistorySheet(vm: MainViewModel, path: String, onDismiss: () -> Unit) {
+    var versions by remember(path) { mutableStateOf<List<NoteVersionRow>?>(null) }
+    var failed by remember(path) { mutableStateOf<String?>(null) }
+    var selected by remember(path) { mutableStateOf<NoteVersionRow?>(null) }
+    var text by remember(path) { mutableStateOf<String?>(null) }
+    var current by remember(path) { mutableStateOf("") }
+    LaunchedEffect(path) {
+        try {
+            current = vm.noteContent(path)
+            versions = vm.noteHistory(path)
+        } catch (e: Exception) {
+            failed = e.message ?: "History failed"
+        }
+    }
+    LaunchedEffect(selected) {
+        text = null
+        val v = selected ?: return@LaunchedEffect
+        try {
+            text = vm.historyText(path, v.id)
+        } catch (e: Exception) {
+            failed = e.message ?: "Version failed"
+        }
+    }
+    fun who(v: NoteVersionRow) = if (v.mine) "You" else v.author ?: "Unattributed"
+    fun stamp(v: NoteVersionRow) = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(v.at))
+    Sheet(onDismiss) {
+        val v = selected
+        if (v == null) {
+            SheetTitle("History", "Every save is kept on the server, the last 50 versions.")
+            Divider()
+            when {
+                failed != null -> Text(failed!!, style = Type.meta.copy(color = Sc.red), modifier = Modifier.padding(20.dp))
+                versions == null -> Text("Loading", style = Type.meta, modifier = Modifier.padding(20.dp))
+                versions!!.isEmpty() -> Text("No saved versions yet.", style = Type.meta, modifier = Modifier.padding(20.dp))
+            }
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp)) {
+                items(versions.orEmpty(), key = { it.id }) { row ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { selected = row }.padding(horizontal = 20.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(stamp(row), style = Type.body)
+                            Text(who(row), style = Type.meta, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        Text("${row.size} chars", style = Type.meta)
+                    }
+                }
+            }
+        } else {
+            Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconBtn(R.drawable.ms_arrow_back, "Back", { selected = null })
+                Column(Modifier.weight(1f)) {
+                    Text(stamp(v), style = Type.body)
+                    Text(who(v), style = Type.meta, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            Divider()
+            val t = text
+            // The current text into the version: green comes back, red goes away.
+            val diff = remember(t, current) { t?.let { lineDiff(current, it) } }
+            val changed = diff?.any { it.kind != DiffKind.Same } == true
+            when {
+                failed != null -> Text(failed!!, style = Type.meta.copy(color = Sc.red), modifier = Modifier.padding(20.dp))
+                diff == null -> Text("Loading", style = Type.meta, modifier = Modifier.padding(20.dp))
+                !changed -> Text("Same as the current text.", style = Type.meta, modifier = Modifier.padding(20.dp))
+            }
+            val hunks = remember(diff) { diff?.let { foldDiff(it) }.orEmpty() }
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp).padding(vertical = 6.dp)) {
+                items(hunks.size) { i ->
+                    val (line, folded) = hunks[i]
+                    when (line?.kind) {
+                        null -> Text("$folded unchanged lines", style = Type.meta, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+                        else -> {
+                            val color = when (line.kind) {
+                                DiffKind.Add -> Sc.green
+                                DiffKind.Del -> Sc.red
+                                DiffKind.Same -> Sc.text3
+                            }
+                            val mark = when (line.kind) {
+                                DiffKind.Add -> "+ "
+                                DiffKind.Del -> "- "
+                                DiffKind.Same -> "  "
+                            }
+                            Text(
+                                mark + line.text,
+                                style = Type.mono.copy(color = color),
+                                modifier = Modifier.fillMaxWidth()
+                                    .background(if (line.kind == DiffKind.Same) androidx.compose.ui.graphics.Color.Transparent else color.copy(alpha = 0.08f))
+                                    .padding(horizontal = 16.dp, vertical = 1.dp)
+                            )
+                        }
+                    }
+                }
+            }
+            FillButton("Restore this version", {
+                vm.restoreVersion(path, t ?: return@FillButton)
+                onDismiss()
+            }, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), enabled = changed)
+        }
     }
 }
 
@@ -201,6 +342,7 @@ fun NoteMenuSheet(
     onRename: () -> Unit,
     onMove: () -> Unit,
     onShare: () -> Unit,
+    onHistory: () -> Unit,
     onExport: () -> Unit,
     onArchive: () -> Unit,
     onDelete: () -> Unit
@@ -213,6 +355,7 @@ fun NoteMenuSheet(
         dev.mohak.scrinium.ui.MenuRow(R.drawable.ms_edit, "Rename", act(onRename))
         dev.mohak.scrinium.ui.MenuRow(R.drawable.ms_drive_file_move, "Move to folder", act(onMove))
         dev.mohak.scrinium.ui.MenuRow(R.drawable.ms_link, "Share link", act(onShare))
+        dev.mohak.scrinium.ui.MenuRow(R.drawable.ms_history, "History", act(onHistory))
         dev.mohak.scrinium.ui.MenuRow(R.drawable.ms_picture_as_pdf, "Export PDF", act(onExport))
         dev.mohak.scrinium.ui.MenuRow(R.drawable.ms_archive, "Archive", act(onArchive))
         dev.mohak.scrinium.ui.MenuRow(R.drawable.ms_delete, "Delete", act(onDelete), danger = true)

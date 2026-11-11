@@ -44,6 +44,9 @@ object Sc {
     val yellow = Color(0xFFE8C872)
     val green = Color(0xFF9FD4A3)
     val blue = Color(0xFF8FB3FF)
+    val rose = Color(0xFFF2A0A8)
+    val violet = Color(0xFFC4A8FF)
+    val sand = Color(0xFFD6C3A1)
 }
 
 @OptIn(androidx.compose.ui.text.ExperimentalTextApi::class)

@@ -29,6 +29,29 @@ private data class Release(@SerialName("tag_name") val tagName: String, val asse
 private data class Asset(val name: String, @SerialName("browser_download_url") val url: String)
 
 /**
+ * Whether release [remote] is newer than [current], semver-style: dotted
+ * numbers first, then a release beats its own prerelease (`1.0.0` >
+ * `1.0.0-beta`), and prerelease tags compare as text.
+ */
+fun isNewer(remote: String, current: String): Boolean {
+    fun parts(v: String) = v.substringBefore('-').split('.').map { it.toIntOrNull() ?: 0 }
+    val a = parts(remote)
+    val b = parts(current)
+    for (i in 0 until maxOf(a.size, b.size)) {
+        val c = a.getOrElse(i) { 0 }.compareTo(b.getOrElse(i) { 0 })
+        if (c != 0) return c > 0
+    }
+    val x = remote.substringAfter('-', "")
+    val y = current.substringAfter('-', "")
+    return when {
+        x == y -> false
+        x.isEmpty() -> true
+        y.isEmpty() -> false
+        else -> x > y
+    }
+}
+
+/**
  * In-app updates from the GitHub releases of the repo that built this APK
  * (`BuildConfig.UPDATE_REPO`, set by `.github/workflows/release.yml`; empty
  * in local builds, which never check). Settings calls [check] when it opens and
@@ -67,7 +90,7 @@ class Updater(private val context: Context) {
                     val release = json.decodeFromString<Release>(res.body.string())
                     val version = release.tagName.removePrefix("v")
                     val apk = release.assets.firstOrNull { it.name.endsWith(".apk") }
-                    if (version == BuildConfig.VERSION_NAME || apk == null) State.UpToDate else State.Available(version, apk.url)
+                    if (!isNewer(version, BuildConfig.VERSION_NAME) || apk == null) State.UpToDate else State.Available(version, apk.url)
                 }
             }
         } catch (e: Exception) {

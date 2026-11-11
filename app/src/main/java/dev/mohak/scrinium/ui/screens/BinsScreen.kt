@@ -55,6 +55,16 @@ import dev.mohak.scrinium.ui.TextTabs
 import dev.mohak.scrinium.ui.TopBar
 import dev.mohak.scrinium.ui.Type
 import dev.mohak.scrinium.ui.startOfToday
+import dev.mohak.scrinium.ui.noteStem
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import dev.mohak.scrinium.data.remote.SearchResult
+import dev.mohak.scrinium.ui.InputBox
+import dev.mohak.scrinium.ui.MarkdownText
+import kotlinx.coroutines.delay
 import java.text.DateFormat
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -109,20 +119,44 @@ fun BinsScreen(vm: MainViewModel, tab: BinTab) {
     }
 }
 
-/** Archived notes and folders, newest first. Tap to restore or trash. */
+/**
+ * Archived notes and folders, newest first. Tap to read, restore or trash;
+ * the box searches archived notes' text on the server.
+ */
 @Composable
 private fun ArchiveTab(vm: MainViewModel, loading: Boolean) {
     val entries by vm.archive.collectAsStateWithLifecycle()
     var open by remember { mutableStateOf<ArchiveEntry?>(null) }
+    var reading by remember { mutableStateOf<String?>(null) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var hits by remember { mutableStateOf<List<SearchResult>?>(null) }
+    val q = query.trim()
+    LaunchedEffect(q) {
+        hits = null
+        if (q.length < 2) return@LaunchedEffect
+        delay(300)
+        hits = try { vm.searchArchive(q) } catch (_: Exception) { emptyList() }
+    }
     val today = startOfToday()
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+        item {
+            InputBox(query, { query = it }, "Search the archive", Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), icon = R.drawable.ms_search)
+        }
+        if (q.length >= 2) {
+            val found = hits
+            if (found != null && found.isEmpty()) item { EmptyState(R.drawable.ms_search, "No archived notes match") }
+            items(found.orEmpty(), key = { "hit-" + it.path }) { h ->
+                BinRow(R.drawable.ms_description, h.title, h.snippet.ifBlank { h.path.removePrefix(".archive/") }, "") { reading = h.path }
+            }
+            return@LazyColumn
+        }
         if (!loading && entries.isEmpty()) {
             item { EmptyState(R.drawable.ms_inventory_2, "Archive is empty", "Archived notes leave the tree and search but are kept.") }
         }
         items(entries.sortedByDescending { it.archivedAt }, key = { it.name }) { e ->
             BinRow(
                 if (e.isDir) R.drawable.ms_folder else R.drawable.ms_description,
-                e.originalPath.substringAfterLast('/').removeSuffix(".md"),
+                noteStem(e.originalPath),
                 e.originalPath.substringBeforeLast('/', "").ifBlank { "/" },
                 deletedLabel(e.archivedAt, today)
             ) { open = e }
@@ -131,10 +165,37 @@ private fun ArchiveTab(vm: MainViewModel, loading: Boolean) {
     open?.let { e ->
         val dir = e.originalPath.substringBeforeLast('/', "").ifBlank { "vault root" }
         Sheet(onDismiss = { open = null }) {
-            SheetTitle(e.originalPath.substringAfterLast('/').removeSuffix(".md"), "was in $dir  ·  archived ${deletedLabel(e.archivedAt, today)}")
+            SheetTitle(noteStem(e.originalPath), "was in $dir  ·  archived ${deletedLabel(e.archivedAt, today)}")
             Divider()
+            if (!e.isDir) MenuRow(R.drawable.ms_visibility, "Read", { open = null; reading = ".archive/${e.name}" })
             MenuRow(R.drawable.ms_unarchive, "Restore to $dir", { open = null; vm.restoreArchived(e) }, tint = Sc.accent)
             MenuRow(R.drawable.ms_delete, "Move to trash", { open = null; vm.trashArchived(e) }, danger = true)
+        }
+    }
+    reading?.let { path -> ArchivedNoteSheet(vm, path) { reading = null } }
+}
+
+// An archived note, read-only: the server keeps it out of the vault, so it
+// is fetched each time and never stored.
+@Composable
+private fun ArchivedNoteSheet(vm: MainViewModel, path: String, onDismiss: () -> Unit) {
+    var text by remember(path) { mutableStateOf<String?>(null) }
+    var failed by remember(path) { mutableStateOf(false) }
+    LaunchedEffect(path) {
+        try { text = vm.archivedText(path) } catch (_: Exception) { failed = true }
+    }
+    Sheet(onDismiss) {
+        SheetTitle(noteStem(path), "Archived, read-only")
+        Divider()
+        when {
+            failed -> Text("Couldn't load the note.", style = Type.meta.copy(color = Sc.red), modifier = Modifier.padding(20.dp))
+            text == null -> Text("Loading", style = Type.meta, modifier = Modifier.padding(20.dp))
+            else -> MarkdownText(
+                text!!,
+                Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 8.dp),
+                imageBase = path,
+                loadImage = { vm.loadImage(path, it) }
+            )
         }
     }
 }
@@ -172,7 +233,7 @@ private fun TrashTab(vm: MainViewModel, entries: List<TrashEntry>, loading: Bool
     open?.let { e ->
         val dir = e.originalPath.substringBeforeLast('/', "").ifBlank { "vault root" }
         Sheet(onDismiss = { open = null }) {
-            SheetTitle(e.originalPath.substringAfterLast('/').removeSuffix(".md"), "was in $dir  ·  deleted ${deletedLabel(e.deletedAt, today)}")
+            SheetTitle(noteStem(e.originalPath), "was in $dir  ·  deleted ${deletedLabel(e.deletedAt, today)}")
             Divider()
             MenuRow(R.drawable.ms_restore_from_trash, "Restore to $dir", { open = null; vm.restoreTrashEntry(e) }, tint = Sc.accent)
             MenuRow(R.drawable.ms_delete_forever, "Delete forever", { open = null; purge = e }, danger = true)
@@ -312,7 +373,7 @@ private fun SwipeRow(e: TrashEntry, today: Long, onRestore: () -> Unit, onPurge:
         ) {
             Sym(if (e.isDir) R.drawable.ms_folder else R.drawable.ms_description, tint = Sc.text3, size = 17.dp)
             Column(Modifier.weight(1f).padding(start = 10.dp)) {
-                Text(e.originalPath.substringAfterLast('/').removeSuffix(".md"), style = Type.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(noteStem(e.originalPath), style = Type.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(e.originalPath.substringBeforeLast('/', "").ifBlank { "/" }, style = Type.meta, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Text(deletedLabel(e.deletedAt, today), style = Type.mono, modifier = Modifier.padding(start = 8.dp))
