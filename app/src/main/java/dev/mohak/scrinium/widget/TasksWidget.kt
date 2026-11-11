@@ -10,16 +10,15 @@ import android.content.Intent
 import android.net.Uri
 import android.view.View
 import android.widget.RemoteViews
-import androidx.compose.ui.graphics.toArgb
 import androidx.core.widget.RemoteViewsCompat
 import dev.mohak.scrinium.MainActivity
 import dev.mohak.scrinium.R
 import dev.mohak.scrinium.data.remote.TaskDto
-import dev.mohak.scrinium.ui.TaskArea
+import dev.mohak.scrinium.ui.ProjectView
 import dev.mohak.scrinium.ui.TaskStatus
 import dev.mohak.scrinium.ui.addDays
 import dev.mohak.scrinium.ui.isDone
-import dev.mohak.scrinium.ui.onMainBoard
+import dev.mohak.scrinium.ui.selectTasks
 import dev.mohak.scrinium.ui.shortDue
 import dev.mohak.scrinium.ui.startOfDay
 import kotlinx.coroutines.CoroutineScope
@@ -50,7 +49,7 @@ object TasksWidget {
 
     /** Stores the open tasks the widget can show and redraws it. Call off the main thread. */
     fun save(context: Context, tasks: List<TaskDto>) {
-        val kept = tasks.filter { !it.isDone && it.parentId == null && it.onMainBoard }
+        val kept = selectTasks(tasks, ProjectView.All).filter { !it.isDone && it.parentId == null }
         File(context.filesDir, FILE).writeText(json.encodeToString(Snapshot(System.currentTimeMillis(), kept)))
         render(context)
     }
@@ -109,9 +108,6 @@ object TasksWidget {
     private fun row(context: Context, task: TaskDto, kind: SectionKind, now: Long): RemoteViews {
         val row = RemoteViews(context.packageName, R.layout.widget_task_row)
         row.setTextViewText(R.id.row_title, task.title)
-        val area = TaskArea.of(task.area)
-        if (area != null) row.setInt(R.id.row_dot, "setColorFilter", area.color.toArgb())
-        row.setViewVisibility(R.id.row_dot, if (area != null) View.VISIBLE else View.INVISIBLE)
         row.setTextViewText(R.id.row_meta, task.dueAt?.let { rowMeta(it, kind, now) } ?: "")
         row.setTextColor(R.id.row_meta, if (kind == SectionKind.Overdue) RED else DIM)
         row.setOnClickFillInIntent(R.id.row, Intent().putExtra(MainActivity.EXTRA_TASK_ID, task.id))

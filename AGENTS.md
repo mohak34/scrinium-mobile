@@ -114,14 +114,16 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
   earlier start, never a future one. Reminders that went off (`remind_at`
   past, task not done) sit behind a bell in the Tasks bar; snooze sets a
   new `remind_at` (the web's choices), clear sets it null.
-- `GET /api/projects` → `[{ path, area, icon, color, created_at }]`, vault
+- `GET /api/projects` → `[{ path, icon, color, created_at }]`, vault
   folders the web registered as project boards. Each shows in its icon and
   color everywhere (`projectStyle`, the web's `projects.ts`): the pick, else
   a color hashed from the path; Quotidian is a gray home. A task's `project` is that path;
-  subtasks follow their root's project. A project's Inbox is its backlog:
-  the main list and the All board leave it out (`onMainBoard`). Tasks with
-  no project are Quotidian; the board shows All, Quotidian or one project
-  (`ProjectView`). The Notes tab has the same tabs: All lists project
+  subtasks follow their root's project. Tasks have no areas; projects
+  replaced them. A project's undated Inbox is its backlog: All leaves it
+  out, along with its subtasks (`selectTasks`, the web's rule). Tasks with
+  no project are Quotidian; the Tasks tab and board show All, Quotidian or
+  one project (`ProjectView`), and the calendar every dated task, subtasks
+  included. The Notes tab has the same tabs: All lists project
   folders first, a project tab roots the tree (and new notes) at its
   folder, Quotidian is everything outside one. Projects are created and
   removed on the web; the phone only picks them.
@@ -138,7 +140,9 @@ from `scriniumApiUrl` and fail without it; no server is hardcoded.
   phone finds its own row by hashing its token.
 - `GET /api/calendar/events?from=&to=` (epoch ms, at most 93 days) →
   `{ events: [{ id, title, start, end, allDay }], needsConnect? }`, the
-  Google Calendar linked by the web sign-in.
+  Google Calendar linked by the web sign-in. `start`/`end` are Google's
+  strings: an RFC 3339 time, or `YYYY-MM-DD` (exclusive end) for all-day
+  events, decoded to local days on the phone.
 - In-app updates do not use the backend: Settings reads the latest GitHub
   release of `BuildConfig.UPDATE_REPO` (the repo CI built from; empty in
   local builds, which skip the check) and installs its APK via

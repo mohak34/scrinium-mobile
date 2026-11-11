@@ -3,6 +3,9 @@ package dev.mohak.scrinium.data.remote
 import android.net.Uri
 import java.io.File
 import java.security.MessageDigest
+import java.time.LocalDate
+import java.time.OffsetDateTime
+import java.time.ZoneId
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
@@ -131,7 +134,6 @@ data class TaskDto(
     val detail: String = "",
     val status: String,
     val priority: String = "none",
-    val area: String? = null,
     @SerialName("waiting_on") val waitingOn: String? = null,
     @SerialName("waiting_since") val waitingSince: Long? = null,
     @SerialName("parent_id") val parentId: String? = null,
@@ -151,7 +153,6 @@ data class TaskDto(
 data class NewTaskRequest(
     val title: String,
     val status: String,
-    val area: String?,
     @SerialName("due_at") val dueAt: Long?,
     @SerialName("parent_id") val parentId: String?,
     val project: String?,
@@ -163,7 +164,6 @@ data class NewTaskRequest(
 @Serializable
 data class ProjectDto(
     val path: String,
-    val area: String? = null,
     // Picked on the web; null means the default (projectStyle).
     val icon: String? = null,
     val color: String? = null,
@@ -189,11 +189,24 @@ data class ApiTokenDto(
 @Serializable
 data class RevokeTokenRequest(@SerialName("token_hash") val tokenHash: String)
 
-// Google Calendar event, times in epoch ms. All-day events start at UTC midnight.
-@Serializable
+// Google Calendar event, times in epoch ms. An all-day event runs from a
+// local midnight to the local midnight after its last day.
 data class CalendarEvent(val id: String, val title: String, val start: Long, val end: Long, val allDay: Boolean)
 
+// Google's own strings: an RFC 3339 dateTime, or a bare date for all-day events.
 @Serializable
+internal class CalendarEventDto(val id: String, val title: String, val start: String, val end: String, val allDay: Boolean) {
+    fun toEvent(): CalendarEvent? = runCatching {
+        fun ms(s: String): Long =
+            if (allDay) LocalDate.parse(s.take(10)).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+            else OffsetDateTime.parse(s).toInstant().toEpochMilli()
+        CalendarEvent(id, title, ms(start), ms(end), allDay)
+    }.getOrNull()
+}
+
+@Serializable
+private class CalendarResponseDto(val events: List<CalendarEventDto> = emptyList(), val needsConnect: Boolean = false)
+
 data class CalendarResponse(val events: List<CalendarEvent> = emptyList(), val needsConnect: Boolean = false)
 
 private interface ScriniumService {
@@ -328,7 +341,7 @@ private interface ScriniumService {
     suspend fun revokeToken(@Body body: RevokeTokenRequest): Response<ResponseBody>
 
     @GET("api/calendar/events")
-    suspend fun calendarEvents(@Query("from") from: Long, @Query("to") to: Long): CalendarResponse
+    suspend fun calendarEvents(@Query("from") from: Long, @Query("to") to: Long): CalendarResponseDto
 
     // Raw body, not multipart: the server streams it straight to disk.
     @POST("api/attachments")
@@ -545,7 +558,9 @@ class ScriniumApi(
         if (!res.isSuccessful) throw ApiException(res.code())
     }
 
-    override suspend fun fetchCalendarEvents(from: Long, to: Long): CalendarResponse = service.calendarEvents(from, to)
+    // One malformed event is dropped, not the whole month.
+    override suspend fun fetchCalendarEvents(from: Long, to: Long): CalendarResponse =
+        service.calendarEvents(from, to).let { r -> CalendarResponse(r.events.mapNotNull { it.toEvent() }, r.needsConnect) }
 
     companion object {
         fun encPath(path: String): String =

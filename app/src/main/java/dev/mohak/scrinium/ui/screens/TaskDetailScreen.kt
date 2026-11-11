@@ -36,7 +36,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.mohak.scrinium.R
 import dev.mohak.scrinium.data.remote.TaskDto
 import dev.mohak.scrinium.ui.BinTab
-import dev.mohak.scrinium.ui.Dot
 import dev.mohak.scrinium.ui.ErrorStrip
 import dev.mohak.scrinium.ui.GroupHeader
 import dev.mohak.scrinium.ui.IconBtn
@@ -48,7 +47,6 @@ import dev.mohak.scrinium.ui.Sheet
 import dev.mohak.scrinium.ui.SheetTitle
 import dev.mohak.scrinium.ui.Sym
 import dev.mohak.scrinium.ui.projectStyle
-import dev.mohak.scrinium.ui.TaskArea
 import dev.mohak.scrinium.ui.TaskPriority
 import dev.mohak.scrinium.ui.TaskStatus
 import dev.mohak.scrinium.ui.TasksViewModel
@@ -112,11 +110,6 @@ fun TaskDetailScreen(vm: MainViewModel, tasksVm: TasksViewModel, id: String) {
                     TextAction(task.waitingSince?.let { "Waiting since ${stampLabel(it)}" } ?: "Set when waiting started", { pickWaitingSince = true })
                 }
             }
-
-            FieldLabel("Area")
-            Segments(listOf<TaskArea?>(null) + TaskArea.entries, TaskArea.of(task.area), { it?.label ?: "None" }, { tasksVm.setArea(task.id, it) }, lead = { a ->
-                if (a != null) Dot(a.color)
-            })
 
             FieldLabel("Priority")
             Segments(TaskPriority.entries, TaskPriority.of(task.priority), { if (it == TaskPriority.None) "None" else it.label }, { tasksVm.setPriority(task.id, it) })
@@ -308,13 +301,12 @@ private fun Subtasks(task: TaskDto, all: List<TaskDto>, tasksVm: TasksViewModel)
         icon = R.drawable.ms_add,
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
         keyboardActions = KeyboardActions(onDone = add@{
-            // Subtasks inherit the parent's area and start in its column.
+            // Subtasks start in the parent's column; the server gives them its project.
             val title = newTitle
             if (adding) return@add
             adding = true
             tasksVm.create(
                 title,
-                area = TaskArea.of(task.area),
                 parentId = task.id,
                 status = TaskStatus.of(task.status).takeIf { it != TaskStatus.Done } ?: TaskStatus.Todo,
                 // Kept on failure for a retry; cleared unless more was typed.
